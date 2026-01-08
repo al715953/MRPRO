@@ -1,0 +1,17 @@
+# Entornos virtuales
+venv/
+env/
+.env
+
+# Archivos compilados de Python (basura)
+__pycache__/
+*.pyc
+
+# Archivos de sistema
+.DS_Store
+
+# Logs o bases de datos locales temporales (opcional)
+*.log
+
+# Los archivos de Data
+data/
