@@ -12,34 +12,20 @@ class UserBetsLoader:
             df = pd.read_csv(self.csv_path)
             df.columns = df.columns.str.strip().str.upper()
             
-            # Asumimos columnas: FECHA, N1, N2, N3, N4, N5, N6
-            # Opcional: COSTO
+            # Busca columnas fecha y numeros (N1...N6)
+            cols_nums = [c for c in df.columns if c.startswith('N')][:6]
             
             for _, row in df.iterrows():
-                # Obtener fecha
-                bet_date = pd.to_datetime(row['FECHA'], dayfirst=True).date()
-                
-                # Obtener números (buscamos N1..N6)
-                ticket = [
-                    int(row['N1']), int(row['N2']), int(row['N3']),
-                    int(row['N4']), int(row['N5']), int(row['N6'])
-                ]
-                
-                # Obtener costo (si existe, sino 10.0 por defecto)
-                cost = float(row['COSTO']) if 'COSTO' in df.columns else 10.0
-                
-                bets.append(UserBetDTO(
-                    date=bet_date,
-                    ticket_numbers=ticket,
-                    cost=cost
-                ))
-                
-            print(f"✅ Apuestas personales cargadas: {len(bets)} registros.")
+                try:
+                    fecha = pd.to_datetime(row['FECHA'], dayfirst=True).date()
+                    nums = [int(row[c]) for c in cols_nums]
+                    costo = float(row.get('COSTO', 10.0))
+                    
+                    bets.append(UserBetDTO(fecha, nums, costo))
+                except Exception as e:
+                    continue # Saltar fila con error
+            
             return bets
-
-        except FileNotFoundError:
-            print(f"⚠️ Archivo de apuestas no encontrado: {self.csv_path}")
-            return []
         except Exception as e:
-            print(f"❌ Error leyendo apuestas: {e}")
+            print(f"⚠️ No se pudo cargar historial de usuario: {e}")
             return []
