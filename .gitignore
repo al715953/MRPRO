@@ -1,17 +1,18 @@
-# Entornos virtuales
+# --- Directorios de Datos (Privado/Pesado) ---
+data/
+*.csv
+*.xlsx
+*.json
+
+# --- Archivos Generados (Reportes) ---
+*.pdf
+*.log
+
+# --- Entornos y Temporales de Python ---
 venv/
 env/
-.env
-
-# Archivos compilados de Python (basura)
 __pycache__/
 *.pyc
 
-# Archivos de sistema
+# --- Sistema Operativo ---
 .DS_Store
-
-# Logs o bases de datos locales temporales (opcional)
-*.log
-
-# Los archivos de Data
-data/
