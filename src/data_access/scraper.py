@@ -11,8 +11,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def descargar_datos(filepath):
     """
-    Descarga el CSV oficial solo si no está actualizado al día de hoy.
+    Descarga el CSV oficial y devuelve un estado y un mensaje descriptivo.
+    Retorna: (bool, str) -> (Éxito/Fallo, Mensaje para el usuario)
     """
+
     # 1. Verificar si el archivo ya existe y fue modificado hoy
     if os.path.exists(filepath):
         timestamp = os.path.getmtime(filepath)
@@ -20,8 +22,7 @@ def descargar_datos(filepath):
         fecha_hoy = datetime.today().date()
 
         if fecha_archivo == fecha_hoy:
-            print("⚡ Archivo local actualizado hoy. Omitiendo descarga.")
-            return True
+            return False, "⚡ Archivo local actualizado hoy. Omitiendo descarga."
 
     print("📡 Conectando con servidor de Lotería Nacional...")
     try:
@@ -31,8 +32,7 @@ def descargar_datos(filepath):
         with open(filepath, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        print("✅ Base de datos actualizada exitosamente.")
-        return True
+        return True, "✅ Base de datos actualizada exitosamente."
     except Exception as e:
         print(f"⚠️ No se pudo descargar (Usando versión Offline si existe): {e}")
-        return False
+        return False, f"Error crítico: No existe base local y falló la descarga: {e}"

@@ -7,32 +7,15 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # --- 2. IMPORTACIONES ---
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.loader import MelateLoader
+from src.data_access import scraper
+from src.data_access.config import CSV_FILE_PATH, TICKET_SIZE, TOTAL_BALLS
+from src.data_access.config import CYAN, RESET
+from src.interface.cli import ConsoleUI
+
 
 # CORRECCIÓN: Importamos BacktestEngine (no Service)
 from src.core.backtester import BacktestEngine
 from src.strategies.monte_carlo import MonteCarloStrategy
-
-# --- 3. CONFIGURACIÓN ---
-CSV_FILE_PATH = "data/Melate-Retro.csv"
-TOTAL_BALLS = 39
-TICKET_SIZE = 6
-
-
-def limpiar_pantalla():
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-def mostrar_logo():
-    print(
-        """
-    ███    ███ ███████ ████████ ████████ ████████ 
-    ████  ████ ██    █ ██    ██ ██     █ ██    ██  
-    ██ ████ ██ ███████ ████████ ████████ ██    ██
-    ██  ██  ██ ██  █   ██       ██   █   ██    ██      
-    ██      ██ ██   ██ ██       ██    ██ ████████ 
-             >>> RETRO PRO - ANALYZER <<<
-    """
-    )
 
 
 def obtener_estrategia():
@@ -48,7 +31,10 @@ def obtener_estrategia():
 
 def main():
     try:
-        # Carga de datos
+        # Actualizo archivo de resultados de ser necesario
+        actualizado, mensaje = scraper.descargar_datos(CSV_FILE_PATH)
+
+        # Actualizo información
         loader = MelateLoader(CSV_FILE_PATH)
         history = loader.load_data()
 
@@ -65,20 +51,21 @@ def main():
         print(f"❌ ERROR INESPERADO AL INICIAR: {e}")
         return
 
-    while True:
-        limpiar_pantalla()
-        mostrar_logo()
-        print(f"📂 Sorteos cargados: {len(history.winning_numbers)}")
-        print("-" * 40)
-        print("1. 🔮 Generar Predicción")
-        print("2. 🧪 Backtesting (Prueba Histórica)")
-        print("3. 🔄 Recargar Datos")
-        print("4. 🚪 Salir")
-        print("-" * 40)
+    # 1. Instanciar la interfaz
+    ui = ConsoleUI()
 
-        opcion = input(">> Selecciona una opción: ")
+    # 2. Pantalla de inicio
+    ui.show_welcome()
+    # ui.mostrar_logo()
+    print(f"{CYAN}>> Estado del sistema: {mensaje}{RESET}\n")
+    print(f"📂 Sorteos cargados: {len(history.winning_numbers)}")
+
+    while True:
+
+        opcion = ui.get_main_menu_option()
 
         if opcion == "1":
+            print("\nMODO GENERAR")
             strategy = obtener_estrategia()
             try:
                 n_tickets = int(input("\n¿Cuántos tickets quieres generar? (Ej. 5): "))
@@ -102,7 +89,15 @@ def main():
 
         elif opcion == "2":
             print("\n🧪 MODO BACKTESTING")
-            strategy = obtener_estrategia()
+            # 2. Obtenemos el NOMBRE (string) de la estrategia
+            strategy_key = ui.get_strategy_selection()
+            # 3. TRADUCTOR: Mapeamos el string a una INSTANCIA real
+            strategies_map = {
+                "MONTE_CARLO": MonteCarloStrategy(),
+                # Aquí añadirás: "GENETICO": GeneticStrategy(), etc.
+            }
+            # Obtenemos el objeto real
+            selected_strategy = strategies_map.get(strategy_key)
 
             try:
                 raw_input = input("\n¿Cuántos sorteos probar? (Ej. 20): ")
@@ -113,15 +108,14 @@ def main():
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
-                num_tickets=5,  # Simulamos comprar 5 boletos por sorteo
+                num_tickets=20,  # Simulamos comprar 5 boletos por sorteo
                 backtest_size=test_size,
             )
 
             print(f"\n⏳ Ejecutando Backtest en los últimos {test_size} sorteos...")
-
             # Ejecutamos y guardamos el resultado
-            report = backtester.run(strategy, history, config)
-
+            report = backtester.run(selected_strategy, history, config)
+            print("-" * 40)
             # --- IMPRIMIR REPORTE ---
             print("\n" + "█" * 40)
             print(f"📊 REPORTE FINAL: {report.strategy_name}")

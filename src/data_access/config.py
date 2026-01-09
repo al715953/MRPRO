@@ -11,8 +11,10 @@ else:
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 
 # Archivos
-FILE_MELATE = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
+CSV_FILE_PATH = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
 FILE_APUESTAS = os.path.join(DATA_FOLDER, "Mis_Apuestas.csv")
+TOTAL_BALLS = 39
+TICKET_SIZE = 6
 
 # URL Oficial
 URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQB0AGUALQBSAGUAdAByAG8A"
@@ -24,3 +26,9 @@ UNIVERSE_MAX = 39
 # --- NUEVA CONFIGURACIÓN MONTECARLO ---
 NUM_SIMULACIONES = 200000  # 200k sorteos teóricos para calibrar
 NUM_CANDIDATOS = 10000000  # 1M Cuántas combinaciones probamos en cada generación
+
+# Colores
+CYAN = "\033[0;36m"
+RESET = "\033[0m"
+VERDE = "\033[0;32m"
+BLANCO_B = "\033[1;37m"
