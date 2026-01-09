@@ -54,13 +54,11 @@ def main():
     # 1. Instanciar la interfaz
     ui = ConsoleUI()
 
-    # 2. Pantalla de inicio
-    ui.show_welcome()
-    # ui.mostrar_logo()
-    print(f"{CYAN}>> Estado del sistema: {mensaje}{RESET}\n")
-    print(f"📂 Sorteos cargados: {len(history.winning_numbers)}")
-
     while True:
+        # 2. Pantalla de inicio
+        ui.show_welcome()
+        print(f"{CYAN}>> Estado del sistema: {mensaje}{RESET}\n")
+        print(f"📂 Sorteos cargados: {len(history.winning_numbers)}")
 
         opcion = ui.get_main_menu_option()
 

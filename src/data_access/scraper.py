@@ -22,7 +22,7 @@ def descargar_datos(filepath):
         fecha_hoy = datetime.today().date()
 
         if fecha_archivo == fecha_hoy:
-            return False, "⚡ Archivo local actualizado hoy. Omitiendo descarga."
+            return False, "⚡ Archivo local actualizado hoy. Descarga Omitida."
 
     print("📡 Conectando con servidor de Lotería Nacional...")
     try:

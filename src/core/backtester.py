@@ -35,38 +35,52 @@ class BacktestEngine:
 
         # 3. Bucle de ejecución
         for date, real_draw, id_concurso in test_data:
+
+            prediction = strategy.predict(history, config)
+
+            draw_earnings = 0.0
+            max_hit = 0
+            tickets_ganadores = []  # Para almacenar solo los que ganan
+
+            # -----------------------------Nueva lógica que imprime los ganadores-----------------------------
+            for i, ticket in enumerate(prediction.tickets, 1):
+                total_investment += self.rules.ticket_cost
+
+                # Obtenemos aciertos (naturales y adicional)
+                hits_nat, has_add = self.rules.validate_ticket(ticket, real_draw)
+                prize = self.rules.calculate_prize(hits_nat, has_add)
+
+                if prize > 0:
+                    # Guardamos formato: [ 01, 02... ] -> $10.00
+                    t_str = ", ".join([f"{n:02d}" for n in sorted(ticket)])
+                    tickets_ganadores.append(
+                        f"   Ticket #{i:02d}: [{t_str}] -> ${prize:,.2f}"
+                    )
+
+                draw_earnings += prize
+                if hits_nat > max_hit:
+                    max_hit = hits_nat
+
+                total_earnings += prize
+                hits_distribution[hits_nat] = hits_distribution.get(hits_nat, 0) + 1
+
+            # --- NUEVA SALIDA VISUAL ---
             print(f"\n" + "─" * 60)
             print(
                 f"🎫 SORTEO: #{id_concurso} | FECHA: {date} | ({step_count}/{test_range})"
             )
             print(f"🎱 Reales: {real_draw}")
 
-            prediction = strategy.predict(history, config)
+            if tickets_ganadores:
+                print("\n✨ ACUMULADO GANADOR:")
+                for t in tickets_ganadores:
+                    print(t)
+            else:
+                print("\n   (Sin tickets premiados)")
 
-            draw_earnings = 0.0
-            max_hit = 0
-
-            for ticket in prediction.tickets:
-                total_investment += self.rules.ticket_cost
-
-                # 1. Obtenemos el desglose de aciertos (Naturales y Adicional)
-                hits_nat, has_add = self.rules.validate_ticket(ticket, real_draw)
-                # 2. Calculamos el premio basándonos en la tabla de premios
-                prize = self.rules.calculate_prize(hits_nat, has_add)
-                draw_earnings += prize
-
-                # 3. Actualizamos el máximo acierto del sorteo (usamos naturales para la métrica)
-                if hits_nat > max_hit:
-                    max_hit = hits_nat
-
-                total_earnings += prize
-                # 4. Registramos en la distribución estadística
-                hits_distribution[hits_nat] = hits_distribution.get(hits_nat, 0) + 1
-
-            # --- UX MEJORADA: RESULTADOS EN UNA SOLA LÍNEA ---
             balance_icon = "🟢" if draw_earnings > 0 else "⚪"
             print(
-                f"✅ RESULTADO: Max Hit: {max_hit} | Premios: ${draw_earnings:,.2f} {balance_icon}"
+                f"\n✅ RESULTADO: Max Hit: {max_hit} | Total Sorteo: ${draw_earnings:,.2f} {balance_icon}"
             )
             print("─" * 60)
 
