@@ -1,181 +1,300 @@
 import sys
 import os
+from colorama import Fore, Style
 
 # --- 1. AJUSTE DE RUTA ---
+# Asegura que Python encuentre los módulos sin importar desde dónde se ejecute
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- 2. IMPORTACIONES ---
+# Datos y Configuración
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.loader import MelateLoader
-from src.data_access import scraper
 from src.data_access.config import (
     CSV_FILE_PATH,
     TICKET_SIZE,
     TOTAL_BALLS,
+    BEST_SETTINGS,
 )
-from src.core.backtester import BacktestEngine
-from src.data_access.config import CYAN, RESET
+
+# Acceso a Datos y Reportes
+from src.data_access import scraper
+import src.data_access.report as report  # Módulo para guardar CSVs
+
+# Interfaz
 from src.interface.cli import ConsoleUI
 
-
-# CORRECCIÓN: Importamos BacktestEngine (no Service)
-from src.core.backtester import BacktestEngine
+# --- ESTRATEGIAS (EL ARSENAL) ---
 from src.strategies.monte_carlo import MonteCarloStrategy
+from src.strategies.universe_reduction import UniverseReductionStrategy
+from src.strategies.genetic_selector import GeneticSelectorStrategy
+
+# --- MOTORES DE CÁLCULO ---
+from src.core.backtester import BacktestEngine
 from src.core.optimizer import StrategyOptimizer
-
-
-def obtener_estrategia():
-    print("\n--- SELECCIONA UNA ESTRATEGIA ---")
-    print("1. Monte Carlo (Simulación Ponderada)")
-    opcion = input(">> Elige una opción: ")
-    if opcion == "1":
-        return MonteCarloStrategy()
-    else:
-        print("⚠ Opción no válida. Usando Monte Carlo por defecto.")
-        return MonteCarloStrategy()
+from src.core.coverage_tester import CoverageTester
 
 
 def main():
-    try:
-        # Actualizo archivo de resultados de ser necesario
-        actualizado, mensaje = scraper.descargar_datos(CSV_FILE_PATH)
-
-        # Actualizo información
-        loader = MelateLoader(CSV_FILE_PATH)
-        history = loader.load_data()
-
-        if not history.winning_numbers:
-            print("⚠ Advertencia: No se encontraron sorteos en el archivo.")
-
-        # Instancia del motor correcto
-        backtester = BacktestEngine()
-
-    except FileNotFoundError:
-        print(f"❌ ERROR: No se encontró el archivo en: {CSV_FILE_PATH}")
-        return
-    except Exception as e:
-        print(f"❌ ERROR INESPERADO AL INICIAR: {e}")
-        return
-
-    # 1. Instanciar la interfaz
+    # A. Inicialización de Interfaz
     ui = ConsoleUI()
+    ui.show_welcome()
 
+    # B. Carga de Datos Históricos
+    print(
+        f"{Fore.CYAN}📂 Cargando histórico desde: {CSV_FILE_PATH}...{Style.RESET_ALL}"
+    )
+    loader = MelateLoader(CSV_FILE_PATH)
+    history = loader.load_data()
+
+    # Validación básica de carga
+    if not history.dates:
+        print(
+            f"{Fore.RED}❌ Error: No hay datos históricos. Intentando actualizar...{Style.RESET_ALL}"
+        )
+        # Intentamos descargar si falla la carga local
+        try:
+            scraper.actualizar_base_datos()
+            history = loader.load_data()
+        except Exception as e:
+            print(f"Error actualizando: {e}")
+
+    # --- BUCLE PRINCIPAL ---
     while True:
-        # 2. Pantalla de inicio
-        ui.show_welcome()
-        print(f"{CYAN}>> Estado del sistema: {mensaje}{RESET}\n")
-        print(f"📂 Sorteos cargados: {len(history.winning_numbers)}")
-
+        ui.mostrar_logo()
         opcion = ui.get_main_menu_option()
 
+        # ========================================================
+        # OPCIÓN 1: GENERACIÓN MAESTRA (FLUJO AUTOMÁTICO 5 -> 7)
+        # ========================================================
         if opcion == "1":
-            print("\nMODO GENERAR")
-            strategy = obtener_estrategia()
-            try:
-                n_tickets = int(input("\n¿Cuántos tickets quieres generar? (Ej. 5): "))
-            except ValueError:
-                n_tickets = 5
-
-            config = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS, ticket_size=TICKET_SIZE, num_tickets=n_tickets
+            print(
+                f"\n{Fore.YELLOW}🚀 INICIANDO SISTEMA DE PREDICCIÓN MAESTRA...{Style.RESET_ALL}"
+            )
+            print(
+                "Se ejecutarán 2 fases: Generación de Universo -> Selección Genética."
             )
 
-            print(f"\n⚙ Ejecutando estrategia: {strategy.__class__.__name__}...")
-            resultado = strategy.predict(history, config)
+            # --- FASE 1: CREAR EL LAGO (UNIVERSO) ---
+            print(
+                f"\n{Fore.MAGENTA}🔹 FASE 1: Generando Universo de Alta Probabilidad...{Style.RESET_ALL}"
+            )
 
-            print("\n" + "=" * 40)
-            print(f"🎫 RESULTADOS: {resultado.strategy_name}")
-            print("=" * 40)
-            for i, ticket in enumerate(resultado.tickets, 1):
-                print(f"Ticket #{i}: {ticket}")
-            print("=" * 40)
-            input("\nPresiona ENTER para continuar...")
+            # Usamos los mejores filtros conocidos
+            current_settings = BEST_SETTINGS.copy()
+            current_settings["verbose"] = False  # Silencioso para no ensuciar pantalla
 
+            # Configuración para el Universo
+            config_universe = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=10,  # Irrelevante aquí, genera miles
+                filter_overrides=current_settings,
+            )
+
+            # Ejecutar Estrategia 1 (Generar el CSV grande)
+            strategy_universe = UniverseReductionStrategy()
+            strategy_universe.predict(history, config_universe)
+            print("✅ Universo generado y optimizado.")
+
+            # --- FASE 2: PESCA DE ÉLITE (SELECTOR) ---
+            print(
+                f"\n{Fore.GREEN}🔹 FASE 2: Selección Genética y Diversificación...{Style.RESET_ALL}"
+            )
+
+            # Configuración Final (Tus 15 boletos reales)
+            config_final = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=15,  # <--- AQUÍ DECIDES CUÁNTOS JUGAR
+            )
+
+            # Ejecutar Estrategia 2 (Leer CSV y filtrar)
+            strategy_selector = GeneticSelectorStrategy()
+            prediction = strategy_selector.predict(history, config_final)
+
+            # --- RESULTADOS ---
+            if prediction.tickets:
+                # 1. Guardar en CSV de apuestas
+                report.guardar_prediccion(prediction.tickets)
+
+                # 2. Mostrar en pantalla
+                ui.show_prediction_results(prediction)
+
+                print(
+                    f"\n{Fore.YELLOW}✨ ¡PROCESO MAESTRO COMPLETADO! ✨{Style.RESET_ALL}"
+                )
+                print(
+                    f"Tus mejores {len(prediction.tickets)} jugadas están listas en 'data/Mis_Apuestas.csv'"
+                )
+            else:
+                print(
+                    f"\n{Fore.RED}❌ Algo falló en la selección. Revisa si se generó el universo.{Style.RESET_ALL}"
+                )
+
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+        # ==========================================
+        # OPCIÓN 2: BACKTESTING (SIMULACIÓN $)
+        # ==========================================
         elif opcion == "2":
-            print("\n🧪 MODO BACKTESTING")
-            # 2. Obtenemos el NOMBRE (string) de la estrategia
-            strategy_key = ui.get_strategy_selection()
-            # 3. TRADUCTOR: Mapeamos el string a una INSTANCIA real
-            strategies_map = {
-                "MONTE_CARLO": MonteCarloStrategy(),
-                # Aquí añadirás: "GENETICO": GeneticStrategy(), etc.
-            }
-            # Obtenemos el objeto real
-            selected_strategy = strategies_map.get(strategy_key)
-
-            try:
-                raw_input = input("\n¿Cuántos sorteos probar? (Ej. 20): ")
-                test_size = int(raw_input) if raw_input else 10
-            except ValueError:
-                test_size = 10
+            print(
+                f"\n{Fore.GREEN}🧪 INICIANDO BACKTESTING FINANCIERO...{Style.RESET_ALL}"
+            )
 
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
-                num_tickets=20,  # Simulamos comprar 5 boletos por sorteo
-                backtest_size=test_size,
+                num_tickets=15,
+                backtest_size=10,  # Prueba rápida de 10 sorteos
+                filter_overrides=BEST_SETTINGS,
             )
 
-            print(f"\n⏳ Ejecutando Backtest en los últimos {test_size} sorteos...")
-            # Ejecutamos y guardamos el resultado
-            report = backtester.run(selected_strategy, history, config)
-            print("-" * 40)
-            # --- IMPRIMIR REPORTE ---
-            print("\n" + "█" * 40)
-            print(f"📊 REPORTE FINAL: {report.strategy_name}")
-            print("█" * 40)
-            print(f"📅 Sorteos analizados: {report.total_draws_tested}")
-            print(f"💰 Inversión Total:   ${report.investment:,.2f}")
-            print(f"🏆 Ganancias Totales: ${report.earnings:,.2f}")
-            print("-" * 40)
+            engine = BacktestEngine()
+            # Probamos la estrategia Monte Carlo por defecto
+            engine.run(MonteCarloStrategy(), history, config)
 
-            balance_color = "🟢" if report.net_balance >= 0 else "🔴"
-            print(f"⚖  BALANCE NETO:      {balance_color} ${report.net_balance:,.2f}")
-            print("-" * 40)
-            print("🎯 Aciertos:")
-            for hits, count in sorted(report.hit_distribution.items(), reverse=True):
-                if count > 0:
-                    print(f"   {hits} aciertos: {count} veces")
-            print("█" * 40)
-
-            input("\nPresiona ENTER para volver al menú...")
-
-        elif opcion == "3":
-            history = loader.load_data()
-            print("¡Datos actualizados!")
-            input("Enter...")
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
         # ==========================================
-        # OPCIÓN 4: OPTIMIZADOR (GRID SEARCH)
+        # OPCIÓN 3: VALIDAR RESULTADOS (WEB)
+        # ==========================================
+        elif opcion == "3":
+            print(
+                f"\n{Fore.BLUE}🎫 VALIDANDO RESULTADOS CON LOTENAL...{Style.RESET_ALL}"
+            )
+            try:
+                # Esta función debe existir en scraper o report según tu implementación
+                scraper.validar_apuestas()
+            except AttributeError:
+                print("Función de validación en construcción.")
+            except Exception as e:
+                print(f"Error en validación: {e}")
+
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+        # ==========================================
+        # OPCIÓN 4: OPTIMIZADOR (AI TRAINER)
         # ==========================================
         elif opcion == "4":
-            print("\n🤖 INICIANDO ENTRENAMIENTO DE ESTRATEGIA...")
-            print("Buscando la mejor combinación matemática...")
+            print(
+                f"\n{Fore.MAGENTA}🧠 ENTRENANDO ESTRATEGIA (GRID SEARCH)...{Style.RESET_ALL}"
+            )
 
             base_config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
                 num_tickets=15,
-                backtest_size=104,
+                backtest_size=50,  # 50 sorteos para una buena optimización
             )
 
             optimizer = StrategyOptimizer(MonteCarloStrategy(), history)
             best_params = optimizer.run_grid_search(base_config)
 
-            print("\n✅ ENTRENAMIENTO COMPLETADO.")
-            print("Mejor Configuración: {best_params}")
-            print("\n📝 IMPORTANTE:Copia el diccionario de arriba y")
-            print("pégalo ensrc/data_access/config.py en la variable 'BEST_SETTINGS'")
-            print("para guardar estos ajustes permanentemente.")
+            print(
+                f"\n{Fore.GREEN}✅ MEJOR CONFIGURACIÓN:{Style.RESET_ALL} {best_params}"
+            )
+            print(
+                "Copia esto en src/data_access/config.py si deseas guardarlo permanentemente."
+            )
 
-            # Aplicar en memoria para esta sesión
-            apply = input("\n¿Usar esta configuración temporalmente ahora? (s/n): ")
-            if apply.lower() == "s":
-                current_settings = best_params
-                print("Configuración aplicada en memoria.")
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
+        # ==========================================
+        # OPCIÓN 5: GENERADOR DE UNIVERSO (BIG DATA)
+        # ==========================================
+        elif opcion == "5":
+            print(
+                f"\n{Fore.MAGENTA}🌌 GENERANDO UNIVERSO REDUCIDO (MANUAL)...{Style.RESET_ALL}"
+            )
+            print("Creando 'lago de pesca' de alta probabilidad...")
+
+            current_settings = BEST_SETTINGS.copy()
+            config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=10,
+                filter_overrides=current_settings,
+            )
+
+            strategy = UniverseReductionStrategy()
+            strategy.predict(history, config)
+
+            print(
+                f"\n{Fore.GREEN}✅ Archivo 'data/universo_reducido.csv' generado.{Style.RESET_ALL}"
+            )
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+        # ==========================================
+        # OPCIÓN 6: COVERAGE TESTER (CALIDAD)
+        # ==========================================
+        elif opcion == "6":
+            print(
+                f"\n{Fore.CYAN}📡 VALIDANDO COBERTURA (HIT RATIO)...{Style.RESET_ALL}"
+            )
+
+            try:
+                dias = input("¿Sorteos a validar? (Enter=5): ")
+                n_test = int(dias) if dias.strip() else 5
+            except:
+                n_test = 5
+
+            current_settings = BEST_SETTINGS.copy()
+            current_settings["verbose"] = False  # Silenciar logs
+
+            config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=10,
+                backtest_size=n_test,
+                filter_overrides=current_settings,
+            )
+
+            tester = CoverageTester()
+            tester.run(UniverseReductionStrategy(), history, config)
+
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+        # ==========================================
+        # OPCIÓN 7: SELECTOR FINAL (MANUAL)
+        # ==========================================
+        elif opcion == "7":
+            print(
+                f"\n{Fore.GREEN}🎯 EJECUTANDO SELECTOR FINAL (MANUAL)...{Style.RESET_ALL}"
+            )
+            print("Analizando 'universo_reducido.csv' existente...")
+
+            config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=15,
+            )
+
+            strategy = GeneticSelectorStrategy()
+            prediction = strategy.predict(history, config)
+
+            if prediction.tickets:
+                report.guardar_prediccion(prediction.tickets)
+                ui.show_prediction_results(prediction)
+                print(
+                    f"\n{Fore.YELLOW}✅ Boletos listos en 'data/Mis_Apuestas.csv'.{Style.RESET_ALL}"
+                )
+            else:
+                print(
+                    f"\n{Fore.RED}❌ Error: No se generaron tickets. ¿Ejecutaste la opción 5 antes?{Style.RESET_ALL}"
+                )
+
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+        # ==========================================
+        # SALIR
+        # ==========================================
         elif opcion == "0":
+            print("👋 ¡Hasta luego! Que la probabilidad esté a tu favor.")
             sys.exit()
+
+        else:
+            print("⚠️ Opción no válida.")
 
 
 if __name__ == "__main__":

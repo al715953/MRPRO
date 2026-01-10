@@ -1,4 +1,6 @@
 import os
+
+from colorama import Fore, Style
 from src.data_access.config import CYAN, RESET, VERDE, BLANCO_B
 from src.domain.dtos import PredictionResultDTO
 
@@ -21,10 +23,24 @@ class ConsoleUI:
 
     def get_main_menu_option(self) -> str:
         print("\nSelecciona una opción:")
-        print("1. 🔮 Generar Predicción")
+        print(
+            f"1. 🚀 {Fore.YELLOW}GENERACIÓN MAESTRA (Automática 5+7){Style.RESET_ALL}"
+        )
         print("2. 🧪 Backtesting (Prueba Histórica)")
         print("3 🎫 Validar Resultados (Manual o CSV)")
         print("4.🧠 Entrenar/Optimizar Estrategia (AI Trainer)")
+        print(
+            f"{Fore.MAGENTA}5. 🌌 Generar Universo Reducido (Universo.csv){Style.RESET_ALL}"
+        )
+        print(
+            f"{Fore.CYAN}6. 📡 Validar Cobertura (Hit Ratio del Universo){Style.RESET_ALL}"
+        )
+        # 👇 AGREGA ESTA NUEVA LÍNEA 👇
+        print(
+            f"{Fore.GREEN}7. 🎯 Selección Final (Francotirador - 15 Tickets){Style.RESET_ALL}"
+        )
+        # 👆 ----------------------- 👆
+
         print("0. 🚪 Salir")
         return input(">> ")
 
