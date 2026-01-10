@@ -8,7 +8,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.loader import MelateLoader
 from src.data_access import scraper
-from src.data_access.config import CSV_FILE_PATH, TICKET_SIZE, TOTAL_BALLS
+from src.data_access.config import (
+    CSV_FILE_PATH,
+    TICKET_SIZE,
+    TOTAL_BALLS,
+)
+from src.core.backtester import BacktestEngine
 from src.data_access.config import CYAN, RESET
 from src.interface.cli import ConsoleUI
 
@@ -16,6 +21,7 @@ from src.interface.cli import ConsoleUI
 # CORRECCIÓN: Importamos BacktestEngine (no Service)
 from src.core.backtester import BacktestEngine
 from src.strategies.monte_carlo import MonteCarloStrategy
+from src.core.optimizer import StrategyOptimizer
 
 
 def obtener_estrategia():
@@ -139,7 +145,36 @@ def main():
             print("¡Datos actualizados!")
             input("Enter...")
 
+        # ==========================================
+        # OPCIÓN 4: OPTIMIZADOR (GRID SEARCH)
+        # ==========================================
         elif opcion == "4":
+            print("\n🤖 INICIANDO ENTRENAMIENTO DE ESTRATEGIA...")
+            print("Buscando la mejor combinación matemática...")
+
+            base_config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=15,
+                backtest_size=104,
+            )
+
+            optimizer = StrategyOptimizer(MonteCarloStrategy(), history)
+            best_params = optimizer.run_grid_search(base_config)
+
+            print("\n✅ ENTRENAMIENTO COMPLETADO.")
+            print("Mejor Configuración: {best_params}")
+            print("\n📝 IMPORTANTE:Copia el diccionario de arriba y")
+            print("pégalo ensrc/data_access/config.py en la variable 'BEST_SETTINGS'")
+            print("para guardar estos ajustes permanentemente.")
+
+            # Aplicar en memoria para esta sesión
+            apply = input("\n¿Usar esta configuración temporalmente ahora? (s/n): ")
+            if apply.lower() == "s":
+                current_settings = best_params
+                print("Configuración aplicada en memoria.")
+
+        elif opcion == "0":
             sys.exit()
 
 

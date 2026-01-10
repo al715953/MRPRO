@@ -24,7 +24,8 @@ class ConsoleUI:
         print("1. 🔮 Generar Predicción")
         print("2. 🧪 Backtesting (Prueba Histórica)")
         print("3 🎫 Validar Resultados (Manual o CSV)")
-        print("4. 🚪 Salir")
+        print("4.🧠 Entrenar/Optimizar Estrategia (AI Trainer)")
+        print("0. 🚪 Salir")
         return input(">> ")
 
     def get_strategy_selection(self) -> str:

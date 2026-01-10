@@ -9,52 +9,62 @@ class MelateLoader:
         self.csv_path = csv_path
 
     def load_data(self) -> DrawHistoryDTO:
+        """
+        Carga el histórico de Melate Retro.
+        Estructura esperada: 6 Naturales + 1 Adicional.
+        """
         try:
             # 1. Cargar CSV
             df = pd.read_csv(self.csv_path)
 
-            # Limpieza de nombres de columnas (quitar espacios y poner en mayúsculas)
+            # Limpieza de nombres de columnas
             df.columns = df.columns.str.strip().str.upper()
 
-            # 2. Procesar Columna 'CONCURSO' (Número oficial del sorteo)
+            # 2. Procesar Columna 'CONCURSO'
             if "CONCURSO" in df.columns:
                 concursos = df["CONCURSO"].astype(int).tolist()
             else:
-                # Si no existe la columna, generamos una secuencia como fallback
                 print(
                     "⚠️ Columna 'CONCURSO' no detectada. Generando numeración automática."
                 )
                 concursos = list(range(1, len(df) + 1))
 
-            # 3. Procesar Fechas (Columna 'FECHA')
-            # dayfirst=True para formato dd/mm/yyyy común en México
+            # 3. Procesar Fechas
             dates = pd.to_datetime(df["FECHA"], dayfirst=True).dt.date.tolist()
 
-            # 4. Procesar Números Ganadores (Columnas F1 a F6 + 1 Adicional)
-            cols_juego = ["F1", "F2", "F3", "F4", "F5", "F6", "F7"]
+            # 4. Procesar Números Ganadores
+            # Buscamos columnas F1...F6
+            cols_juego = [f"F{i}" for i in range(1, 7)]
 
-            # Validar que existan las columnas de los números
+            # Verificación de columnas naturales
             if not all(col in df.columns for col in cols_juego):
-                # Fallback: Si no existe 'F7', intentamos con 'ADICIONAL'
-                if "ADICIONAL" in df.columns:
-                    cols_juego[-1] = "ADICIONAL"
-                else:
-                    raise ValueError(
-                        "El CSV no contiene la columna del número adicional (F7 o ADICIONAL)"
-                    )
+                raise ValueError("El CSV no contiene las columnas F1...F6")
 
-            # Extraer valores y convertir a lista de listas
-            winning_numbers = df[cols_juego].values.tolist()
+            # Buscamos la columna del Adicional (F7 o ADICIONAL)
+            col_adicional = None
+            if "F7" in df.columns:
+                col_adicional = "F7"
+            elif "ADICIONAL" in df.columns:
+                col_adicional = "ADICIONAL"
+            else:
+                raise ValueError("Falta columna de número adicional (F7 o ADICIONAL)")
 
-            # Ordenar los números de cada sorteo de menor a mayor para consistencia
-            winning_numbers = [
-                sorted([int(n) for n in nums]) for nums in winning_numbers
-            ]
+            # Extraemos todo junto primero
+            cols_totales = cols_juego + [col_adicional]
+            raw_numbers = df[cols_totales].values.tolist()
+
+            # --- CORRECCIÓN CRÍTICA DE ORDENAMIENTO ---
+            # Ordenamos SOLO los primeros 6 (Naturales) y dejamos el 7º (Adicional) fijo al final.
+            winning_numbers = []
+            for row in raw_numbers:
+                ints = [int(n) for n in row]
+                naturales = sorted(ints[:6])  # Ordenar solo naturales
+                adicional = ints[6]  # El adicional se respeta tal cual
+                winning_numbers.append(naturales + [adicional])
 
             print(f"✅ Histórico MRPRO cargado: {len(dates)} sorteos.")
-            print(f"📊 Rango de concursos detectado: {concursos[0]} al {concursos[-1]}")
+            print(f"📊 Rango de concursos: {concursos[0]} al {concursos[-1]}")
 
-            # 5. Retornar el DTO con los tres campos necesarios
             return DrawHistoryDTO(
                 dates=dates, winning_numbers=winning_numbers, concursos=concursos
             )
@@ -65,3 +75,7 @@ class MelateLoader:
         except Exception as e:
             print(f"❌ Error crítico leyendo histórico: {e}")
             return DrawHistoryDTO(dates=[], winning_numbers=[], concursos=[])
+
+    def load_history(self) -> DrawHistoryDTO:
+        """Alias para mantener compatibilidad con main.py"""
+        return self.load_data()
