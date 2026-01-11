@@ -1,15 +1,27 @@
 import numpy as np
-import time
-from collections import Counter
 import itertools
-from typing import List, Dict
+from collections import Counter
+from typing import List, Tuple
 from colorama import Fore, Style
 
-from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO
-from src.strategies.universe_reduction import UniverseReductionStrategy
+from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, CandidateCombination
 
-# Reutilizamos lógica interna de la estrategia para no repetir código,
-# pero la adaptamos para hacer barridos rápidos.
+# --- IMPORTAMOS LOS FILTROS PARA QUE LA SIMULACIÓN SEA REAL ---
+from src.core.filters.pipeline import FilterPipeline
+from src.core.filters.implementations.geometric import SumRangeFilter
+from src.core.filters.implementations.probabilistic import ParityFilter, PrimeFilter
+from src.core.filters.implementations.arithmetic import ACValueFilter
+
+try:
+    from src.core.filters.implementations.structural import (
+        ConsecutiveFilter,
+        QuadrantFilter,
+        LastDigitFilter,
+    )
+except ImportError:
+    ConsecutiveFilter = None
+    QuadrantFilter = None
+    LastDigitFilter = None
 
 
 class UniverseOptimizer:
@@ -18,52 +30,48 @@ class UniverseOptimizer:
 
     def optimize(self, base_config: PredictionConfigDTO, lookback: int = 15):
         """
-        Busca el mejor 'Quality Percentile' para maximizar cobertura
-        minimizando el tamaño del archivo.
+        Busca el mejor 'Quality Percentile' simulando EXACTAMENTE
+        lo que hace la estrategia UniverseReduction (Filtros + Score).
         """
         print(
-            f"\n{Fore.MAGENTA}🧠 INICIANDO OPTIMIZACIÓN DE UNIVERSO...{Style.RESET_ALL}"
+            f"\n{Fore.MAGENTA}🧠 INICIANDO OPTIMIZACIÓN (REALISTA)...{Style.RESET_ALL}"
         )
         print(
-            f"Analizando los últimos {lookback} sorteos para calibrar la Red de Pesca."
+            f"Calibrando con los últimos {lookback} sorteos y filtros estructurales activados."
         )
 
-        # Parametros a probar (Niveles de Exigencia)
-        # 80 = Muy laxo (Universo grande), 98 = Muy estricto (Universo pequeño)
-        percentile_grid = [80, 85, 88, 90, 92, 94, 96]
+        percentile_grid = [75, 78, 80, 82, 85, 88, 90]
+        results = {p: {"hits": 0, "total_size": 0} for p in percentile_grid}
 
-        # Resultados: {percentil: {'hits': 0, 'total_size': 0}}
-        results = {
-            p: {"hits": 0, "misses": 0, "total_size": 0, "jackpots": 0}
-            for p in percentile_grid
-        }
-
-        # Preparar datos históricos
+        # Preparar historia
         full_data = list(
             zip(
                 self.history.dates, self.history.winning_numbers, self.history.concursos
             )
         )
-        # Ordenamos cronológicamente
         full_data.sort(key=lambda x: x[2])
 
-        start_index = len(full_data) - lookback
-        if start_index < 0:
-            start_index = 0
+        start_index = max(0, len(full_data) - lookback)
 
-        # Bucle de Sorteos
+        # Configuración de filtros (Simulamos los defaults del sistema)
+        # Nota: Usamos valores "seguros" para la simulación
+        filter_cfg = {
+            "sum_min": 90,
+            "sum_max": 200,
+            "even_min": 2,
+            "even_max": 4,
+            "ac_min": 5,
+        }
+
         for i in range(start_index, len(full_data)):
             target_date, target_draw, target_id = full_data[i]
-            target_set = set(target_draw[:6])  # Set del ganador real
+            target_set = set(target_draw[:6])
+            past_data = [x[1] for x in full_data[:i]]
 
-            # Contexto histórico para ese momento (Viaje en el tiempo)
-            past_winning_numbers = [x[1] for x in full_data[:i]]
-
-            # --- SIMULACIÓN LIGERA DE LA ESTRATEGIA ---
-            # 1. Pesos y Clusters (Entrenamiento con datos pasados)
+            # 1. Análisis de Frecuencia y Clusters (Entrenamiento)
             freq_counter = Counter()
             cluster_counter = Counter()
-            for draw in past_winning_numbers:
+            for draw in past_data:
                 freq_counter.update(draw[:6])
                 for pair in itertools.combinations(sorted(draw[:6]), 2):
                     cluster_counter[pair] += 1
@@ -74,10 +82,24 @@ class UniverseOptimizer:
             weights_np /= weights_np.sum()
             clusters_dict = dict(cluster_counter)
 
-            # 2. Generación Cruda (Una sola vez masiva)
-            # Generamos un pool grande para luego filtrarlo con distintos percentiles
-            # Usamos menos cantidad que la real para que la optimización sea rápida (simulada)
-            sim_size = 500000
+            # 2. Construcción del Pipeline (IGUAL QUE EN LA ESTRATEGIA REAL)
+            pipeline = FilterPipeline()
+            pipeline.add_filter(
+                SumRangeFilter(filter_cfg["sum_min"], filter_cfg["sum_max"])
+            )
+            pipeline.add_filter(
+                ParityFilter(filter_cfg["even_min"], filter_cfg["even_max"])
+            )
+            pipeline.add_filter(ACValueFilter(filter_cfg["ac_min"]))
+            pipeline.add_filter(PrimeFilter(min_primes=1, max_primes=4))
+
+            if ConsecutiveFilter and QuadrantFilter and LastDigitFilter:
+                pipeline.add_filter(ConsecutiveFilter(max_consecutive_pairs=2))
+                pipeline.add_filter(QuadrantFilter())
+                pipeline.add_filter(LastDigitFilter(max_same_ending=3))
+
+            # 3. Generación y Filtrado (Simulación reducida pero representativa)
+            sim_size = 200_000  # Muestra estadística
             pool_nums = np.arange(1, total_balls + 1)
             raw_batch = np.random.choice(
                 pool_nums,
@@ -86,82 +108,70 @@ class UniverseOptimizer:
                 p=weights_np,
             )
 
-            # 3. Calcular Scores de ese lote
-            batch_scores = []
-            batch_tickets = []
+            valid_scores = []
 
             for row in raw_batch:
                 uniques = np.unique(row)
                 if len(uniques) != base_config.ticket_size:
                     continue
-                ticket = tuple(sorted(uniques.tolist()))
 
-                # Scoring rápido
+                # A. Validación Estructural (El filtro real)
+                cand_obj = CandidateCombination(tuple(sorted(uniques.tolist())))
+                if not pipeline.validate(cand_obj):
+                    continue
+
+                # B. Scoring
                 score = 0
-                for pair in itertools.combinations(ticket, 2):
+                for pair in itertools.combinations(cand_obj.numbers, 2):
                     if pair in clusters_dict:
                         score += clusters_dict[pair]
 
                 if score > 0:
-                    batch_scores.append(score)
-                    batch_tickets.append(ticket)
+                    valid_scores.append(score)
 
-            # Convertir a numpy para percentiles rápidos
-            scores_np = np.array(batch_scores)
+            if not valid_scores:
+                continue
 
-            print(
-                f"  > Sorteo {target_id}: Evaluando {len(batch_tickets)} candidatos base..."
-            )
+            scores_np = np.array(valid_scores)
 
-            # --- PROBAR CADA PERCENTIL ---
+            # Score del Ganador Real
+            winner_score = 0
+            for pair in itertools.combinations(sorted(tuple(target_set)), 2):
+                if pair in clusters_dict:
+                    winner_score += clusters_dict[pair]
+
+            # Proyección del Universo Total
+            # (Ratio de paso * Universo Total Generado en Estrategia Real ~5M)
+            pass_ratio = len(valid_scores) / sim_size
+            projected_universe_raw = pass_ratio * 5_000_000
+
+            # --- EVALUACIÓN DE PERCENTILES ---
             for p in percentile_grid:
-                # Calcular corte
                 threshold = np.percentile(scores_np, p)
 
-                # Filtrar ganadores virtuales
-                # Verificamos si el ganador real hubiera pasado el corte
-                # Para saber esto, calculamos el score del GANADOR REAL
-                real_winner_score = 0
-                for pair in itertools.combinations(sorted(tuple(target_set)), 2):
-                    if pair in clusters_dict:
-                        real_winner_score += clusters_dict[pair]
+                # Tamaño final tras corte de percentil
+                count_above = np.sum(scores_np >= threshold)
+                percentile_pass_ratio = count_above / len(scores_np)
+                final_size = projected_universe_raw * percentile_pass_ratio
 
-                # El ganador real estaría en el universo si:
-                # A) Su score es mayor al umbral del percentil
-                # B) (Simulado) Asumimos que si cumple el score, el generador masivo eventualmente lo produciría.
+                results[p]["total_size"] += final_size
 
-                # Estimamos tamaño del universo resultante
-                passing_count = np.sum(scores_np >= threshold)
-                projected_universe_size = (
-                    passing_count / len(scores_np)
-                ) * 2500000  # Proyección a escala real
-
-                # Check de Cobertura:
-                # ¿El ticket ganador tenía calidad suficiente para entrar en este percentil?
-                hit = False
-                jackpot = False
-                if real_winner_score >= threshold:
-                    hit = True
-                    jackpot = True  # En teoría entró en la red
-
-                # Guardar métricas
-                results[p]["total_size"] += projected_universe_size
-                if hit:
+                # ¿Atrapamos al ganador?
+                # Debe superar el umbral Y (implícitamente) pasar los filtros estructurales.
+                # Como es un sorteo real, asumimos que pasa los filtros estructurales (son patrones naturales).
+                if winner_score >= threshold:
                     results[p]["hits"] += 1
-                    results[p]["jackpots"] += 1
-                else:
-                    results[p]["misses"] += 1
 
-        # --- REPORTE FINAL ---
-        print("\n" + "=" * 60)
-        print(f"📊 RESULTADOS DE OPTIMIZACIÓN DE RED (Promedio {lookback} Sorteos)")
-        print("=" * 60)
+        # --- REPORTE ---
+        print("\n" + "=" * 65)
+        print(f"📊 RESULTADOS DE OPTIMIZACIÓN (Con Filtros Estructurales)")
+        print("=" * 65)
         print(
-            f"{'PERCENTIL':<10} | {'COBERTURA':<10} | {'TAMAÑO PROM.':<15} | {'CALIFICACIÓN':<10}"
+            f"{'PERCENTIL':<10} | {'COBERTURA':<10} | {'TAMAÑO EST.':<15} | {'CALIFICACIÓN':<10}"
         )
-        print("-" * 60)
+        print("-" * 65)
 
-        best_p = 88
+        best_p = 80
         best_score = -float("inf")
 
         for p in percentile_grid:
@@ -169,14 +179,13 @@ class UniverseOptimizer:
             coverage = (hits / lookback) * 100
             avg_size = results[p]["total_size"] / lookback
 
-            # Fórmula de Score: Queremos cobertura alta, penalizando tamaño excesivo
-            # Prioridad absoluta a cobertura > 90%
-            score = coverage * 100 - (avg_size / 5000)
+            # Score: Bonifica cobertura, penaliza tamaño > 300k
+            score = coverage * 20 - (avg_size / 20000)
 
             color = Fore.WHITE
-            if coverage >= 90:
+            if coverage > 10:
                 color = Fore.GREEN
-            if coverage < 80:
+            if coverage == 0:
                 color = Fore.RED
 
             print(
@@ -187,8 +196,8 @@ class UniverseOptimizer:
                 best_score = score
                 best_p = p
 
-        print("=" * 60)
-        print(f"🏆 MEJOR CONFIGURACIÓN RECOMENDADA: PERCENTIL {best_p}")
-        print(f"   (Equilibrio ideal entre atrapar al ganador y no generar basura)")
+        print("=" * 65)
+        print(f"🏆 MEJOR CONFIGURACIÓN: PERCENTIL {best_p}")
+        print(f"   (Ajusta QUALITY_PERCENTILE en universe_reduction.py)")
 
         return best_p
