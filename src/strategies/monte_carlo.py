@@ -146,6 +146,8 @@ class MonteCarloStrategy(ILotteryStrategy):
         # Esto permite que el Optimizador cambie 'ac_min' de 5 a 7 dinámicamente.
         overrides = getattr(config, "filter_overrides", {})
         filter_config = {**filter_config, **overrides}
+
+        
         # --- FASE 2: FUERZA BRUTA PARALELA ---
         num_cores = cpu_count()
         chunk = NUM_CANDIDATOS_TOTAL // num_cores

@@ -19,7 +19,7 @@ from src.data_access.config import (
 
 # Acceso a Datos y Reportes
 from src.data_access import scraper
-import src.data_access.report as report  # Módulo para guardar CSVs
+import src.data_access.report as report  # Módulo correcto para guardar CSVs
 
 # Interfaz
 from src.interface.cli import ConsoleUI
@@ -115,7 +115,7 @@ def main():
 
             # --- RESULTADOS ---
             if prediction.tickets:
-                # 1. Guardar en CSV de apuestas
+                # 1. Guardar en CSV de apuestas usando REPORT
                 report.guardar_prediccion(prediction.tickets)
 
                 # 2. Mostrar en pantalla
@@ -164,10 +164,9 @@ def main():
                 f"\n{Fore.BLUE}🎫 VALIDANDO RESULTADOS CON LOTENAL...{Style.RESET_ALL}"
             )
             try:
-                # Esta función debe existir en scraper o report según tu implementación
                 scraper.validar_apuestas()
             except AttributeError:
-                print("Función de validación en construcción.")
+                print("⚠️ Función de validación no encontrada en scraper.")
             except Exception as e:
                 print(f"Error en validación: {e}")
 
@@ -178,30 +177,60 @@ def main():
         # ==========================================
         elif opcion == "4":
             print(
-                f"\n{Fore.MAGENTA}🧠 ENTRENANDO ESTRATEGIA (GRID SEARCH)...{Style.RESET_ALL}"
+                f"\n{Fore.MAGENTA}🧠 CENTRO DE ENTRENAMIENTO (AI TRAINER){Style.RESET_ALL}"
             )
+            print("1. Optimizar Filtros Duros (Suma, AC, Pares) -> Para Monte Carlo")
+            print("2. Optimizar Red de Pesca (Percentil de Calidad) -> Para Universo")
 
-            base_config = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS,
-                ticket_size=TICKET_SIZE,
-                num_tickets=15,
-                backtest_size=50,  # 50 sorteos para una buena optimización
-            )
+            sub_op = input("\n>> Selecciona qué deseas optimizar (1 o 2): ")
 
-            optimizer = StrategyOptimizer(MonteCarloStrategy(), history)
-            best_params = optimizer.run_grid_search(base_config)
+            if sub_op == "1":
+                # --- OPTIMIZADOR CLÁSICO ---
+                print(
+                    f"\n{Fore.MAGENTA}🔧 EJECUTANDO GRID SEARCH DE FILTROS...{Style.RESET_ALL}"
+                )
+                base_config = PredictionConfigDTO(
+                    total_balls=TOTAL_BALLS,
+                    ticket_size=TICKET_SIZE,
+                    num_tickets=15,
+                    backtest_size=50,
+                )
+                optimizer = StrategyOptimizer(MonteCarloStrategy(), history)
+                best_params = optimizer.run_grid_search(base_config)
 
-            print(
-                f"\n{Fore.GREEN}✅ MEJOR CONFIGURACIÓN:{Style.RESET_ALL} {best_params}"
-            )
-            print(
-                "Copia esto en src/data_access/config.py si deseas guardarlo permanentemente."
-            )
+                print(
+                    f"\n{Fore.GREEN}✅ MEJOR CONFIGURACIÓN:{Style.RESET_ALL} {best_params}"
+                )
+                print("Actualiza BEST_SETTINGS en config.py con estos valores.")
+
+            elif sub_op == "2":
+                # --- NUEVO OPTIMIZADOR DE UNIVERSO ---
+                try:
+                    from src.core.universe_optimizer import UniverseOptimizer
+
+                    optimizer = UniverseOptimizer(history)
+                    config = PredictionConfigDTO(
+                        total_balls=TOTAL_BALLS, ticket_size=TICKET_SIZE, num_tickets=1
+                    )
+
+                    best_percentile = optimizer.optimize(config, lookback=20)
+
+                    print(f"\n💡 CONSEJO: Ve a 'src/strategies/universe_reduction.py'")
+                    print(
+                        f"   y cambia la variable: QUALITY_PERCENTILE = {best_percentile}"
+                    )
+                except ImportError:
+                    print(
+                        f"{Fore.RED}❌ Error: No se encontró src/core/universe_optimizer.py{Style.RESET_ALL}"
+                    )
+
+            else:
+                print("Opción inválida.")
 
             input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
         # ==========================================
-        # OPCIÓN 5: GENERADOR DE UNIVERSO (BIG DATA)
+        # OPCIÓN 5: GENERADOR DE UNIVERSO (MANUAL)
         # ==========================================
         elif opcion == "5":
             print(

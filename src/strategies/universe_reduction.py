@@ -24,7 +24,7 @@ from src.core.filters.implementations.physical import InertiaFilter
 # --- CONFIGURACIÓN ---
 RAW_GENERATION_SIZE = 5000000
 # Solo aceptamos tickets cuyo puntaje sea superior al del 88% de la población generada
-QUALITY_PERCENTILE = 88
+QUALITY_PERCENTILE = 80
 
 
 def worker_weighted_generation(args: Tuple) -> List[Tuple[float, Tuple[int, ...]]]:
