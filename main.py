@@ -27,6 +27,12 @@ from src.strategies.monte_carlo import MonteCarloStrategy
 from src.strategies.universe_reduction import UniverseReductionStrategy
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 
+# Importación segura para la estrategia Heurística (si falla, no rompe todo el programa hasta usarlo)
+try:
+    from src.strategies.heuristic_selector import HeuristicSelectorStrategy
+except ImportError:
+    HeuristicSelectorStrategy = None
+
 # --- CORE ENGINES ---
 from src.core.backtester import BacktestEngine
 from src.core.optimizer import StrategyOptimizer
@@ -54,21 +60,14 @@ def check_and_update_database(loader: MelateLoader, verbose: bool = True):
             )
             needs_update = True
         else:
-            # CORRECCIÓN DE FECHAS:
-            # El loader ya devuelve objetos datetime.date, no strings.
             last_item = history.dates[-1]
-
             if isinstance(last_item, str):
-                # Fallback por si acaso viniera como string
                 last_date = datetime.strptime(last_item, "%d/%m/%Y").date()
             else:
-                # Ya es un objeto date
                 last_date = last_item
 
-            # Comparar fechas (date vs date)
             days_diff = (datetime.now().date() - last_date).days
 
-            # Si pasaron más de 4 días (frecuencia Melate Retro es Mar/Sab)
             if days_diff > 4:
                 print(
                     f"{Fore.YELLOW}⚠ Base de datos desactualizada (Último: {last_date}).{Style.RESET_ALL}"
@@ -82,25 +81,19 @@ def check_and_update_database(loader: MelateLoader, verbose: bool = True):
 
     except Exception as e:
         print(f"{Fore.RED}⚠ Error verificando fecha: {e}{Style.RESET_ALL}")
-        # Ante la duda, intentamos actualizar
         needs_update = True
 
-    # Ejecutar Scraper si es necesario
     if needs_update:
         print(
             f"\n{Fore.CYAN}📥 Iniciando actualización automática desde Lotería Nacional...{Style.RESET_ALL}"
         )
         try:
-            # CORRECCIÓN SCRAPER: Usamos la función exacta de tu archivo scraper.py
             exito, mensaje = scraper.descargar_datos(CSV_FILE_PATH)
-
             if exito:
                 print(f"{Fore.GREEN}{mensaje}{Style.RESET_ALL}\n")
             else:
                 print(f"{Fore.YELLOW}{mensaje}{Style.RESET_ALL}\n")
-
         except AttributeError:
-            # Fallback por si cambió el nombre
             print(
                 f"{Fore.RED}❌ Error: Función del scraper no encontrada.{Style.RESET_ALL}"
             )
@@ -137,7 +130,6 @@ def main():
 
     # --- 3. BUCLE PRINCIPAL ---
     while True:
-        # ui.show_main_menu() debe existir en tu CLI actualizado
         opcion = ui.show_main_menu()
 
         if opcion == "0":
@@ -160,9 +152,7 @@ def main():
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS, ticket_size=TICKET_SIZE, num_tickets=10
             )
-            # Override con settings optimizados
             config.filter_overrides = BEST_SETTINGS
-
             pred = MonteCarloStrategy().predict(history, config)
             ui.show_prediction_results(pred)
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
@@ -173,7 +163,6 @@ def main():
                 f"\n{Fore.MAGENTA}🧠 OPTIMIZADOR DE PARÁMETROS (GRID SEARCH){Style.RESET_ALL}"
             )
             opt = StrategyOptimizer()
-            # Asumimos que optimize retorna un dict
             best_cfg = opt.optimize(history)
             print(
                 f"\n{Fore.GREEN}💾 Guarda estos valores en data_access/config.py!{Style.RESET_ALL}"
@@ -191,61 +180,89 @@ def main():
             UniverseReductionStrategy().predict(history, config)
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 6. BACKTEST & COVERAGE (MOTOR VALIDACIÓN)
+        # 6. LABORATORIO (BACKTEST & DUELO)
         elif opcion == "6":
-            print(f"\n{Fore.CYAN}📡 LABORATORIO DE PRUEBAS (QA){Style.RESET_ALL}")
             print(
-                "1. Test de Cobertura de Universo (Rápido - Verifica si el ganador entra en la red)"
+                f"\n{Fore.CYAN}📡 LABORATORIO DE PRUEBAS (QA & COMPARATIVAS){Style.RESET_ALL}"
             )
-            print("2. Backtest de Estrategia Completa (AI-Ready - Simulación Realista)")
+            print("1. Test de Cobertura (Solo Fase 1 - Universo)")
+            print("2. 🥊 DUELO: AI Sniper vs Heurística Clásica")
 
-            sub_op = input("   👉 Selecciona modo (1): ") or "1"
+            sub_op = input("   👉 Selecciona modo (2): ") or "2"
 
             try:
-                default_n = 5 if sub_op == "2" else 10
-                n_test = int(
-                    input(f"   ¿Cuántos sorteos pasados simular? ({default_n}): ")
-                    or default_n
-                )
+                n_test = int(input(f"   ¿Cuántos sorteos simular? (10): ") or 10)
             except:
-                n_test = 5
-
-            # Configuración base para tests
-            test_settings = BEST_SETTINGS.copy()
+                n_test = 10
 
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
-                num_tickets=15,  # Simulamos comprar 15 boletos
+                num_tickets=15,
                 backtest_size=n_test,
-                filter_overrides=test_settings,
+                filter_overrides=BEST_SETTINGS,
             )
 
             if sub_op == "1":
-                # --- MODO 1: COBERTURA ---
                 print(
                     f"\n{Fore.BLUE}ℹ️  Verificando calidad de filtros en 'UniverseReduction'...{Style.RESET_ALL}"
                 )
                 CoverageTester().run(UniverseReductionStrategy(), history, config)
 
             else:
-                # --- MODO 2: BACKTEST COMPLETO (CON REGENERACIÓN) ---
-                print(
-                    f"\n{Fore.YELLOW}⚠️  MODO INTENSIVO: Se regenerará el universo para cada sorteo.{Style.RESET_ALL}"
-                )
-                print(
-                    f"{Fore.YELLOW}⏳ Esto tomará tiempo (aprox. 5-8 seg por sorteo)...{Style.RESET_ALL}"
-                )
+                # --- MODO DUELO ---
+                if HeuristicSelectorStrategy is None:
+                    print(
+                        f"{Fore.RED}❌ Error: No se encontró 'src/strategies/heuristic_selector.py'.{Style.RESET_ALL}"
+                    )
+                    input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+                    continue
 
                 engine = BacktestEngine()
 
-                # Ejecutamos el motor inyectando la estrategia de Pre-Proceso
-                engine.run(
-                    strategy=GeneticSelectorStrategy(),  # Estrategia a probar (Sniper + AI)
+                # 1. Corremos la Clásica
+                print(
+                    f"\n{Fore.YELLOW}🥊 ROUND 1: Lógica Clásica (Sin IA)...{Style.RESET_ALL}"
+                )
+                res_classic = engine.run(
+                    strategy=HeuristicSelectorStrategy(),
                     history=history,
                     config=config,
-                    pre_process_strategy=UniverseReductionStrategy(),  # <--- LA CLAVE: Regenera el entorno
+                    pre_process_strategy=UniverseReductionStrategy(),
+                    verbose=True,
                 )
+
+                # 2. Corremos la IA
+                print(
+                    f"\n{Fore.MAGENTA}🥊 ROUND 2: Inteligencia Artificial (Sniper V6)...{Style.RESET_ALL}"
+                )
+                res_ai = engine.run(
+                    strategy=GeneticSelectorStrategy(),
+                    history=history,
+                    config=config,
+                    pre_process_strategy=UniverseReductionStrategy(),
+                    verbose=True,
+                )
+
+                # 3. COMPARATIVA FINAL
+                print(f"\n{Fore.GREEN}🏆 RESULTADO DEL DUELO{Style.RESET_ALL}")
+                print(f"{'METRICA':<20} | {'CLÁSICA':<15} | {'IA (V6)':<15}")
+                print("-" * 55)
+                print(
+                    f"{'Ganancia Total':<20} | ${res_classic.earnings:<14,.2f} | ${res_ai.earnings:<14,.2f}"
+                )
+                print(
+                    f"{'Balance Neto':<20} | ${res_classic.net_balance:<14,.2f} | ${res_ai.net_balance:<14,.2f}"
+                )
+
+                # Extracción segura de datos
+                c3 = res_classic.hit_distribution.get(3, 0)
+                a3 = res_ai.hit_distribution.get(3, 0)
+                c4p = sum([res_classic.hit_distribution.get(k, 0) for k in [4, 5, 6]])
+                a4p = sum([res_ai.hit_distribution.get(k, 0) for k in [4, 5, 6]])
+
+                print(f"{'Aciertos (3)':<20} | {c3:<15} | {a3:<15}")
+                print(f"{'Aciertos (4+)':<20} | {c4p:<15} | {a4p:<15}")
 
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
@@ -261,14 +278,12 @@ def main():
                 filter_overrides=BEST_SETTINGS,
             )
 
-            # Ejecutamos la estrategia principal
-            # (Esta leerá el universo generado en la opción 5)
             pred = GeneticSelectorStrategy().predict(history, config)
 
             if pred.tickets:
                 report.guardar_prediccion(pred.tickets)
                 ui.show_prediction_results(pred)
-                print(f"\n{Fore.GREEN}🍀 ¡Buena suerte, Arquitecto!{Style.RESET_ALL}")
+                print(f"\n{Fore.GREEN}🍀 ¡Buena suerte!{Style.RESET_ALL}")
             else:
                 print(
                     f"{Fore.RED}❌ No se generaron tickets. Verifica si ejecutaste el paso 5.{Style.RESET_ALL}"
