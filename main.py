@@ -180,91 +180,127 @@ def main():
             UniverseReductionStrategy().predict(history, config)
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 6. LABORATORIO (BACKTEST & DUELO)
+        # 6. BACKTESTING (MENU AVANZADO)
         elif opcion == "6":
-            print(
-                f"\n{Fore.CYAN}📡 LABORATORIO DE PRUEBAS (QA & COMPARATIVAS){Style.RESET_ALL}"
+            print(f"\n{Fore.CYAN}⚙️  CONFIGURACIÓN DE BACKTESTING{Style.RESET_ALL}")
+            print("1. 🏛️  Estrategia Clásica (Solo Heurística)")
+            print("2. 🤖  Estrategia Centauro (Solo IA)")
+            print("3. ⚖️  Comparativa (IA vs Clásica)")
+
+            sub_opcion = input(
+                f"\n{Fore.YELLOW}>> Elige una opción (1-3): {Style.RESET_ALL}"
             )
-            print("1. Test de Cobertura (Solo Fase 1 - Universo)")
-            print("2. 🥊 DUELO: AI Sniper vs Heurística Clásica")
 
-            sub_op = input("   👉 Selecciona modo (2): ") or "2"
-
+            # Configuración común
+            test_size = 24  # O el número que prefieras por defecto
             try:
-                n_test = int(input(f"   ¿Cuántos sorteos simular? (10): ") or 10)
-            except:
-                n_test = 10
+                ts_input = input(f"Cuantos sorteos simular? (Default {test_size}): ")
+                if ts_input.strip():
+                    test_size = int(ts_input)
+            except ValueError:
+                pass
 
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
                 num_tickets=15,
-                backtest_size=n_test,
+                backtest_size=test_size,
                 filter_overrides=BEST_SETTINGS,
             )
 
-            if sub_op == "1":
-                print(
-                    f"\n{Fore.BLUE}ℹ️  Verificando calidad de filtros en 'UniverseReduction'...{Style.RESET_ALL}"
-                )
-                CoverageTester().run(UniverseReductionStrategy(), history, config)
+            # Instancias
+            backtester = BacktestEngine()
+            universe_reduction = (
+                UniverseReductionStrategy()
+            )  # Fase 1 (necesaria para Radar)
 
-            else:
-                # --- MODO DUELO ---
-                if HeuristicSelectorStrategy is None:
-                    print(
-                        f"{Fore.RED}❌ Error: No se encontró 'src/strategies/heuristic_selector.py'.{Style.RESET_ALL}"
+            # --- OPCIÓN 1: SOLO CLÁSICA ---
+            if sub_opcion == "1":
+                if HeuristicSelectorStrategy:
+                    heuristic = HeuristicSelectorStrategy()
+                    backtester.run(
+                        strategy=heuristic,
+                        history=history,
+                        config=config,
+                        verbose=True,
+                        pre_process_strategy=universe_reduction,
                     )
-                    input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
-                    continue
+                else:
+                    print("Estrategia Heurística no disponible.")
 
-                engine = BacktestEngine()
+            # --- OPCIÓN 2: SOLO IA (CENTAURO) ---
+            elif sub_opcion == "2":
 
-                # 1. Corremos la Clásica
-                print(
-                    f"\n{Fore.YELLOW}🥊 ROUND 1: Lógica Clásica (Sin IA)...{Style.RESET_ALL}"
-                )
-                res_classic = engine.run(
-                    strategy=HeuristicSelectorStrategy(),
+                print("MODO FORENSE ACTIVADO: Verás la autopsia de cada sorteo.")
+                genetic = GeneticSelectorStrategy()
+                backtester.run(
+                    strategy=genetic,
                     history=history,
                     config=config,
-                    pre_process_strategy=UniverseReductionStrategy(),
+                    verbose=True,  # Verás el detalle sorteo a sorteo
+                    pre_process_strategy=universe_reduction,  # Activa el Radar de Cobertura
+                    debug_deep=True,
+                )
+
+            # --- OPCIÓN 3: COMPARATIVA (LO QUE TENÍAS ANTES) ---
+            elif sub_opcion == "3":
+                print(
+                    f"\n{Fore.CYAN}⚔️  INICIANDO DUELO DE ESTRATEGIAS...{Style.RESET_ALL}"
+                )
+
+                # 1. Correr Clásico (Silencioso para no ensuciar consola)
+                res_classic = None
+                if HeuristicSelectorStrategy:
+                    heuristic = HeuristicSelectorStrategy()
+                    res_classic = backtester.run(
+                        heuristic,
+                        history,
+                        config,
+                        verbose=False,
+                        pre_process_strategy=universe_reduction,
+                    )
+
+                # 2. Correr IA (Verbose para ver progreso)
+                genetic = GeneticSelectorStrategy()
+                res_ai = backtester.run(
+                    genetic,
+                    history,
+                    config,
                     verbose=True,
+                    pre_process_strategy=universe_reduction,
                 )
 
-                # 2. Corremos la IA
+                # 3. Tabla Comparativa Final
+                print(f"\n{Fore.MAGENTA}📊 REPORTE DE BATALLA (Final){Style.RESET_ALL}")
+                print(f"{'Métrica':<20} | {'Clásica':<15} | {'Centauro (IA)':<15}")
+                print("-" * 56)
+
+                c_inv = res_classic.earnings if res_classic else 0
                 print(
-                    f"\n{Fore.MAGENTA}🥊 ROUND 2: Inteligencia Artificial (Sniper V6)...{Style.RESET_ALL}"
-                )
-                res_ai = engine.run(
-                    strategy=GeneticSelectorStrategy(),
-                    history=history,
-                    config=config,
-                    pre_process_strategy=UniverseReductionStrategy(),
-                    verbose=True,
+                    f"{'Ganancias':<20} | ${c_inv:,.2f}       | ${res_ai.earnings:,.2f}"
                 )
 
-                # 3. COMPARATIVA FINAL
-                print(f"\n{Fore.GREEN}🏆 RESULTADO DEL DUELO{Style.RESET_ALL}")
-                print(f"{'METRICA':<20} | {'CLÁSICA':<15} | {'IA (V6)':<15}")
-                print("-" * 55)
+                c_bal = res_classic.net_balance if res_classic else 0
                 print(
-                    f"{'Ganancia Total':<20} | ${res_classic.earnings:<14,.2f} | ${res_ai.earnings:<14,.2f}"
-                )
-                print(
-                    f"{'Balance Neto':<20} | ${res_classic.net_balance:<14,.2f} | ${res_ai.net_balance:<14,.2f}"
+                    f"{'Balance Neto':<20} | ${c_bal:,.2f}       | ${res_ai.net_balance:,.2f}"
                 )
 
-                # Extracción segura de datos
-                c3 = res_classic.hit_distribution.get(3, 0)
+                # Comparar aciertos
+                if res_classic:
+                    c3 = res_classic.hit_distribution.get(3, 0)
+                    c4p = sum(
+                        [res_classic.hit_distribution.get(k, 0) for k in [4, 5, 6]]
+                    )
+                else:
+                    c3, c4p = 0, 0
+
                 a3 = res_ai.hit_distribution.get(3, 0)
-                c4p = sum([res_classic.hit_distribution.get(k, 0) for k in [4, 5, 6]])
                 a4p = sum([res_ai.hit_distribution.get(k, 0) for k in [4, 5, 6]])
 
                 print(f"{'Aciertos (3)':<20} | {c3:<15} | {a3:<15}")
                 print(f"{'Aciertos (4+)':<20} | {c4p:<15} | {a4p:<15}")
 
-            input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
         # 7. SELECTOR FINAL (PREDICCIÓN)
         elif opcion == "7":

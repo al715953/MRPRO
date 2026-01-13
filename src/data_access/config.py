@@ -25,7 +25,7 @@ UNIVERSE_MAX = 39
 
 # --- NUEVA CONFIGURACIÓN MONTECARLO ---
 NUM_SIMULACIONES = 200000  # 200k sorteos teóricos para calibrar
-NUM_CANDIDATOS = 10000000  # 1M Cuántas combinaciones probamos en cada generación
+NUM_CANDIDATOS = 10000000  # 10M combinaciones para generación masiva
 
 # Colores
 CYAN = "\033[0;36m"
@@ -34,8 +34,8 @@ VERDE = "\033[0;32m"
 BLANCO_B = "\033[1;37m"
 
 # --- CONFIGURACIÓN "CAMPEONA" (OPTIMIZADA) ---
-# Copia aquí el resultado de la Opción 5 (Optimizer)
-# Valores iniciales conservadores:
+# Estos parámetros controlan los filtros de la FASE 1 (Universe Reduction).
+# Cualquier ticket que no cumpla esto, NI SIQUIERA llega a la IA.
 BEST_SETTINGS = {
     "sum_min": 108,
     "sum_max": 180,

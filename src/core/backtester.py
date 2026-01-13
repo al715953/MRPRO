@@ -7,6 +7,7 @@ from rich.progress import (
 )
 from rich.console import Console
 from rich.table import Table
+from rich import box
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
@@ -14,16 +15,23 @@ from src.core.rules import MelateRetroRules
 
 class BacktestEngine:
     """
-    Motor de simulación histórica.
+    Motor de simulación histórica con capacidad FORENSE.
     Incluye:
-    - Barra de progreso visual (Rich).
     - Radar de Cobertura (Fase 1).
-    - Reporte detallado de tickets ganadores.
+    - Análisis comparativo (ADN del Ganador vs Predicciones).
     """
 
     def __init__(self):
         self.rules = MelateRetroRules()
         self.console = Console()
+
+    def _calculate_dna(self, ticket):
+        """Calcula propiedades estructurales rápidas para diagnóstico."""
+        s = sum(ticket)
+        evens = sum(1 for n in ticket if n % 2 == 0)
+        primes_set = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}
+        primes = sum(1 for n in ticket if n in primes_set)
+        return {"sum": s, "evens": evens, "primes": primes}
 
     def run(
         self,
@@ -32,19 +40,20 @@ class BacktestEngine:
         config: PredictionConfigDTO,
         verbose: bool = True,
         pre_process_strategy: ILotteryStrategy = None,
+        debug_deep: bool = False,  # <--- NUEVO MODO FORENSE
     ) -> BacktestResultDTO:
 
         strategy_name = strategy.__class__.__name__
         if verbose:
             self.console.print(
-                f"\n[bold yellow]⚙️  Iniciando Backtest para:[/bold yellow] [cyan]{strategy_name}[/cyan]"
+                f"\n[bold yellow]⚙️  Iniciando Backtest Forense para:[/bold yellow] [cyan]{strategy_name}[/cyan]"
             )
 
         total_investment = 0.0
         total_earnings = 0.0
         hits_distribution = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
 
-        # Estadísticas de Cobertura
+        # Stats cobertura
         coverage_stats = {
             "missed": 0,
             "captured_6": 0,
@@ -69,17 +78,18 @@ class BacktestEngine:
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=self.console,
-            transient=False,
+            transient=True,  # Ocultar barra al terminar para dejar limpio el log
         ) as progress:
 
             task_id = progress.add_task(
-                f"[cyan]Simulando {test_size} sorteos...", total=test_size
+                f"[cyan]Analizando {test_size} sorteos...", total=test_size
             )
 
             for i in range(start_index, total_draws):
                 target_date, target_draw, target_id = full_history[i]
-                target_set = set(target_draw[:6])  # Solo naturales para el radar
+                target_set = set(target_draw[:6])
 
+                # Contexto Histórico
                 past_data = full_history[:i]
                 if not past_data:
                     current_history = DrawHistoryDTO([], [], [])
@@ -89,164 +99,156 @@ class BacktestEngine:
                         list(p_dates), list(p_nums), list(p_ids)
                     )
 
-                universe_info_str = ""
+                # --- FASE 1: RADAR DE COBERTURA ---
+                universe_info = ""
+                univ_hits_max = 0
 
-                # --- FASE 1: PRE-PROCESO (LA PESCA) ---
                 if pre_process_strategy:
-                    old_overrides = getattr(config, "filter_overrides", {})
-                    config.filter_overrides = {**old_overrides, "verbose": False}
-                    universe_result = pre_process_strategy.predict(
-                        current_history, config
-                    )
-                    config.filter_overrides = old_overrides
+                    # Silenciar verbose interno de la estrategia
+                    old_ov = getattr(config, "filter_overrides", {})
+                    config.filter_overrides = {**old_ov, "verbose": False}
 
-                    # Radar de Cobertura
-                    univ_size = len(universe_result.tickets)
-                    max_potential_hit = 0
-                    if univ_size > 0:
-                        for t in universe_result.tickets:
-                            h = len(set(t) & target_set)
-                            if h > max_potential_hit:
-                                max_potential_hit = h
-                            if h == 6:
-                                break
+                    univ_res = pre_process_strategy.predict(current_history, config)
+                    config.filter_overrides = old_ov  # Restaurar
 
-                    qa_icon = "❌"
-                    if max_potential_hit == 6:
-                        qa_icon = "💎"
-                        coverage_stats["captured_6"] += 1
-                    elif max_potential_hit == 5:
-                        qa_icon = "⚠️"
-                        coverage_stats["captured_5"] += 1
-                    elif max_potential_hit == 4:
-                        qa_icon = "📉"
-                        coverage_stats["captured_4"] += 1
-                    else:
-                        coverage_stats["missed"] += 1
+                    if univ_res.tickets:
+                        hits_list = [len(set(t) & target_set) for t in univ_res.tickets]
+                        univ_hits_max = max(hits_list) if hits_list else 0
 
-                    universe_info_str = f" | [magenta]Univ: {univ_size//1000}k[/] | [bold]{qa_icon} MaxPot: {max_potential_hit}[/]"
+                        # KPI Radar
+                        if univ_hits_max == 6:
+                            coverage_stats["captured_6"] += 1
+                        elif univ_hits_max == 5:
+                            coverage_stats["captured_5"] += 1
+                        elif univ_hits_max == 4:
+                            coverage_stats["captured_4"] += 1
+                        else:
+                            coverage_stats["missed"] += 1
 
-                # --- FASE 2: ESTRATEGIA ---
+                        icon = (
+                            "💎"
+                            if univ_hits_max == 6
+                            else ("⚠️" if univ_hits_max == 5 else "❌")
+                        )
+                        universe_info = f"[{icon} Red: {univ_hits_max} Hits]"
+
+                # --- FASE 2: ESTRATEGIA PRINCIPAL ---
                 prediction = strategy.predict(current_history, config)
 
-                # --- FASE 3: EVALUACIÓN ---
+                # --- FASE 3: EVALUACIÓN Y FORENSE ---
                 draw_earnings = 0.0
                 max_hit = 0
-                best_label = "0"
-                winning_tickets_log = []  # Restauramos el log detallado
 
-                for idx, ticket in enumerate(prediction.tickets, 1):
+                # Tabla Forense del Sorteo
+                forensic_table = Table(
+                    box=box.SIMPLE, show_header=True, header_style="bold magenta"
+                )
+                forensic_table.add_column("Ticket", width=24)
+                forensic_table.add_column("Aciertos", justify="center")
+                forensic_table.add_column("Premio", justify="right")
+                forensic_table.add_column("Suma", justify="center")
+                forensic_table.add_column("Pares", justify="center")
+                forensic_table.add_column("Primos", justify="center")
+
+                # 1. Analizar GANADOR REAL
+                dna_winner = self._calculate_dna(target_draw[:6])
+                w_str = ", ".join(f"{n:02d}" for n in sorted(target_draw[:6]))
+                forensic_table.add_row(
+                    f"[bold yellow]{w_str}[/]",
+                    "🏆",
+                    "GANADOR",
+                    str(dna_winner["sum"]),
+                    str(dna_winner["evens"]),
+                    str(dna_winner["primes"]),
+                    style="on black",
+                )
+                forensic_table.add_row("---", "-", "-", "-", "-", "-")
+
+                # 2. Analizar PREDICCIONES
+                for t_idx, ticket in enumerate(prediction.tickets, 1):
                     total_investment += self.rules.ticket_cost
                     hits_nat, has_add = self.rules.validate_ticket(ticket, target_draw)
                     prize = self.rules.calculate_prize(hits_nat, has_add)
 
-                    if prize > 0:
-                        draw_earnings += prize
-                        # Guardamos el detalle del ticket ganador
-                        t_str = ", ".join([f"{n:02d}" for n in sorted(ticket)])
-
-                        # Etiqueta especial para premios con Adicional
-                        type_str = f"{hits_nat} hits"
-                        if has_add:
-                            type_str += " + Bola Adicional"
-
-                        winning_tickets_log.append(
-                            f"   🎫 Ticket #{idx:02d}: [{t_str}] -> [bold green]${prize:,.2f}[/] ({type_str})"
-                        )
-
-                    # Actualizar estadísticas globales
-                    if hits_nat > max_hit:
-                        max_hit = hits_nat
-                        best_label = f"{max_hit}"
-                        if has_add:
-                            best_label += "+B"
-                    elif hits_nat == max_hit and has_add:
-                        best_label = f"{max_hit}+B"
-
+                    draw_earnings += prize
                     hits_distribution[hits_nat] = hits_distribution.get(hits_nat, 0) + 1
+                    max_hit = max(max_hit, hits_nat)
+
+                    # DNA predicción
+                    dna = self._calculate_dna(ticket)
+                    t_str = ", ".join(f"{n:02d}" for n in sorted(ticket))
+
+                    # Estilo visual según aciertos
+                    style = "dim"
+                    hit_str = str(hits_nat)
+                    if hits_nat >= 3:
+                        style = "bold green"
+                        hit_str = f"★ {hits_nat}"
+                    if hits_nat >= 4:
+                        style = "bold cyan"
+
+                    forensic_table.add_row(
+                        f"[{style}]{t_str}[/]",
+                        f"[{style}]{hit_str}[/]",
+                        f"[{style}]${prize:,.0f}[/]" if prize > 0 else "",
+                        str(dna["sum"]),
+                        str(dna["evens"]),
+                        str(dna["primes"]),
+                    )
 
                 total_earnings += draw_earnings
 
-                # --- LOGGING ---
-                # Si ganamos dinero, imprimimos el detalle antes de avanzar la barra
-                if draw_earnings > 0:
-                    progress.console.print(
-                        f"\n[bold green]✨ ¡PREMIO EN SORTEO #{target_id} ({target_date})! ✨[/]"
-                    )
-                    for log_line in winning_tickets_log:
-                        progress.console.print(log_line)
+                # --- IMPRESIÓN CONDICIONAL ---
+                # Si debug_deep está activo, mostramos la autopsia SIEMPRE,
+                # o si hubo premio relevante.
+                should_print = debug_deep or (verbose and draw_earnings > 0)
 
-                    status_icon = "🟢"
-                    msg = (
-                        f"   RESUMEN: "
-                        f"{universe_info_str} "
-                        f"| {status_icon} Ganancia Total Sorteo: [bold green]${draw_earnings:,.2f}[/] (Best: {best_label})"
-                    )
-                    progress.console.print(msg)
-                    progress.console.print("-" * 50)  # Separador visual
-
-                elif verbose and max_hit >= 4:
-                    # Si hubo un buen hit (4) pero no premio (por reglas) o falló algo, avisamos
+                if should_print:
                     progress.console.print(
-                        f"[dim]   Sorteo #{target_id}: Max Hit {max_hit} (Sin premio)[/dim]"
+                        f"\n[bold white]🔎 SORTEO #{target_id} ({target_date})[/] {universe_info}"
                     )
+                    progress.console.print(forensic_table)
+
+                    if draw_earnings > 0:
+                        progress.console.print(
+                            f"   💰 GANANCIA: [green]${draw_earnings:,.2f}[/]"
+                        )
+                    else:
+                        progress.console.print(
+                            f"   📉 Resultado: -${len(prediction.tickets)*self.rules.ticket_cost:,.2f}"
+                        )
 
                 progress.advance(task_id)
 
-        # --- RESUMEN FINAL ---
-        net_balance = total_earnings - total_investment
-        self.console.print(f"\n[bold yellow]{'='*60}[/bold yellow]")
-        self.console.print(
-            f"[bold]📊 RESUMEN FINAL DEL BACKTEST ({test_size} Sorteos)[/bold]"
-        )
-        self.console.print(f"{'='*60}")
+        # --- REPORTE FINAL ---
+        net = total_earnings - total_investment
+        self.console.print(f"\n[bold yellow]{'='*60}[/]")
+        self.console.print(f"📊 BALANCE FINAL ({test_size} Sorteos)")
+        self.console.print(f"   Inversión: ${total_investment:,.2f}")
+        self.console.print(f"   Ganancia:  ${total_earnings:,.2f}")
+        c = "green" if net >= 0 else "red"
+        self.console.print(f"   Neto:      [{c}]${net:,.2f}[/]")
 
-        self.console.print(f"💰 Inversión Total:  ${total_investment:,.2f}")
-        self.console.print(f"💵 Ganancia Total:   ${total_earnings:,.2f}")
-        color_bal = "green" if net_balance >= 0 else "red"
-        self.console.print(
-            f"📉 Balance Neto:     [bold {color_bal}]${net_balance:,.2f}[/]"
-        )
+        # Puntería
+        self.console.print("\n🎯 Distribución de Aciertos:")
+        for h in range(7):
+            cnt = hits_distribution.get(h, 0)
+            if cnt > 0:
+                bar = "█" * (cnt // 2 + 1)
+                self.console.print(f"   {h} Hits: {cnt:3d} {bar}")
 
-        # Tabla de Aciertos
-        self.console.print(f"\n[bold]🎯 Puntería Final (IA/Heurística):[/bold]")
-        dist_table = Table(show_header=False, box=None)
-        max_count = max(hits_distribution.values()) if hits_distribution else 1
-        for hits, count in sorted(hits_distribution.items(), reverse=True):
-            if count > 0:
-                bar = "█" * int((count / max_count) * 20)
-                color = "green" if hits >= 3 else "dim white"
-                dist_table.add_row(
-                    f"{hits} Aciertos", f"{count:3d}", f"[{color}]{bar}[/]"
-                )
-        self.console.print(dist_table)
-
-        # Estadísticas de Cobertura
         if pre_process_strategy:
-            self.console.print(
-                f"\n[bold magenta]🕸️  Calidad de la Red (Universo Pre-IA):[/bold magenta]"
-            )
-            self.console.print(
-                f"   💎 6 Hits Disponibles: {coverage_stats['captured_6']} veces"
-            )
-            self.console.print(
-                f"   ⚠️ 5 Hits Disponibles: {coverage_stats['captured_5']} veces"
-            )
-            self.console.print(
-                f"   📉 4 Hits Disponibles: {coverage_stats['captured_4']} veces"
-            )
-            if coverage_stats["missed"] > 0:
-                self.console.print(
-                    f"   ❌ Red Rota (<4 Hits): {coverage_stats['missed']} veces"
-                )
-
-        self.console.print(f"[bold yellow]{'='*60}[/bold yellow]\n")
+            self.console.print(f"\n🕸️  Eficacia Fase 1 (Radar):")
+            self.console.print(f"   6 Hits en Red: {coverage_stats['captured_6']}")
+            self.console.print(f"   5 Hits en Red: {coverage_stats['captured_5']}")
+            self.console.print(f"   4 Hits en Red: {coverage_stats['captured_4']}")
+            self.console.print(f"   Red Rota:      {coverage_stats['missed']}")
 
         return BacktestResultDTO(
-            strategy_name=strategy.__class__.__name__,
-            total_draws_tested=test_size,
-            investment=total_investment,
-            earnings=total_earnings,
-            net_balance=net_balance,
-            hit_distribution=hits_distribution,
+            strategy_name,
+            test_size,
+            total_investment,
+            total_earnings,
+            net,
+            hits_distribution,
         )
