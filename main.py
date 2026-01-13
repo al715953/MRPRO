@@ -1,9 +1,13 @@
 import sys
 import os
+import time
+from datetime import datetime, date
 from colorama import Fore, Style
 
+# Añadimos el directorio raíz al path para importaciones absolutas
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# --- DOMAIN & DATA ACCESS ---
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.loader import MelateLoader
 from src.data_access.config import (
@@ -12,205 +16,268 @@ from src.data_access.config import (
     TOTAL_BALLS,
     BEST_SETTINGS,
 )
-from src.data_access import scraper
+import src.data_access.scraper as scraper
 import src.data_access.report as report
+
+# --- INTERFACE ---
 from src.interface.cli import ConsoleUI
+
+# --- STRATEGIES ---
 from src.strategies.monte_carlo import MonteCarloStrategy
 from src.strategies.universe_reduction import UniverseReductionStrategy
 from src.strategies.genetic_selector import GeneticSelectorStrategy
+
+# --- CORE ENGINES ---
 from src.core.backtester import BacktestEngine
 from src.core.optimizer import StrategyOptimizer
 from src.core.coverage_tester import CoverageTester
+
+
+def check_and_update_database(loader: MelateLoader, verbose: bool = True):
+    """
+    Verifica si la base de datos local está actualizada.
+    Si el último sorteo tiene > 4 días, ejecuta el scraper.
+    """
+    if verbose:
+        print(
+            f"{Fore.CYAN}🔍 Verificando integridad de la base de datos...{Style.RESET_ALL}"
+        )
+
+    needs_update = False
+    try:
+        # Intentamos cargar la data actual
+        history = loader.load_data()
+
+        if not history.dates:
+            print(
+                f"{Fore.YELLOW}⚠ Archivo local vacío o no encontrado.{Style.RESET_ALL}"
+            )
+            needs_update = True
+        else:
+            # CORRECCIÓN DE FECHAS:
+            # El loader ya devuelve objetos datetime.date, no strings.
+            last_item = history.dates[-1]
+
+            if isinstance(last_item, str):
+                # Fallback por si acaso viniera como string
+                last_date = datetime.strptime(last_item, "%d/%m/%Y").date()
+            else:
+                # Ya es un objeto date
+                last_date = last_item
+
+            # Comparar fechas (date vs date)
+            days_diff = (datetime.now().date() - last_date).days
+
+            # Si pasaron más de 4 días (frecuencia Melate Retro es Mar/Sab)
+            if days_diff > 4:
+                print(
+                    f"{Fore.YELLOW}⚠ Base de datos desactualizada (Último: {last_date}).{Style.RESET_ALL}"
+                )
+                needs_update = True
+            else:
+                if verbose:
+                    print(
+                        f"{Fore.GREEN}✅ Base de datos al día ({last_date}).{Style.RESET_ALL}"
+                    )
+
+    except Exception as e:
+        print(f"{Fore.RED}⚠ Error verificando fecha: {e}{Style.RESET_ALL}")
+        # Ante la duda, intentamos actualizar
+        needs_update = True
+
+    # Ejecutar Scraper si es necesario
+    if needs_update:
+        print(
+            f"\n{Fore.CYAN}📥 Iniciando actualización automática desde Lotería Nacional...{Style.RESET_ALL}"
+        )
+        try:
+            # CORRECCIÓN SCRAPER: Usamos la función exacta de tu archivo scraper.py
+            exito, mensaje = scraper.descargar_datos(CSV_FILE_PATH)
+
+            if exito:
+                print(f"{Fore.GREEN}{mensaje}{Style.RESET_ALL}\n")
+            else:
+                print(f"{Fore.YELLOW}{mensaje}{Style.RESET_ALL}\n")
+
+        except AttributeError:
+            # Fallback por si cambió el nombre
+            print(
+                f"{Fore.RED}❌ Error: Función del scraper no encontrada.{Style.RESET_ALL}"
+            )
+        except Exception as e:
+            print(
+                f"{Fore.RED}❌ Falló la actualización automática: {e}{Style.RESET_ALL}"
+            )
+            print(
+                f"{Fore.YELLOW}   Continuando con datos locales...{Style.RESET_ALL}\n"
+            )
 
 
 def main():
     ui = ConsoleUI()
     ui.show_welcome()
 
-    print(
-        f"{Fore.CYAN}📂 Cargando histórico desde: {CSV_FILE_PATH}...{Style.RESET_ALL}"
-    )
+    # --- 1. VALIDACIÓN E INTEGRIDAD DE DATOS ---
     loader = MelateLoader(CSV_FILE_PATH)
+    check_and_update_database(loader)
+
+    # --- 2. CARGA DE DATOS ---
+    print(f"{Fore.CYAN}📂 Cargando histórico oficial...{Style.RESET_ALL}")
     history = loader.load_data()
 
     if not history.dates:
         print(
-            f"{Fore.RED}❌ Error: No hay datos históricos. Intentando actualizar...{Style.RESET_ALL}"
+            f"{Fore.RED}❌ ERROR CRÍTICO: No se pudieron cargar datos para operar.{Style.RESET_ALL}"
         )
-        try:
-            scraper.actualizar_base_datos()
-            history = loader.load_data()
-        except Exception as e:
-            print(f"Error actualizando: {e}")
+        return
 
+    print(
+        f"{Fore.GREEN}✅ Sistema listo. {len(history.winning_numbers)} sorteos cargados.{Style.RESET_ALL}"
+    )
+
+    # --- 3. BUCLE PRINCIPAL ---
     while True:
-        ui.mostrar_logo()
-        opcion = ui.get_main_menu_option()
+        # ui.show_main_menu() debe existir en tu CLI actualizado
+        opcion = ui.show_main_menu()
 
-        # 1. GENERACIÓN MAESTRA
-        if opcion == "1":
-            print(
-                f"\n{Fore.YELLOW}🚀 INICIANDO SISTEMA DE PREDICCIÓN MAESTRA...{Style.RESET_ALL}"
-            )
-            print(f"\n{Fore.MAGENTA}🔹 FASE 1: Generando Universo...{Style.RESET_ALL}")
+        if opcion == "0":
+            print(f"{Fore.CYAN}👋 ¡Hasta la próxima, Arquitecto!{Style.RESET_ALL}")
+            break
 
-            current_settings = BEST_SETTINGS.copy()
-            current_settings["verbose"] = False
+        # 1. VER HISTORIAL
+        elif opcion == "1":
+            ui.show_history(history)
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-            config_universe = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS,
-                ticket_size=TICKET_SIZE,
-                num_tickets=10,
-                filter_overrides=current_settings,
-            )
-            strategy_universe = UniverseReductionStrategy()
-            strategy_universe.predict(history, config_universe)
-            print("✅ Universo generado.")
-
-            print(f"\n{Fore.GREEN}🔹 FASE 2: Selección Genética...{Style.RESET_ALL}")
-            config_final = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS,
-                ticket_size=TICKET_SIZE,
-                num_tickets=15,
-            )
-            strategy_selector = GeneticSelectorStrategy()
-            prediction = strategy_selector.predict(history, config_final)
-
-            if prediction.tickets:
-                report.guardar_prediccion(prediction.tickets)
-                ui.show_prediction_results(prediction)
-                print(
-                    f"\n{Fore.YELLOW}✨ ¡PROCESO COMPLETADO! Boletos en 'data/Mis_Apuestas.csv'{Style.RESET_ALL}"
-                )
-            else:
-                print(f"\n{Fore.RED}❌ Error en selección.{Style.RESET_ALL}")
-            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
-
-        # 2. BACKTESTING
+        # 2. ANALISIS FRECUENCIA
         elif opcion == "2":
-            print(
-                f"\n{Fore.GREEN}🧪 INICIANDO BACKTESTING FINANCIERO...{Style.RESET_ALL}"
-            )
+            ui.analyze_frequency(history, TOTAL_BALLS)
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-            # --- INPUT DE USUARIO ---
-            try:
-                raw_input = input(
-                    f"¿Cuántos sorteos pasados quieres simular? (Default=10): "
-                )
-                n_draws = int(raw_input) if raw_input.strip() else 10
-            except ValueError:
-                n_draws = 10
-
-            print(f"⚙️  Simulando los últimos {n_draws} sorteos...")
-
-            config = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS,
-                ticket_size=TICKET_SIZE,
-                num_tickets=15,
-                backtest_size=n_draws,  # Usamos el input
-                filter_overrides=BEST_SETTINGS,
-            )
-
-            engine = BacktestEngine()
-            engine.run(MonteCarloStrategy(), history, config)
-
-            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
-
-        # 3. VALIDAR RESULTADOS
+        # 3. MONTE CARLO (SIMULACIÓN)
         elif opcion == "3":
-            print(f"\n{Fore.BLUE}🎫 VALIDANDO RESULTADOS...{Style.RESET_ALL}")
-            try:
-                scraper.validar_apuestas()
-            except Exception as e:
-                print(f"Error: {e}")
+            print(f"\n{Fore.CYAN}🎲 MÓDULO MONTE CARLO{Style.RESET_ALL}")
+            config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS, ticket_size=TICKET_SIZE, num_tickets=10
+            )
+            # Override con settings optimizados
+            config.filter_overrides = BEST_SETTINGS
+
+            pred = MonteCarloStrategy().predict(history, config)
+            ui.show_prediction_results(pred)
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 4. OPTIMIZADOR
+        # 4. OPTIMIZADOR (IA PARAMETROS)
         elif opcion == "4":
-            print(f"\n{Fore.MAGENTA}🧠 AI TRAINER{Style.RESET_ALL}")
-            print("1. Filtros Duros (Monte Carlo)\n2. Calidad Universo")
-            sub_op = input("\n>> Opción: ")
-
-            if sub_op == "1":
-                base_config = PredictionConfigDTO(
-                    total_balls=TOTAL_BALLS,
-                    ticket_size=TICKET_SIZE,
-                    num_tickets=15,
-                    backtest_size=50,
-                )
-                optimizer = StrategyOptimizer(MonteCarloStrategy(), history)
-                best = optimizer.run_grid_search(base_config)
-                print(f"\n✅ MEJOR CONFIG: {best}")
-            elif sub_op == "2":
-                try:
-                    from src.core.universe_optimizer import UniverseOptimizer
-
-                    optimizer = UniverseOptimizer(history)
-                    best_p = optimizer.optimize(
-                        PredictionConfigDTO(
-                            total_balls=TOTAL_BALLS,
-                            ticket_size=TICKET_SIZE,
-                            num_tickets=1,
-                        )
-                    )
-                    print(f"Cambia QUALITY_PERCENTILE a: {best_p}")
-                except:
-                    print("Falta módulo universe_optimizer")
+            print(
+                f"\n{Fore.MAGENTA}🧠 OPTIMIZADOR DE PARÁMETROS (GRID SEARCH){Style.RESET_ALL}"
+            )
+            opt = StrategyOptimizer()
+            # Asumimos que optimize retorna un dict
+            best_cfg = opt.optimize(history)
+            print(
+                f"\n{Fore.GREEN}💾 Guarda estos valores en data_access/config.py!{Style.RESET_ALL}"
+            )
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 5. GENERAR UNIVERSO
+        # 5. GENERAR UNIVERSO (REDUCCIÓN)
         elif opcion == "5":
-            print(f"\n{Fore.MAGENTA}🌌 GENERANDO UNIVERSO (MANUAL)...{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}🌌 GENERANDO UNIVERSO (MANUAL)...{Style.RESET_ALL}")
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
-                num_tickets=10,
                 filter_overrides=BEST_SETTINGS,
             )
             UniverseReductionStrategy().predict(history, config)
-            print(
-                f"\n{Fore.GREEN}✅ Generado 'data/universo_reducido.csv'{Style.RESET_ALL}"
-            )
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 6. COVERAGE TESTER
+        # 6. BACKTEST & COVERAGE (MOTOR VALIDACIÓN)
         elif opcion == "6":
-            print(f"\n{Fore.CYAN}📡 COVERAGE TESTER...{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}📡 LABORATORIO DE PRUEBAS (QA){Style.RESET_ALL}")
+            print(
+                "1. Test de Cobertura de Universo (Rápido - Verifica si el ganador entra en la red)"
+            )
+            print("2. Backtest de Estrategia Completa (AI-Ready - Simulación Realista)")
+
+            sub_op = input("   👉 Selecciona modo (1): ") or "1"
+
             try:
-                n_test = int(input("¿Sorteos? (5): ") or 5)
+                default_n = 5 if sub_op == "2" else 10
+                n_test = int(
+                    input(f"   ¿Cuántos sorteos pasados simular? ({default_n}): ")
+                    or default_n
+                )
             except:
                 n_test = 5
-            settings = BEST_SETTINGS.copy()
-            settings["verbose"] = False
+
+            # Configuración base para tests
+            test_settings = BEST_SETTINGS.copy()
+
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
-                num_tickets=10,
+                num_tickets=15,  # Simulamos comprar 15 boletos
                 backtest_size=n_test,
-                filter_overrides=settings,
+                filter_overrides=test_settings,
             )
-            CoverageTester().run(UniverseReductionStrategy(), history, config)
+
+            if sub_op == "1":
+                # --- MODO 1: COBERTURA ---
+                print(
+                    f"\n{Fore.BLUE}ℹ️  Verificando calidad de filtros en 'UniverseReduction'...{Style.RESET_ALL}"
+                )
+                CoverageTester().run(UniverseReductionStrategy(), history, config)
+
+            else:
+                # --- MODO 2: BACKTEST COMPLETO (CON REGENERACIÓN) ---
+                print(
+                    f"\n{Fore.YELLOW}⚠️  MODO INTENSIVO: Se regenerará el universo para cada sorteo.{Style.RESET_ALL}"
+                )
+                print(
+                    f"{Fore.YELLOW}⏳ Esto tomará tiempo (aprox. 5-8 seg por sorteo)...{Style.RESET_ALL}"
+                )
+
+                engine = BacktestEngine()
+
+                # Ejecutamos el motor inyectando la estrategia de Pre-Proceso
+                engine.run(
+                    strategy=GeneticSelectorStrategy(),  # Estrategia a probar (Sniper + AI)
+                    history=history,
+                    config=config,
+                    pre_process_strategy=UniverseReductionStrategy(),  # <--- LA CLAVE: Regenera el entorno
+                )
+
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        # 7. SELECTOR
+        # 7. SELECTOR FINAL (PREDICCIÓN)
         elif opcion == "7":
-            print(f"\n{Fore.GREEN}🎯 SELECTOR FINAL (MANUAL)...{Style.RESET_ALL}")
-            config = PredictionConfigDTO(
-                total_balls=TOTAL_BALLS, ticket_size=TICKET_SIZE, num_tickets=15
+            print(
+                f"\n{Fore.GREEN}🎯 SELECTOR GENÉTICO (PRODUCCIÓN)...{Style.RESET_ALL}"
             )
+            config = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=15,
+                filter_overrides=BEST_SETTINGS,
+            )
+
+            # Ejecutamos la estrategia principal
+            # (Esta leerá el universo generado en la opción 5)
             pred = GeneticSelectorStrategy().predict(history, config)
+
             if pred.tickets:
                 report.guardar_prediccion(pred.tickets)
                 ui.show_prediction_results(pred)
+                print(f"\n{Fore.GREEN}🍀 ¡Buena suerte, Arquitecto!{Style.RESET_ALL}")
             else:
-                print(f"{Fore.RED}❌ Error.{Style.RESET_ALL}")
+                print(
+                    f"{Fore.RED}❌ No se generaron tickets. Verifica si ejecutaste el paso 5.{Style.RESET_ALL}"
+                )
+
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
-        elif opcion == "0":
-            print("👋 Bye.")
-            sys.exit()
         else:
-            print("⚠️ Opción inválida.")
+            print(f"{Fore.RED}Opción inválida.{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,11 @@ from src.core.rules import MelateRetroRules
 
 
 class BacktestEngine:
+    """
+    Motor de simulación histórica.
+    Permite validar estrategias 'rebobinando' el tiempo.
+    """
+
     def __init__(self):
         self.rules = MelateRetroRules()
 
@@ -14,16 +19,22 @@ class BacktestEngine:
         history: DrawHistoryDTO,
         config: PredictionConfigDTO,
         verbose: bool = True,
+        pre_process_strategy: ILotteryStrategy = None,  # <--- NUEVO: Inyección de Dependencia
     ) -> BacktestResultDTO:
 
+        strategy_name = strategy.__class__.__name__
         if verbose:
-            print(f"⚙️ Iniciando Backtest para: {strategy.__class__.__name__}")
+            print(f"⚙️ Iniciando Backtest Profesional para: {strategy_name}")
+            if pre_process_strategy:
+                print(
+                    f"   ↳ Con Pre-Proceso: {pre_process_strategy.__class__.__name__} (Regeneración de Universo)"
+                )
 
         total_investment = 0.0
         total_earnings = 0.0
         hits_distribution = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
 
-        # Preparar historia
+        # Preparar historia cronológica
         full_history = list(
             zip(history.dates, history.winning_numbers, history.concursos)
         )
@@ -37,9 +48,11 @@ class BacktestEngine:
         start_index = total_draws - test_size
         step_count = 1
 
-        # Bucle de Simulación
+        # --- BUCLE DE SIMULACIÓN (VIAJE EN EL TIEMPO) ---
         for i in range(start_index, total_draws):
             target_date, target_draw, target_id = full_history[i]
+
+            # Cortamos la historia justo antes del sorteo objetivo
             past_data = full_history[:i]
 
             if not past_data:
@@ -50,8 +63,26 @@ class BacktestEngine:
                     list(p_dates), list(p_nums), list(p_ids)
                 )
 
+            # 1. EJECUTAR PRE-PROCESO (Si existe)
+            # Esto es vital para la IA: Regenerar el universo con datos DE ESE MOMENTO
+            if pre_process_strategy:
+                if verbose:
+                    print(f"\n   🔄 Regenerando Universo para Sorteo {target_id}...")
+                # Ejecutamos la reducción (esto guarda el CSV 'universo_reducido.csv' con datos del pasado)
+                # Forzamos verbose=False en el pre-proceso para no ensuciar la consola
+                old_overrides = getattr(config, "filter_overrides", {})
+                config.filter_overrides = {**old_overrides, "verbose": False}
+
+                pre_process_strategy.predict(current_history, config)
+
+                # Restauramos config
+                config.filter_overrides = old_overrides
+
+            # 2. EJECUTAR ESTRATEGIA PRINCIPAL (IA / Selector)
+            # La estrategia leerá el CSV recién generado y entrenará la IA con 'current_history'
             prediction = strategy.predict(current_history, config)
 
+            # 3. EVALUACIÓN DE RESULTADOS
             draw_earnings = 0.0
             max_hit = 0
             tickets_ganadores = []
@@ -73,6 +104,7 @@ class BacktestEngine:
                 total_earnings += prize
                 hits_distribution[hits_nat] = hits_distribution.get(hits_nat, 0) + 1
 
+            # Reporte del Paso
             if verbose:
                 print(f"\n" + "─" * 60)
                 print(
@@ -94,7 +126,7 @@ class BacktestEngine:
 
             step_count += 1
 
-        # --- RESUMEN FINAL AÑADIDO ---
+        # --- RESUMEN FINAL ---
         net_balance = total_earnings - total_investment
         if verbose:
             print(f"\n{Fore.YELLOW}" + "═" * 60)

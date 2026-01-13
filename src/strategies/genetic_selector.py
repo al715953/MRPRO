@@ -3,126 +3,124 @@ import numpy as np
 import os
 import itertools
 from collections import Counter
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 from colorama import Fore, Style
 
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
+from src.core.ai_scorer import LotteryAIModel  # <--- NUEVA IMPORTACIÓN
 
 
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    ESTRATEGIA 'EL FRANCOTIRADOR' (V2 - Aumentada).
-    Selecciona los mejores tickets basándose en:
-    1. ADN Histórico (Clústers de pares).
-    2. Rescate de Zombies (Números rezagados).
-    3. Números Calientes (Tendencia individual).
+    ESTRATEGIA 'EL FRANCOTIRADOR' V3 (AI ENHANCED).
+    Añade una capa de Inteligencia Artificial al Scoring Genético.
     """
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
         print(
-            f"\n{Fore.MAGENTA}🧬 INICIANDO SELECTOR GENÉTICO (Sniper V2)...{Style.RESET_ALL}"
+            f"\n{Fore.MAGENTA}🧬 INICIANDO SELECTOR GENÉTICO V3 (AI-Powered)...{Style.RESET_ALL}"
         )
 
-        # 1. CARGAR EL UNIVERSO
+        # 1. CARGAR UNIVERSO
         csv_path = os.path.join("data", "universo_reducido.csv")
         if not os.path.exists(csv_path):
-            print(f"{Fore.RED}❌ ERROR: No se encontró '{csv_path}'.")
             print(
-                "Ejecuta primero la Opción 5 para generar el universo.{Style.RESET_ALL}"
+                f"{Fore.RED}❌ ERROR: Falta 'universo_reducido.csv'. Ejecuta Opción 5.{Style.RESET_ALL}"
             )
             return PredictionResultDTO("Error", [])
 
-        print(f"📂 Cargando universo desde: {csv_path}...")
         try:
+            # Optimizamos lectura especificando tipos
             df = pd.read_csv(csv_path)
-            candidates = df.iloc[:, :6].values.tolist()
-            print(f"✅ Candidatos cargados: {len(candidates):,}")
+            candidates = [tuple(x) for x in df.iloc[:, :6].values]
+            print(f"📂 Universo cargado: {len(candidates):,} tickets")
         except Exception as e:
-            print(f"{Fore.RED}❌ Error leyendo CSV: {e}{Style.RESET_ALL}")
+            print(f"❌ Error CSV: {e}")
             return PredictionResultDTO("Error", [])
 
-        # 2. ANÁLISIS DE INTELIGENCIA (Recalculando métricas clave)
-        print("microscopio🔬 Analizando prioridades estratégicas...")
+        # 2. ENTRENAR IA EN TIEMPO REAL
+        ai_engine = LotteryAIModel()
+        ai_engine.train(history.winning_numbers, config.total_balls)
 
-        # A. Detectar Zombies (Igual que en MonteCarlo)
-        last_appearance = {n: 999 for n in range(1, config.total_balls + 1)}
-        all_draws = history.winning_numbers
-        current_draw_idx = len(all_draws)
+        print("🤖 Consultando Oráculo Digital (Scoring AI)...")
+        # Obtenemos score de IA para TODO el universo (vectorizado es rápido)
+        ai_scores = ai_engine.score_tickets(candidates)
 
-        for idx, draw in enumerate(reversed(all_draws)):
-            for num in draw[:6]:
-                if last_appearance[num] == 999:
-                    last_appearance[num] = idx
+        # 3. ANÁLISIS DE INTELIGENCIA (Clásico)
+        print("microscopio🔬 Calculando factores genéticos...")
 
-        zombies = {n for n, gap in last_appearance.items() if gap > 18}
-        print(f"   🧟 Zombies detectados: {len(zombies)}")
+        # A. Zombies (>18 sorteos)
+        last_app = {n: 999 for n in range(1, config.total_balls + 1)}
+        for idx, draw in enumerate(reversed(history.winning_numbers)):
+            for n in draw[:6]:
+                if last_app[n] == 999:
+                    last_app[n] = idx
+        zombies = {n for n, gap in last_app.items() if gap > 18}
 
-        # B. Detectar Hot Numbers (Top 10 frecuencia reciente)
-        recent_flat = [n for draw in all_draws[-20:] for n in draw[:6]]
-        hot_counts = Counter(recent_flat)
-        hot_numbers = {n for n, _ in hot_counts.most_common(10)}
-        print(f"   🔥 Hot Numbers detectados: {len(hot_numbers)}")
+        # B. Hot Numbers (Top 10 últimos 20)
+        recent = [n for d in history.winning_numbers[-20:] for n in d[:6]]
+        hot_nums = {n for n, _ in Counter(recent).most_common(10)}
 
-        # C. Mapa de Clústers (ADN de Pares)
-        global_clusters = Counter()
-        for draw in all_draws:
+        # C. Mapa de Clústers
+        cluster_counts = Counter()
+        for draw in history.winning_numbers:
             for pair in itertools.combinations(sorted(draw[:6]), 2):
-                global_clusters[pair] += 1
+                cluster_counts[pair] += 1
 
-        # Mapa de Puntuación Base
-        score_map = dict(global_clusters)
+        # Normalizamos scores de clústers para que no eclipsen a la IA
+        max_cluster_score = max(cluster_counts.values()) if cluster_counts else 1
 
-        # 3. TORNEO DE SELECCIÓN (SCORING MULTI-FACTOR)
-        print("🏆 Calculando puntajes evolutivos...")
-
+        # 4. FUSIÓN DE SCORES (HÍBRIDO)
         scored_candidates = []
 
-        for ticket in candidates:
-            ticket = sorted(ticket)
+        print(f"⚔️  Torneo de Selección (Genética + IA)...")
+
+        for i, ticket in enumerate(candidates):
             ticket_set = set(ticket)
-            score = 0
 
-            # Factor 1: Fuerza de Pares (La base estructural)
+            # --- Score Genético ---
+            g_score = 0
+            # Pares
             for pair in itertools.combinations(ticket, 2):
-                if pair in score_map:
-                    score += score_map[pair]
+                g_score += cluster_counts.get(pair, 0)
 
-            # Factor 2: Bonus Zombie (Vital para alinear con Fase 1)
-            # Si tiene al menos un zombie, damos un empujón fuerte
-            zombie_count = len(ticket_set.intersection(zombies))
-            if zombie_count > 0:
-                score += 150  # Bonus significativo para rescatarlo del fondo
+            # Normalizar score genético base (0-100 aprox)
+            g_score = (g_score / (15 * max_cluster_score)) * 100
 
-            # Factor 3: Bonus Hot (Sincronía con tendencia)
-            hot_count = len(ticket_set.intersection(hot_numbers))
-            score += hot_count * 50
+            # Bonus Zombie & Hot
+            if len(ticket_set & zombies) > 0:
+                g_score += 50
+            if len(ticket_set & hot_nums) > 0:
+                g_score += 30
 
-            scored_candidates.append((score, ticket))
+            # --- Score IA ---
+            # ai_scores[i] es probabilidad 0.0-1.0. Lo escalamos a 0-100
+            ai_factor = ai_scores[i] * 100
 
-        # Ordenar por Score Descendente
+            # --- FORMULA FINAL ---
+            # Damos 60% peso a la Estructura (Genética) y 40% a la IA
+            final_score = (g_score * 0.6) + (ai_factor * 0.4)
+
+            scored_candidates.append((final_score, ticket))
+
+        # 5. SELECCIÓN FINAL (DIVERSIDAD)
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
 
-        # 4. SELECCIÓN CON DIVERSIDAD
         final_selection = []
         seen_tickets = []
-
-        print(f"⚔️  Seleccionando los {config.num_tickets} boletos de élite...")
 
         for score, ticket in scored_candidates:
             if len(final_selection) >= config.num_tickets:
                 break
 
-            # Filtro de Diversidad: Evitar boletos "gemelos"
+            # Filtro Diversidad (No tickets gemelos)
             is_diverse = True
             ticket_set = set(ticket)
-
             for picked in seen_tickets:
-                picked_set = set(picked)
-                # Si comparten 5 números, son demasiado parecidos -> Descartar
-                if len(ticket_set & picked_set) >= 5:
+                if len(ticket_set & set(picked)) >= 5:  # Si coinciden 5 números
                     is_diverse = False
                     break
 
@@ -131,15 +129,4 @@ class GeneticSelectorStrategy(ILotteryStrategy):
                 seen_tickets.append(ticket)
 
         print(f"{Fore.GREEN}✅ SELECCIÓN COMPLETADA.{Style.RESET_ALL}")
-
-        # Reporte rápido de lo seleccionado
-        zombie_presence = sum(
-            1 for t in final_selection if set(t).intersection(zombies)
-        )
-        print(
-            f"   📊 Resumen: {zombie_presence} de {len(final_selection)} boletos incluyen Zombies."
-        )
-
-        return PredictionResultDTO(
-            strategy_name="Genetic Selector V2 (Zombie Aware)", tickets=final_selection
-        )
+        return PredictionResultDTO("Genetic Sniper V3 + AI", final_selection)
