@@ -159,36 +159,116 @@ def main():
 
         # 4. OPTIMIZADOR (IA PARAMETROS)
         elif opcion == "4":
-            print(
-                f"\n{Fore.MAGENTA}🧠 OPTIMIZADOR DE PARÁMETROS (GRID SEARCH){Style.RESET_ALL}"
-            )
-            print("1. 🔧 Optimizar Filtros (Fase 1 - Universo)")
-            print("2. ⚖️  Optimizar Pesos Heurísticos (Fase 2 - Ranking)")
+            # Llamamos al nuevo menú en cli.py
+            sub_opt, n_draws = ui.show_optimizer_menu()
 
-            sub_opt = input("   👉 Selecciona objetivo (1): ") or "1"
+            opt = StrategyOptimizer()
+            best_cfg = {}
+            display_keys = []  # Lista de claves relevantes para mostrar
+
+            try:
+                # Usamos BEST_SETTINGS como base segura (dummy)
+                base_dummy = BEST_SETTINGS.copy()
+                base_dummy["verbose"] = False
+
+                if sub_opt == "1":  # Filtros
+                    best_cfg = opt.optimize_filters(history, n_draws)
+                    display_keys = [
+                        "sum_min",
+                        "sum_max",
+                        "ac_min",
+                        "even_min",
+                        "even_max",
+                        "prime_min",
+                        "prime_max",
+                    ]
+
+                elif sub_opt == "2":  # Pesos
+                    best_cfg = opt.optimize_heuristics(history, base_dummy, n_draws)
+                    display_keys = ["w_cluster", "w_hotness", "w_ai"]
+
+                elif sub_opt == "3":  # Cuotas + Umbrales
+                    analyze_depth = max(n_draws, 50)
+                    best_cfg = opt.optimize_quotas(history, base_dummy, analyze_depth)
+                    display_keys = [
+                        "quota_elite",
+                        "quota_mid",
+                        "quota_low",
+                        "threshold_elite",
+                        "threshold_mid",
+                    ]
+
+                elif sub_opt == "4":  # Full Stack
+                    best_cfg = opt.optimize_full_stack(history, n_draws)
+                    display_keys = list(best_cfg.keys())  # Mostrar todo
+
+                print(
+                    f"\n{Fore.GREEN}🏆 RESULTADO OPTIMIZADO ({n_draws} Sorteos):{Style.RESET_ALL}"
+                )
+
+                # Imprimimos SOLO lo relevante y ocultamos 'verbose'
+                found_any = False
+                for k in display_keys:
+                    if k in best_cfg:
+                        val = best_cfg[k]
+                        # Coloreamos los valores para que resalten
+                        print(f"   • {k:<15}: {Fore.CYAN}{val}{Style.RESET_ALL}")
+                        found_any = True
+
+                # Fallback por si acaso
+                if not found_any:
+                    print(best_cfg)
+
+                print(
+                    f"\n{Fore.GREEN}💾 Por favor, actualiza manualmente 'BEST_SETTINGS' en src/data_access/config.py con estos valores.{Style.RESET_ALL}"
+                )
+
+            except Exception as e:
+                print(
+                    f"{Fore.RED}⚠ Error crítico en optimización: {e}{Style.RESET_ALL}"
+                )
+                import traceback
+
+                traceback.print_exc()
+
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+            # Llamamos al nuevo menú en cli.py
+            sub_opt, n_draws = ui.show_optimizer_menu()
 
             opt = StrategyOptimizer()
             best_cfg = {}
 
             try:
+                # Necesitamos un dummy base para optimizaciones parciales
+                # (Usamos BEST_SETTINGS importado de config como base segura)
+                base_dummy = BEST_SETTINGS.copy()
+                base_dummy["verbose"] = False
+
                 if sub_opt == "1":
-                    best_cfg = opt.optimize_filters(history)
+                    best_cfg = opt.optimize_filters(history, n_draws)
                 elif sub_opt == "2":
-                    best_cfg = opt.optimize_heuristics(history)
-                else:
-                    print(f"{Fore.RED}Opción inválida.{Style.RESET_ALL}")
-                    continue
+                    best_cfg = opt.optimize_heuristics(history, base_dummy, n_draws)
+                elif sub_opt == "3":  # NUEVO
+                    best_cfg = opt.optimize_quotas(history, base_dummy, n_draws)
+                elif sub_opt == "4":
+                    best_cfg = opt.optimize_full_stack(history, n_draws)
+
+                print(f"\n{Fore.GREEN}🏆 RESULTADO FINAL:{Style.RESET_ALL}")
+                # Imprimimos bonito el diccionario
+                for k, v in best_cfg.items():
+                    print(f"   {k}: {v}")
 
                 print(
-                    f"\n{Fore.GREEN}🏆 MEJOR CONFIGURACIÓN ENCONTRADA:{Style.RESET_ALL}"
-                )
-                print(best_cfg)
-                print(
-                    f"\n{Fore.GREEN}💾 Actualiza 'BEST_SETTINGS' en data_access/config.py{Style.RESET_ALL}"
+                    f"\n{Fore.GREEN}💾 Por favor, actualiza manualmente 'BEST_SETTINGS' en src/data_access/config.py{Style.RESET_ALL}"
                 )
 
             except Exception as e:
-                print(f"{Fore.RED}⚠ Error en optimización: {e}{Style.RESET_ALL}")
+                print(
+                    f"{Fore.RED}⚠ Error crítico en optimización: {e}{Style.RESET_ALL}"
+                )
+                import traceback
+
+                traceback.print_exc()
 
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 

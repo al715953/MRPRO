@@ -37,13 +37,27 @@ BLANCO_B = "\033[1;37m"
 # Copia aquí el resultado de la Opción 5 (Optimizer)
 # Valores iniciales conservadores:
 BEST_SETTINGS = {
+    # 1. Filtros Topológicos (Fase 1)
     "sum_min": 115,
     "sum_max": 172,
     "ac_min": 5,
-    "inertia_min": 0,
     "even_min": 2,
     "even_max": 4,
-    "prime_min": 1,       # Agregamos filtro de primos explícito si no estaba
+    "prime_min": 1,
     "prime_max": 4,
-    "verbose": True      # Por defecto silencio
+    # 2. Pesos de Decisión (Fase 2)
+    # Define qué tanto caso le hacemos a cada experto
+    "w_cluster": 0.6,  # Importancia de la estructura geométrica
+    "w_hotness": 0.4,  # Importancia de la frecuencia reciente
+    "w_ai": 0.3,  # Importancia del modelo XGBoost
+    # 3. Alineación Táctica (Fase 3 - Cuotas)
+    # Cuántos tickets seleccionamos de cada estrato (Total 15)
+    "quota_elite": 1,  # Tickets con Score > 0.70 (Pocos, zona muerta reciente)
+    "quota_mid": 12,  # Tickets con Score 0.60-0.70 (Zona Calidad)
+    "quota_low": 2,  # Tickets con Score 0.50-0.60 (Zona Volumen/Guerra)
+    # --- NUEVO: UMBRALES DINÁMICOS ---
+    "threshold_elite": 0.689,  # Bajamos de 0.70 a 0.65 para capturar mejores candidatos
+    "threshold_mid": 0.59,  # Bajamos de 0.60 a 0.55 para ampliar la red
+    # General
+    "verbose": True,  # Logs detallados
 }

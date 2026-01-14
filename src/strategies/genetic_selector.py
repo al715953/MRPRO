@@ -3,9 +3,8 @@ import numpy as np
 import os
 import itertools
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
 from rich.console import Console
-from rich.progress import track
 
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
@@ -13,240 +12,349 @@ from src.core.ai_scorer import LotteryAIModel
 
 console = Console()
 
+
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    ESTRATEGIA 'CENTAURO' V7 (Hybrid Ensemble).
-    
-    Características:
-    - Ensamble 70% Heurística / 30% IA.
-    - Cooling Protocol: Penaliza excesos de 'Hotness' para evitar sobreajuste.
-    - Tiered Selection: Selecciona candidatos de 3 estratos (Elite, Mid, Low) para maximizar cobertura.
+    ESTRATEGIA 'CENTAURO' V11 (Floating Thresholds).
+
+    MEJORAS V11:
+    - Umbrales Dinámicos: Los cortes Elite/Mid ya no son fijos (0.70/0.60).
+      Se leen de la configuración para adaptarse a la "realidad del mercado".
+      Si los ganadores promedian 0.62, bajamos el Elite a 0.65 para descongestionar Mid.
     """
 
     def __init__(self):
         self.ai_model = LotteryAIModel()
         self._last_trained_date = None
+        self._cache_metrics = {
+            "cluster_counts": None,
+            "max_cluster": 1,
+            "freq_map": None,
+            "max_freq": 1,
+        }
 
     def _train_model(self, history: DrawHistoryDTO, total_balls: int):
-        """Gestiona el entrenamiento para no repetirlo innecesariamente."""
         last_date = history.dates[-1] if history.dates else "None"
         if self._last_trained_date != last_date:
             self.ai_model.train(history.winning_numbers, total_balls)
             self._last_trained_date = last_date
+            self._update_heuristic_metrics(history)
+
+    def _update_heuristic_metrics(self, history: DrawHistoryDTO):
+        cluster_counts = Counter()
+        for draw in history.winning_numbers:
+            for pair in itertools.combinations(sorted(draw[:6]), 2):
+                cluster_counts[pair] += 1
+
+        recent_nums = [n for d in history.winning_numbers[-15:] for n in d[:6]]
+        freq_map = Counter(recent_nums)
+
+        self._cache_metrics["cluster_counts"] = cluster_counts
+        self._cache_metrics["max_cluster"] = (
+            max(cluster_counts.values()) if cluster_counts else 1
+        )
+        self._cache_metrics["freq_map"] = freq_map
+        self._cache_metrics["max_freq"] = max(freq_map.values()) if freq_map else 1
+
+    def _compute_v7_score(
+        self, ticket: Tuple[int, ...], ai_score: float, weights: Dict[str, float]
+    ) -> Tuple[float, float, float]:
+        cc = self._cache_metrics["cluster_counts"]
+        mc = self._cache_metrics["max_cluster"]
+        fm = self._cache_metrics["freq_map"]
+        mf = self._cache_metrics["max_freq"]
+
+        # A. Heurística
+        c_score = sum(cc.get(pair, 0) for pair in itertools.combinations(ticket, 2))
+        norm_cluster = c_score / (15 * mc)
+
+        h_score = sum(fm.get(n, 0) for n in ticket)
+        norm_hot = h_score / (6 * mf)
+
+        if norm_hot > 0.75:
+            norm_hot *= 0.80
+
+        w_cluster = weights.get("w_cluster", 0.6)
+        w_hotness = weights.get("w_hotness", 0.4)
+        w_ai_global = weights.get("w_ai", 0.3)
+        w_heur_global = 1.0 - w_ai_global
+
+        if w_ai_global == 0.3:
+            w_heur_global = 0.7
+
+        heur_val = (norm_cluster * w_cluster) + (norm_hot * w_hotness)
+        final_score = (heur_val * w_heur_global) + (ai_score * w_ai_global)
+
+        return final_score, heur_val, ai_score
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
-        console.print(
-            f"\n[bold yellow]🧬 INICIANDO PROTOCOLO CENTAURO V7 (Tiered Selection)...[/bold yellow]"
-        )
+        overrides = getattr(config, "filter_overrides", {})
+        verbose = overrides.get("verbose", True)
 
-        # 1. CARGAR UNIVERSO
+        # --- LECTURA DE UMBRALES DINÁMICOS ---
+        th_elite = overrides.get("threshold_elite", 0.70)  # Default histórico
+        th_mid = overrides.get("threshold_mid", 0.60)  # Default histórico
+
+        if verbose:
+            console.print(
+                f"\n[bold yellow]🧬 CENTAURO V11 (Floating Thresholds E:{th_elite} M:{th_mid})...[/]"
+            )
+
+        # Cargar Universo
         csv_path = os.path.join("data", "universo_reducido.csv")
         if not os.path.exists(csv_path):
             return PredictionResultDTO("Error: No Universe", [])
-
         try:
             df = pd.read_csv(csv_path)
             candidates = [tuple(x) for x in df.iloc[:, :6].values.astype(int)]
-        except Exception:
+        except:
             return PredictionResultDTO("Error: CSV Bad Format", [])
-
         if not candidates:
             return PredictionResultDTO("Empty Universe", [])
 
-        # 2. ENTRENAMIENTO IA (On Demand)
         self._train_model(history, config.total_balls)
 
-        # 3. PREPARAR HEURÍSTICA
-        cluster_counts = Counter()
-        for draw in history.winning_numbers:
-            for pair in itertools.combinations(sorted(draw[:6]), 2):
-                cluster_counts[pair] += 1
-        max_cluster = max(cluster_counts.values()) if cluster_counts else 1
+        raw_ai_scores = self.ai_model.score_tickets(candidates)
+        scored_candidates = []
 
-        recent_nums = [n for d in history.winning_numbers[-15:] for n in d[:6]]
-        freq_map = Counter(recent_nums)
-        max_freq = max(freq_map.values()) if freq_map else 1
-        
-        # 4. SCORING MASIVO
-        ai_scores = self.ai_model.score_tickets(candidates)
-        hybrid_candidates = []
-
-        # Pesos V7 (Ajustados por Forense)
-        w_heu = 0.70
-        w_ai = 0.30
+        scoring_weights = {
+            "w_cluster": overrides.get("w_cluster", 0.6),
+            "w_hotness": overrides.get("w_hotness", 0.4),
+            "w_ai": overrides.get("w_ai", 0.3),
+        }
 
         for i, ticket in enumerate(candidates):
-            # A. Heurística
-            c_score = sum(cluster_counts.get(pair, 0) for pair in itertools.combinations(ticket, 2))
-            norm_cluster = c_score / (15 * max_cluster)
-            
-            h_score = sum(freq_map.get(n, 0) for n in ticket)
-            norm_hot = h_score / (6 * max_freq)
-            
-            # --- COOLING CAP (Protocolo V7) ---
-            # Penalizamos tickets excesivamente calientes (>0.75)
-            if norm_hot > 0.75:
-                norm_hot *= 0.80
+            final, _, _ = self._compute_v7_score(
+                ticket, raw_ai_scores[i], scoring_weights
+            )
+            scored_candidates.append((final, ticket))
 
-            heur_val = (norm_cluster * 0.6) + (norm_hot * 0.4)
-            
-            # B. Fusión
-            ai_val = ai_scores[i]
-            final_score = (heur_val * w_heu) + (ai_val * w_ai)
-            
-            hybrid_candidates.append((final_score, ticket))
+        # --- BUCKETING DINÁMICO ---
+        bucket_elite = []
+        bucket_mid = []
+        bucket_low = []
 
-        # 5. SELECCIÓN POR ESTRATOS (TIERED SELECTION)
-        # Objetivo: Romper el "Techo de Cristal" y forzar entrada de tickets 0.50-0.70
-        hybrid_candidates.sort(key=lambda x: x[0], reverse=True)
-        
-        selection = []
+        for item in scored_candidates:
+            s = item[0]
+            # Usamos las variables en lugar de hardcode
+            if s >= th_elite:
+                bucket_elite.append(item)
+            elif th_mid <= s < th_elite:
+                bucket_mid.append(item)
+            elif (th_mid - 0.10) <= s < th_mid:  # Low es Mid - 0.10
+                bucket_low.append(item)
+
+        bucket_elite.sort(key=lambda x: x[0], reverse=True)
+        bucket_mid.sort(key=lambda x: x[0], reverse=True)
+        bucket_low.sort(key=lambda x: x[0], reverse=True)
+
+        q_elite = overrides.get("quota_elite", 2)
+        q_mid = overrides.get("quota_mid", 6)
+        q_low = overrides.get("quota_low", 7)
+
+        final_selection = []
         seen_tickets = []
-        
-        # Cuotas por Estrato (Total 15)
-        quota_elite = 4
-        quota_mid = 5
-        quota_low = 6
-        
-        c_elite = 0
-        c_mid = 0
-        c_low = 0
-        
-        console.print(f"   ⚖️  Aplicando Selección Estratificada (Elite/Mid/Low)...")
 
-        for score, ticket in hybrid_candidates:
-            if len(selection) >= config.num_tickets:
-                break
+        quotas = [
+            (bucket_elite, q_elite, "Elite"),
+            (bucket_mid, q_mid, "Mid"),
+            (bucket_low, q_low, "Low"),
+        ]
 
-            # Filtro Diversidad Endurecido (>=4 clones prohibidos)
-            ticket_set = set(ticket)
-            if any(len(ticket_set & set(p)) >= 4 for p in seen_tickets):
-                continue
+        counts = {"Elite": 0, "Mid": 0, "Low": 0}
 
-            # Clasificación del Candidato
-            added = False
-            
-            # 1. TIER ELITE (Score >= 0.70)
-            if score >= 0.70:
-                if c_elite < quota_elite:
-                    selection.append(ticket)
+        for bucket, quota, tier_name in quotas:
+            for score, ticket in bucket:
+                if counts[tier_name] >= quota:
+                    break
+
+                ticket_set = set(ticket)
+                is_clone = any(
+                    len(ticket_set.intersection(set(existing))) >= 5
+                    for existing in seen_tickets
+                )
+
+                if not is_clone:
+                    final_selection.append(ticket)
                     seen_tickets.append(ticket)
-                    c_elite += 1
-                    added = True
-            
-            # 2. TIER MID (0.60 <= Score < 0.70)
-            elif 0.60 <= score < 0.70:
-                if c_mid < quota_mid:
-                    selection.append(ticket)
-                    seen_tickets.append(ticket)
-                    c_mid += 1
-                    added = True
-                    
-            # 3. TIER LOW (0.50 <= Score < 0.60)
-            elif 0.50 <= score < 0.60:
-                if c_low < quota_low:
-                    selection.append(ticket)
-                    seen_tickets.append(ticket)
-                    c_low += 1
-                    added = True
+                    counts[tier_name] += 1
 
-        # RELLENO DE EMERGENCIA (Si faltaron candidatos en algún tier)
-        if len(selection) < config.num_tickets:
-            for score, ticket in hybrid_candidates:
-                if len(selection) >= config.num_tickets: break
+        if len(final_selection) < config.num_tickets:
+            if verbose:
+                console.print("   ⚠ Relleno de Emergencia...")
+            all_remaining = sorted(scored_candidates, key=lambda x: x[0], reverse=True)
+            for score, ticket in all_remaining:
+                if len(final_selection) >= config.num_tickets:
+                    break
                 if ticket not in seen_tickets:
-                    if not any(len(set(ticket) & set(p)) >= 4 for p in seen_tickets):
-                        selection.append(ticket)
+                    if not any(
+                        len(set(ticket).intersection(set(e))) >= 5 for e in seen_tickets
+                    ):
+                        final_selection.append(ticket)
                         seen_tickets.append(ticket)
 
-        console.print(
-            f"[bold green]✅ CENTAURO COMPLETADO: {len(selection)} tickets (E:{c_elite}, M:{c_mid}, L:{c_low}).[/]"
-        )
-        return PredictionResultDTO("Centaur V7 (Tiered)", selection)
+        if verbose:
+            console.print(
+                f"[bold green]✅ CENTAURO COMPLETADO: {len(final_selection)} tickets.[/]"
+            )
+        return PredictionResultDTO("Centaur V11", final_selection)
 
-    def audit_winner(self, history: DrawHistoryDTO, config: PredictionConfigDTO, winning_ticket: List[int]) -> str:
-        """
-        MÉTODO FORENSE V3 (Consistente con Protocolo de Enfriamiento).
-        Calcula el score del ganador aplicando las mismas penalizaciones que la predicción real.
-        """
-        target = tuple(sorted(winning_ticket[:6]))
+    def _analyze_tier_distribution(
+        self,
+        universe_candidates: List[Tuple[int, ...]],
+        winning_set: set,
+        scores: List[float],
+        th_elite: float,
+        th_mid: float,
+    ) -> str:
+        """Radar de Estratos Dinámico."""
+        hits_map = {4: [], 5: [], 6: []}
 
-        # 1. Verificar Universo
+        for i, ticket in enumerate(universe_candidates):
+            hits = len(set(ticket) & winning_set)
+            if hits >= 4:
+                hits_map[hits].append(scores[i])
+
+        msg = "\n   📡 [bold purple]RADAR DE ESTRATOS (Zona de Impacto):[/]\n"
+
+        found_any = False
+        for h in [6, 5, 4]:
+            scores_list = hits_map[h]
+            if not scores_list:
+                continue
+            found_any = True
+
+            avg_score = sum(scores_list) / len(scores_list)
+            min_s = min(scores_list)
+            max_s = max(scores_list)
+
+            # Clasificación visual basada en los umbrales actuales
+            tier = "Low"
+            if avg_score >= th_elite:
+                tier = f"Elite (>={th_elite})"
+            elif avg_score >= th_mid:
+                tier = f"Mid ({th_mid}-{th_elite})"
+
+            color = (
+                "green" if "Elite" in tier else ("yellow" if "Mid" in tier else "cyan")
+            )
+
+            msg += f"      🔹 [bold]{h} Aciertos:[/bold] {len(scores_list)} tickets.\n"
+            msg += f"          Avg Score: [{color}]{avg_score:.5f}[/] (Rango: {min_s:.4f} - {max_s:.4f})\n"
+            msg += f"          🎯 Zona: [bold {color}]{tier}[/]\n"
+
+        if not found_any:
+            msg += "      (No se encontraron tickets con 4+ aciertos en el universo filtrado)\n"
+        return msg
+
+    def audit_winner(
+        self,
+        history: DrawHistoryDTO,
+        config: PredictionConfigDTO,
+        winning_ticket: List[int],
+    ) -> str:
+        """MÉTODO FORENSE V7 (Dynamic Thresholds Support)."""
+        target_set = set(winning_ticket[:6])
+        target_tuple = tuple(sorted(winning_ticket[:6]))
+        overrides = getattr(config, "filter_overrides", {})
+
+        th_elite = overrides.get("threshold_elite", 0.70)
+        th_mid = overrides.get("threshold_mid", 0.60)
+
         csv_path = os.path.join("data", "universo_reducido.csv")
         try:
             df = pd.read_csv(csv_path)
-            candidates_set = set(tuple(x) for x in df.iloc[:, :6].values.astype(int))
+            universe_candidates = [tuple(x) for x in df.iloc[:, :6].values.astype(int)]
         except:
             return "[red]Error leyendo universo[/]"
 
-        if target not in candidates_set:
-            return f"[bold red]❌ El ganador {target} NO estaba en el Universo (Fase 1 falló).[/]"
+        scoring_weights = {
+            "w_cluster": overrides.get("w_cluster", 0.6),
+            "w_hotness": overrides.get("w_hotness", 0.4),
+            "w_ai": overrides.get("w_ai", 0.3),
+        }
 
-        # 2. Preparar Datos
         self._train_model(history, config.total_balls)
+        raw_ai_scores = self.ai_model.score_tickets(universe_candidates)
+        universe_final_scores = []
+        for i, t in enumerate(universe_candidates):
+            s, _, _ = self._compute_v7_score(t, raw_ai_scores[i], scoring_weights)
+            universe_final_scores.append(s)
 
-        cluster_counts = Counter()
-        for draw in history.winning_numbers:
-            for pair in itertools.combinations(sorted(draw[:6]), 2):
-                cluster_counts[pair] += 1
-        max_cluster = max(cluster_counts.values()) if cluster_counts else 1
-
-        recent_nums = [n for d in history.winning_numbers[-15:] for n in d[:6]]
-        freq_map = Counter(recent_nums)
-        max_freq = max(freq_map.values()) if freq_map else 1
-
-        # --- FUNCIÓN INTERNA DE SCORING ---
-        def calculate_score_v7(t):
-            # A. Heurística
-            c = sum(cluster_counts.get(pair, 0) for pair in itertools.combinations(t, 2))
-            nc = c / (15 * max_cluster)
-            
-            h = sum(freq_map.get(n, 0) for n in t)
-            nh = h / (6 * max_freq)
-            
-            # >>> COOLING CAP <<<
-            if nh > 0.75:
-                nh *= 0.80
-
-            heur = (nc * 0.6) + (nh * 0.4)
-            
-            # B. IA
-            ai = self.ai_model.score_tickets([t])[0]
-            
-            # C. Fusión 70/30
-            final = (heur * 0.70) + (ai * 0.30)
-            return final, heur, ai
-
-        # 3. Calcular Score del Ganador Real
-        winner_score, w_heur, w_ai = calculate_score_v7(target)
-
-        # 4. Obtener el "Score de Corte" (Simulación)
-        old_overrides = config.filter_overrides or {}
-        config.filter_overrides = {**old_overrides, "verbose": False}
-        
-        result = self.predict(history, config)
-        config.filter_overrides = old_overrides
-        
-        if not result.tickets:
-            return "Error: No se generaron tickets en la simulación."
-            
-        # Tomamos el último seleccionado (aprox. el corte inferior)
-        last_selected = tuple(result.tickets[-1])
-        cutoff_score, _, _ = calculate_score_v7(last_selected)
-        
-        gap = cutoff_score - winner_score
-        
-        # 5. Reporte
-        msg = f"\n   🕵️‍♂️  [bold cyan]REPORTE FORENSE (Protocolo Enfriamiento):[/bold cyan]\n"
-        msg += f"   🎯 [bold]Ganador:[/bold] {target}\n"
-        msg += f"   📊 [bold]Score Ganador: {winner_score:.5f}[/] (Heur: {w_heur:.2f}, IA: {w_ai:.2f})\n"
-        msg += f"   🚪 [bold]Score de Corte (aprox): {cutoff_score:.5f}[/] (Ticket #15)\n"
-        
-        if gap > 0:
-            msg += f"   ❌ [bold red]Brecha: -{gap:.5f}[/] (Nos faltó esto para entrar)\n"
+        subject_ticket = None
+        subject_hits = 0
+        if target_tuple in set(universe_candidates):
+            subject_ticket = target_tuple
+            subject_hits = 6
+            status_msg = "[bold green]PRESENTE (Jackpot 6/6)[/]"
         else:
-            msg += f"   ✅ [bold green]¡ADENTRO! Superamos el corte por +{abs(gap):.5f}[/]\n"
-            
+            best_ticket = None
+            max_hits = -1
+            for t in universe_candidates:
+                h = len(set(t) & target_set)
+                if h > max_hits:
+                    max_hits = h
+                    best_ticket = t
+            subject_ticket = best_ticket
+            subject_hits = max_hits
+            status_msg = f"[bold yellow]AUSENTE (Mejor: {max_hits} hits)[/]"
+
+        if not subject_ticket:
+            return "[red]Universo vacío.[/]"
+        clean_ticket = tuple(int(x) for x in subject_ticket)
+        idx = universe_candidates.index(subject_ticket)
+        subject_score = universe_final_scores[idx]
+
+        radar_msg = self._analyze_tier_distribution(
+            universe_candidates, target_set, universe_final_scores, th_elite, th_mid
+        )
+
+        old_verbose = overrides.get("verbose", True)
+        overrides["verbose"] = False
+        result = self.predict(history, config)
+        overrides["verbose"] = old_verbose
+
+        if not result.tickets:
+            return "Error sim."
+        selected_tuples = [tuple(t) for t in result.tickets]
+
+        # Clasificación Bucket Real
+        target_bucket = "Low"
+        if subject_score >= th_elite:
+            target_bucket = "Elite"
+        elif subject_score >= th_mid:
+            target_bucket = "Mid"
+
+        assassin = None
+        ai_scores_sel = self.ai_model.score_tickets(selected_tuples)
+        min_sel_score = 1.0
+
+        for i, sel in enumerate(selected_tuples):
+            s_final, _, _ = self._compute_v7_score(
+                sel, ai_scores_sel[i], scoring_weights
+            )
+            if s_final < min_sel_score:
+                min_sel_score = s_final
+            if s_final > subject_score and len(set(subject_ticket) & set(sel)) >= 5:
+                assassin = sel
+                break
+
+        msg = f"\n   🕵️‍♂️ [bold cyan]REPORTE FORENSE V7 (Dynamic):[/]\n"
+        msg += f"   🎯 [bold]Sujeto:[/bold] {clean_ticket} ({subject_hits} Hits)\n"
+        msg += f"   📊 [bold]Score:[/bold] {subject_score:.5f} | [bold]Bucket:[/bold] {target_bucket}\n"
+        msg += f"   📏 [bold]Umbrales:[/bold] E>={th_elite}, M>={th_mid}\n"
+        msg += f"   🌌 [bold]Status Universo:[/bold] {status_msg}\n"
+        msg += radar_msg + "\n"
+
+        if subject_ticket in selected_tuples:
+            msg += f"   🎉 [bold green]RESULTADO: ¡CAPTURADO![/]"
+        elif assassin:
+            msg += f"   💀 [bold red]CAUSA: Canibalismo[/]"
+        elif min_sel_score > subject_score:
+            msg += f"   📉 [bold red]CAUSA: Score Insuficiente (Corte: {min_sel_score:.5f})[/]"
+        else:
+            msg += f"   📉 [bold red]CAUSA: Desplazamiento ({target_bucket} Lleno)[/]"
+
         return msg

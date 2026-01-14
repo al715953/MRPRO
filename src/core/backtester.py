@@ -15,18 +15,31 @@ from src.core.rules import MelateRetroRules
 
 class DummyProgress:
     """Clase auxiliar para silenciar la barra de progreso en modo optimización."""
-    def __enter__(self): return self
-    def __exit__(self, *args): pass
-    def add_task(self, *args, **kwargs): return 0
-    def advance(self, *args, **kwargs): pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def add_task(self, *args, **kwargs):
+        return 0
+
+    def advance(self, *args, **kwargs):
+        pass
+
     @property
-    def console(self): return self
-    def print(self, *args, **kwargs): pass
+    def console(self):
+        return self
+
+    def print(self, *args, **kwargs):
+        pass
 
 
 class BacktestEngine:
     """
-    Motor de simulación histórica V4 (Forensic Mode Enabled).
+    Motor de simulación histórica V4.1 (High Sensitivity Forensics).
+    Ahora detecta pérdidas de premios de 5 aciertos, no solo de 6.
     """
 
     def __init__(self):
@@ -43,7 +56,7 @@ class BacktestEngine:
     ) -> BacktestResultDTO:
 
         strategy_name = strategy.__class__.__name__
-        
+
         if verbose:
             self.console.print(
                 f"\n[bold yellow]⚙️  Iniciando Backtest para:[/bold yellow] [cyan]{strategy_name}[/cyan]"
@@ -79,7 +92,7 @@ class BacktestEngine:
                 TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 TimeElapsedColumn(),
                 console=self.console,
-                transient=True, 
+                transient=True,
             )
 
         with progress_ctx as progress:
@@ -101,13 +114,13 @@ class BacktestEngine:
                     )
 
                 # --- FASE 1: PRE-PROCESO (LA PESCA) ---
-                universe_has_winner = False
                 universe_info_str = ""
+                max_potential_hit = 0  # Inicializamos siempre
 
                 if pre_process_strategy:
                     old_overrides = getattr(config, "filter_overrides", {})
                     config.filter_overrides = {**old_overrides, "verbose": False}
-                    
+
                     universe_result = pre_process_strategy.predict(
                         current_history, config
                     )
@@ -115,15 +128,16 @@ class BacktestEngine:
 
                     # Cálculo silencioso de cobertura
                     univ_size = len(universe_result.tickets)
-                    max_potential_hit = 0
+
                     if univ_size > 0:
                         for t in universe_result.tickets:
                             h = len(set(t) & target_set)
-                            if h > max_potential_hit: max_potential_hit = h
-                            if h == 6: break
+                            if h > max_potential_hit:
+                                max_potential_hit = h
+                            if h == 6:
+                                break
 
                     if max_potential_hit == 6:
-                        universe_has_winner = True
                         coverage_stats["captured_6"] += 1
                         qa_icon = "💎"
                     elif max_potential_hit == 5:
@@ -135,7 +149,7 @@ class BacktestEngine:
                     else:
                         coverage_stats["missed"] += 1
                         qa_icon = "❌"
-                    
+
                     if verbose:
                         universe_info_str = f" | [magenta]Univ: {univ_size//1000}k[/] | [bold]{qa_icon} MaxPot: {max_potential_hit}[/]"
 
@@ -158,7 +172,8 @@ class BacktestEngine:
                         if verbose:
                             t_str = ", ".join([f"{n:02d}" for n in sorted(ticket)])
                             type_str = f"{hits_nat} hits"
-                            if has_add: type_str += " + Bola Adicional"
+                            if has_add:
+                                type_str += " + Bola Adicional"
                             winning_tickets_log.append(
                                 f"   🎫 Ticket #{idx:02d}: [{t_str}] -> [bold green]${prize:,.2f}[/] ({type_str})"
                             )
@@ -166,7 +181,8 @@ class BacktestEngine:
                     if hits_nat > max_hit:
                         max_hit = hits_nat
                         best_label = f"{max_hit}"
-                        if has_add: best_label += "+B"
+                        if has_add:
+                            best_label += "+B"
                     elif hits_nat == max_hit and has_add:
                         best_label = f"{max_hit}+B"
 
@@ -180,33 +196,62 @@ class BacktestEngine:
                 if verbose:
                     # 1. Si ganamos
                     if draw_earnings > 0:
-                        progress.console.print(f"\n[bold green]✨ ¡PREMIO EN SORTEO #{target_id}! ✨[/]")
+                        progress.console.print(
+                            f"\n[bold green]✨ ¡PREMIO EN SORTEO #{target_id}! ✨[/]"
+                        )
                         for log_line in winning_tickets_log:
                             progress.console.print(log_line)
-                        progress.console.print(f"   RESUMEN: {universe_info_str} | 🟢 Total: [bold green]${draw_earnings:,.2f}[/]")
+                        progress.console.print(
+                            f"   RESUMEN: {universe_info_str} | 🟢 Total: [bold green]${draw_earnings:,.2f}[/]"
+                        )
                         progress.console.print("-" * 50)
 
-                    # 2. CASO CRÍTICO: Diamante perdido (Estaba en universo, pero no ganamos premio mayor)
-                    # Si universe_has_winner es True, pero max_hit < 6, ejecutamos forense
-                    if universe_has_winner and max_hit < 6 and hasattr(strategy, "audit_winner"):
-                        progress.console.print(f"\n[bold magenta]🔍 ALERTA FORENSE (Sorteo #{target_id})[/]")
-                        progress.console.print(f"   El ganador {target_draw[:6]} estaba en el Universo, pero no fue seleccionado.")
-                        
+                    # 2. TRIGGER FORENSE MEJORADO (Detecta pérdidas de 5 y 6)
+                    # Condición:
+                    # a) El Universo tenía al menos 5 aciertos (max_potential_hit >= 5)
+                    # b) Nuestra estrategia obtuvo MENOS que el potencial (max_hit < max_potential_hit)
+                    # c) La estrategia soporta auditoría
+                    if (
+                        max_potential_hit >= 5
+                        and max_hit < max_potential_hit
+                        and hasattr(strategy, "audit_winner")
+                    ):
+
+                        target_type = (
+                            "JACKPOT (6/6)"
+                            if max_potential_hit == 6
+                            else "PREMIO MAYOR (5/6)"
+                        )
+                        progress.console.print(
+                            f"\n[bold magenta]🔍 ALERTA FORENSE (Sorteo #{target_id})[/]"
+                        )
+                        progress.console.print(
+                            f"   El Universo contenía un {target_type} potencial ({max_potential_hit} hits), pero solo capturamos {max_hit}."
+                        )
+
                         # Llamada al detective
-                        report = strategy.audit_winner(current_history, config, target_draw)
+                        report = strategy.audit_winner(
+                            current_history, config, target_draw
+                        )
                         progress.console.print(report)
                         progress.console.print("-" * 50)
 
         # --- RESUMEN FINAL ---
         net_balance = total_earnings - total_investment
-        
+
         if verbose:
             self.console.print(f"\n[bold yellow]{'='*60}[/bold yellow]")
-            self.console.print(f"[bold]📊 RESUMEN FINAL DEL BACKTEST ({test_size} Sorteos)[/bold]")
+            self.console.print(
+                f"[bold]📊 RESUMEN FINAL DEL BACKTEST ({test_size} Sorteos)[/bold]"
+            )
             self.console.print(f"{'='*60}")
-            self.console.print(f"💰 Inversión: ${total_investment:,.2f} | 💵 Ganancia: ${total_earnings:,.2f}")
+            self.console.print(
+                f"💰 Inversión: ${total_investment:,.2f} | 💵 Ganancia: ${total_earnings:,.2f}"
+            )
             color_bal = "green" if net_balance >= 0 else "red"
-            self.console.print(f"📉 Balance:    [bold {color_bal}]${net_balance:,.2f}[/]")
+            self.console.print(
+                f"📉 Balance:    [bold {color_bal}]${net_balance:,.2f}[/]"
+            )
 
             # Tabla Simple
             self.console.print(f"\n[bold]🎯 Puntería Final:[/bold]")
@@ -214,13 +259,22 @@ class BacktestEngine:
             for hits, count in sorted(hits_distribution.items(), reverse=True):
                 if count > 0:
                     color = "green" if hits >= 3 else "white"
-                    dist_table.add_row(f"{hits} Aciertos", f"{count:3d}", f"[{color}]{'█'*count}[/]")
+                    dist_table.add_row(
+                        f"{hits} Aciertos", f"{count:3d}", f"[{color}]{'█'*count}[/]"
+                    )
             self.console.print(dist_table)
 
             if pre_process_strategy:
-                self.console.print(f"\n[bold magenta]🕸️  Calidad Universo (Fase 1):[/bold magenta]")
-                self.console.print(f"   💎 6 Hits: {coverage_stats['captured_6']} veces")
+                self.console.print(
+                    f"\n[bold magenta]🕸️  Calidad Universo (Fase 1):[/bold magenta]"
+                )
+                self.console.print(
+                    f"   💎 6 Hits: {coverage_stats['captured_6']} veces"
+                )
                 self.console.print(f"   ⚠️ 5 Hits: {coverage_stats['captured_5']} veces")
+                self.console.print(
+                    f"   📉 4 Hits: {coverage_stats['captured_4']} veces"
+                )
 
         return BacktestResultDTO(
             strategy_name=strategy.__class__.__name__,
