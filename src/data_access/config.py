@@ -37,10 +37,13 @@ BLANCO_B = "\033[1;37m"
 # Copia aquí el resultado de la Opción 5 (Optimizer)
 # Valores iniciales conservadores:
 BEST_SETTINGS = {
-    "sum_min": 108,
-    "sum_max": 180,
+    "sum_min": 115,
+    "sum_max": 172,
     "ac_min": 5,
     "inertia_min": 0,
     "even_min": 2,
     "even_max": 4,
+    "prime_min": 1,       # Agregamos filtro de primos explícito si no estaba
+    "prime_max": 4,
+    "verbose": True      # Por defecto silencio
 }

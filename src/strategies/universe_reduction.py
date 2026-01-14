@@ -7,6 +7,14 @@ from multiprocessing import Pool, cpu_count
 from collections import Counter
 from typing import List, Tuple, Dict, Any
 
+# --- NUEVO: JIT Compilation ---
+try:
+    from numba import jit
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+    print("⚠ ADVERTENCIA: Numba no instalado. Modo lento activado.")
+
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import (
     DrawHistoryDTO,
@@ -16,187 +24,178 @@ from src.domain.dtos import (
 
 # --- CONFIGURACIÓN ---
 RAW_GENERATION_SIZE = 5_000_000
-QUALITY_PERCENTILE = 75
-BATCH_BUFFER_RATE = 1.8  # Aumentamos buffer porque los filtros nuevos son agresivos
+QUALITY_PERCENTILE = 77
+BATCH_BUFFER_RATE = 1.9 
 
+# --- NUMBA KERNELS (Código Máquina) ---
 
-def calculate_ac_fast(nums: Tuple[int, ...]) -> int:
-    """Calcula AC Value sin overhead de objetos."""
-    diffs = {b - a for a, b in itertools.combinations(nums, 2)}
-    return len(diffs) - (len(nums) - 1)
+if HAS_NUMBA:
+    @jit(nopython=True)
+    def check_ac_vectorized(candidates, ac_min):
+        """
+        Calcula AC Value para un batch entero de tickets usando bucles C-level.
+        Retorna una máscara booleana.
+        AC = UniqueDiffs - (TicketSize - 1)
+        """
+        n_rows, n_cols = candidates.shape
+        keep_mask = np.empty(n_rows, dtype=np.bool_)
+        
+        # Iteramos sobre cada ticket (fila)
+        for i in range(n_rows):
+            # Calcular diferencias únicas manualmente para evitar sets (lento en GPU/Numba)
+            # Max diferencias posibles para 6 bolas: 15 (5+4+3+2+1)
+            # Usamos un array fijo pequeño como buffer de diffs
+            diffs = np.zeros(15, dtype=np.int32)
+            count = 0
+            
+            for j in range(n_cols):
+                for k in range(j + 1, n_cols):
+                    d = candidates[i, k] - candidates[i, j]
+                    
+                    # Verificar si ya existe en diffs
+                    exists = False
+                    for x in range(count):
+                        if diffs[x] == d:
+                            exists = True
+                            break
+                    
+                    if not exists:
+                        diffs[count] = d
+                        count += 1
+            
+            ac_value = count - (n_cols - 1)
+            keep_mask[i] = ac_value >= ac_min
+            
+        return keep_mask
 
+else:
+    # Fallback lento si no hay Numba
+    def check_ac_vectorized(candidates, ac_min):
+        n_rows = candidates.shape[0]
+        mask = np.zeros(n_rows, dtype=bool)
+        for i in range(n_rows):
+            nums = candidates[i]
+            diffs = {b - a for a, b in itertools.combinations(nums, 2)}
+            ac = len(diffs) - (len(nums) - 1)
+            mask[i] = ac >= ac_min
+        return mask
 
-def worker_weighted_generation_optimized(
-    args: Tuple,
-) -> List[Tuple[float, Tuple[int, ...]]]:
-    """
-    WORKER HIPER-OPTIMIZADO (V3):
-    Vectoriza el 95% de la lógica de filtrado.
-    """
+# --- WORKER ---
+
+def worker_weighted_generation_optimized(args: Tuple) -> List[Tuple[float, Tuple[int, ...]]]:
     (
         target_batch_size,
         ticket_size,
         total_balls,
         weights_array,
-        top_clusters_set,
+        top_clusters_dict, # Ahora pasamos dict, no set, para velocidad
         filter_cfg,
     ) = args
 
-    # --- FASE 1: GENERACIÓN VECTORIAL ---
+    # 1. Generación Vectorial (Numpy)
     pool_nums = np.arange(1, total_balls + 1)
     raw_size = int(target_batch_size * BATCH_BUFFER_RATE)
 
-    # Generación probabilística (reemplazo=True es mucho más rápido, luego filtramos)
-    # Nota: np.random.choice con p=weights es lento en bucles, pero aquí hacemos batch gigante
     raw_batch = np.random.choice(
         pool_nums, size=(raw_size, ticket_size), replace=True, p=weights_array
     )
-
-    # Ordenar filas (necesario para diffs y lógica posterior)
     raw_batch.sort(axis=1)
 
-    # 1. Filtro Unicidad (Eliminar [5,5,...])
-    # diff > 0 implica estrictamente creciente (sin repetidos)
+    # 2. Filtro Unicidad
     diffs = np.diff(raw_batch, axis=1)
     mask_unique = np.min(diffs, axis=1) > 0
     candidates = raw_batch[mask_unique]
+    diffs = diffs[mask_unique] # Sincronizar diffs
 
-    # Actualizamos diffs para candidatos únicos (se usa en consecutivos)
-    diffs = diffs[mask_unique]
+    if len(candidates) == 0: return []
 
-    # --- FASE 2: FILTROS MATEMÁTICOS (VECTORIZADOS) ---
-
+    # 3. Filtros Vectorizados Básicos
     # A. Suma
     sums = candidates.sum(axis=1)
-    mask_sum = (sums >= filter_cfg["sum_min"]) & (sums <= filter_cfg["sum_max"])
+    mask = (sums >= filter_cfg["sum_min"]) & (sums <= filter_cfg["sum_max"])
 
     # B. Pares
-    evens_count = (candidates % 2 == 0).sum(axis=1)
-    mask_even = (evens_count >= filter_cfg["even_min"]) & (
-        evens_count <= filter_cfg["even_max"]
-    )
+    if np.any(mask):
+        evens = (candidates[mask] % 2 == 0).sum(axis=1)
+        sub_mask = (evens >= filter_cfg["even_min"]) & (evens <= filter_cfg["even_max"])
+        mask[mask] = sub_mask
 
-    # C. Consecutivos (Usamos diffs calculado arriba)
-    # diffs==1 significa números seguidos. Sumamos cuántos hay por fila.
-    cons_count = (diffs == 1).sum(axis=1)
-    mask_cons = cons_count <= filter_cfg["max_consecutive"]
+    # C. Primos
+    if np.any(mask):
+        primes_lookup = np.array([False] * (total_balls + 2))
+        primes_list = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+        primes_lookup[primes_list] = True
+        
+        subset = candidates[mask]
+        p_counts = primes_lookup[subset].sum(axis=1)
+        sub_mask = (p_counts >= filter_cfg["prime_min"]) & (p_counts <= filter_cfg["prime_max"])
+        mask[mask] = sub_mask
 
-    # D. Primos (Lookup Table Vectorizado)
-    # Máscara booleana de primos para 1..39
-    primes_lookup = np.array([False] * (total_balls + 2))
-    primes_list = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
-    primes_lookup[primes_list] = True
+    # Aplicar reducción drástica inicial
+    survivors = candidates[mask]
 
-    # Indexado fantasía: verifica primalidad de toda la matriz de golpe
-    primes_count = primes_lookup[candidates].sum(axis=1)
-    mask_prime = (primes_count >= filter_cfg["prime_min"]) & (
-        primes_count <= filter_cfg["prime_max"]
-    )
+    if len(survivors) == 0: return []
 
-    # E. Terminaciones (Last Digits)
-    # Queremos evitar >3 números con misma terminación.
-    # Estrategia: Modulo 10 -> Sort -> Chequear saltos de índice
-    last_digits = candidates % 10
-    last_digits.sort(axis=1)
-    # Si col[i] == col[i+3], significa que hay 4 números iguales (índices i, i+1, i+2, i+3)
-    # Para ticket de 6, chequeamos índices: (0 vs 3), (1 vs 4), (2 vs 5)
-    # Si alguno coincide, rechazamos.
-    has_4_same = (
-        (last_digits[:, 0] == last_digits[:, 3])
-        | (last_digits[:, 1] == last_digits[:, 4])
-        | (last_digits[:, 2] == last_digits[:, 5])
-    )
-    mask_last_digit = ~has_4_same  # Negamos
+    # 4. FILTRO PESADO: AC VALUE (Ahora con Numba)
+    # Aquí estaba el cuello de botella. Ahora es C-speed.
+    mask_ac = check_ac_vectorized(survivors, filter_cfg["ac_min"])
+    final_candidates_np = survivors[mask_ac]
 
-    # F. Cuadrantes
-    # Q1: 1-9, Q2: 10-19, Q3: 20-29, Q4: 30-39
-    # np.digitize devuelve índices de bins. Bins: [10, 20, 30]
-    # 1-9 -> 0, 10-19 -> 1, etc.
-    quad_bins = np.array([10, 20, 30])
-    quads = np.digitize(candidates, quad_bins)
-
-    # Contar cuadrantes únicos por fila.
-    # Truco: Ordenamos quads por fila (ya deberían estarlo por candidates ordenados)
-    # y usamos np.diff != 0 para contar cambios + 1
-    # O mejor: Scikit-learn tiene row-wise unique, pero numpy puro no fácil.
-    # Aproximación rápida: Chequear si el rango cubre cuadrantes o usar lógica Python fina luego.
-    # Dado que es solo "al menos 2 cuadrantes", podemos hacerlo simple:
-    # Q_min vs Q_max. Si estan todos en el mismo cuadrante, Q_max == Q_min.
-    # Eso elimina tickets concentrados en 1 solo cuadrante (ej. 1,2,3,4,5,6).
-    q_min = quads.min(axis=1)
-    q_max = quads.max(axis=1)
-    mask_quad = q_max > q_min  # Al menos 2 cuadrantes distintos
-
-    # --- APLICAR MÁSCARA TOTAL ---
-    final_mask = (
-        mask_sum & mask_even & mask_cons & mask_prime & mask_last_digit & mask_quad
-    )
-    survivors_np = candidates[final_mask]
-
-    # --- FASE 3: FILTRADO FINO (Python) & SCORING ---
-    # Solo llegamos aquí con candidatos muy prometedores
+    # 5. Scoring (Clusters) - Lógica pura Python (necesaria por el Dict lookup)
+    # Como ya filtramos el 99% de basura, este loop es rápido.
     valid_candidates = []
-
-    # Pre-cálculo config
-    min_ac = filter_cfg["ac_min"]
-
-    for row in survivors_np:
-        # Tuple nativa
-        candidate_tuple = tuple(row.tolist())
-
-        # 1. Filtro AC Value (Costoso, no vectorizado aun)
-        if calculate_ac_fast(candidate_tuple) < min_ac:
-            continue
-
-        # 2. Scoring (Clusters)
+    
+    # Pre-cálculo para loop
+    # Convertimos a lista de tuplas para iteración rápida
+    for row in final_candidates_np:
+        tup = tuple(row)
         score = 0
-        for pair in itertools.combinations(candidate_tuple, 2):
-            if pair in top_clusters_set:
-                score += top_clusters_set[pair]
-
-        # Guardar si tiene algún valor genético
+        
+        # Itertools es muy rápido en C
+        for pair in itertools.combinations(tup, 2):
+            if pair in top_clusters_dict:
+                score += top_clusters_dict[pair]
+        
         if score > 0:
-            valid_candidates.append((score, candidate_tuple))
+            valid_candidates.append((score, tup))
 
-        if len(valid_candidates) >= target_batch_size:
-            break
-
-    return valid_candidates
+    # Recorte al target
+    return valid_candidates[:target_batch_size]
 
 
 class UniverseReductionStrategy(ILotteryStrategy):
     """
-    Estrategia 'Red de Pesca de Élite' V3 (Full Vectorized).
+    Estrategia 'Red de Pesca' V4 (Numba Accelerated).
     """
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
         overrides = getattr(config, "filter_overrides", {})
-        verbose = overrides.get("verbose", True)
+        verbose = overrides.get("verbose", False)
 
         start_time = time.time()
 
         if verbose:
-            print(f"🌌 Iniciando Generador de Universo (Numpy Accelerated V3)...")
+            print(f"🌌 Generando Universo V4 (Numba Engine: {'ON' if HAS_NUMBA else 'OFF'})...")
 
-        # --- PREPARACIÓN DE DATOS ---
+        # --- PREPARACIÓN ---
         freq_counter = Counter()
         for draw in history.winning_numbers:
             freq_counter.update(draw[:6])
 
-        # Pesos con suavizado (+1) para evitar probabilidad 0
         weights = [freq_counter.get(n, 1) + 1 for n in range(1, config.total_balls + 1)]
         weights_np = np.array(weights, dtype=float)
         weights_np /= weights_np.sum()
 
+        # Clusters (Hot Pairs)
         cluster_counter = Counter()
         for draw in history.winning_numbers:
             for pair in itertools.combinations(sorted(draw[:6]), 2):
                 cluster_counter[pair] += 1
+        # Convertimos a dict normal para serialización rápida en multiproceso
         clusters_dict = dict(cluster_counter)
 
-        # Configuración compacta para Workers
         filter_config = {
             "sum_min": overrides.get("sum_min", 108),
             "sum_max": overrides.get("sum_max", 180),
@@ -204,17 +203,12 @@ class UniverseReductionStrategy(ILotteryStrategy):
             "even_max": overrides.get("even_max", 4),
             "prime_min": overrides.get("prime_min", 1),
             "prime_max": overrides.get("prime_max", 4),
-            "max_consecutive": 2,  # Max pares consecutivos (1,2,3 -> 2 pares)
             "ac_min": overrides.get("ac_min", 5),
         }
 
-        # --- PARALELISMO ---
-        num_cores = max(1, cpu_count() - 1)  # Dejar 1 core libre para el sistema
+        # --- MULTIPROCESSING ---
+        num_cores = max(1, cpu_count() - 1)
         chunk_size = RAW_GENERATION_SIZE // num_cores
-
-        if verbose:
-            print(f"🔥 Objetivo: {RAW_GENERATION_SIZE:,} candidatos brutos.")
-            print(f"🚀 Motores encendidos: {num_cores} núcleos.")
 
         args = [
             (
@@ -234,38 +228,31 @@ class UniverseReductionStrategy(ILotteryStrategy):
             for res in results:
                 global_pool.extend(res)
 
-        # --- POST-PROCESADO ---
+        # --- CIERRE ---
         if not global_pool:
-            print("⚠ Universo vacío. Relaja los filtros.")
+            if verbose: print("⚠ Universo vacío. Relaja filtros.")
             return PredictionResultDTO("Empty", [])
 
-        # Deduplicación y Corte
-        unique_pool = {}
-        for score, ticket in global_pool:
-            # Quedarse con el ticket si ya existe (mismo score)
-            unique_pool[ticket] = score
+        # Deduplicación rápida
+        unique_map = {t: s for s, t in global_pool}
+        pool_list = list(unique_map.items())
 
-        pool_list = list(unique_pool.items())
-
-        # Percentil de Calidad
+        # Corte por Calidad
         scores = np.array([x[1] for x in pool_list])
         threshold = np.percentile(scores, QUALITY_PERCENTILE)
-
         final_universe = [t for t, s in pool_list if s >= threshold]
 
-        # Guardado
-        output_folder = "data"
-        os.makedirs(output_folder, exist_ok=True)
-        filename = os.path.join(output_folder, "universo_reducido.csv")
-
-        df = pd.DataFrame(final_universe, columns=[f"B{i}" for i in range(1, 7)])
-        df.to_csv(filename, index=False)
-
-        elapsed = time.time() - start_time
+        # Guardar solo si es ejecución real (no backtest loop interno)
         if verbose:
+            output_folder = "data"
+            os.makedirs(output_folder, exist_ok=True)
+            filename = os.path.join(output_folder, "universo_reducido.csv")
+            df = pd.DataFrame(final_universe, columns=[f"B{i}" for i in range(1, 7)])
+            df.to_csv(filename, index=False)
+            
+            elapsed = time.time() - start_time
             print(
-                f"⏱️  Tiempo: {elapsed:.2f}s | 📥 Generados: {len(pool_list):,} | 📤 Final: {len(final_universe):,}"
+                f"⏱️  Tiempo: {elapsed:.2f}s | 📥 Bruto: {len(pool_list):,} | 📤 Neto: {len(final_universe):,}"
             )
-            print(f"✅ Universo guardado en '{filename}'")
 
-        return PredictionResultDTO("Universe V3", [list(t) for t in final_universe])
+        return PredictionResultDTO("Universe V4", [list(t) for t in final_universe])

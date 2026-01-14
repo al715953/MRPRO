@@ -12,25 +12,30 @@ from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResul
 
 console = Console()
 
-
 class HeuristicSelectorStrategy(ILotteryStrategy):
     """
-    ESTRATEGIA 'CLÁSICA' (BASELINE SIN IA).
-
-    Recupera la lógica pura de capas heurísticas:
-    1. Cluster Score (Fuerza de Pares) - 50%
-    2. Hotness Score (Frecuencia Reciente) - 30%
-    3. Probabilistic Balance (Ley del Retorno/Zombies) - 20%
+    ESTRATEGIA 'CLÁSICA' (DINÁMICA).
+    Ahora permite inyección de pesos para optimización.
     """
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
-        console.print(
-            f"\n[bold cyan]📐 INICIANDO SELECTOR HEURÍSTICO (Modo Clásico)...[/bold cyan]"
-        )
+        # Configuración Dinámica (Defaults clásicos si no se envían overrides)
+        overrides = config.filter_overrides or {}
+        verbose = overrides.get("verbose", True)
+        
+        # Pesos (Deben sumar aprox 1.0)
+        w_cluster = overrides.get("w_cluster", 0.5)
+        w_hotness = overrides.get("w_hotness", 0.3)
+        w_balance = overrides.get("w_balance", 0.2)
 
-        # 1. CARGAR UNIVERSO (La misma red que usa la IA)
+        if verbose:
+            console.print(
+                f"\n[bold cyan]📐 HEURÍSTICA (W_Cluster={w_cluster:.2f}, W_Hot={w_hotness:.2f})...[/bold cyan]"
+            )
+
+        # 1. CARGAR UNIVERSO
         csv_path = os.path.join("data", "universo_reducido.csv")
         if not os.path.exists(csv_path):
             return PredictionResultDTO("Error", [])
@@ -44,23 +49,17 @@ class HeuristicSelectorStrategy(ILotteryStrategy):
         if not candidates:
             return PredictionResultDTO("Empty Universe", [])
 
-        # 2. PREPARAR CAPAS DE ANÁLISIS
-
-        # A. Mapa de Calor (Topografía)
-        # Usamos TODA la historia para los pares (Estructura Rígida)
+        # 2. PREPARAR CAPAS (Igual que antes)
         cluster_counts = Counter()
         for draw in history.winning_numbers:
             for pair in itertools.combinations(sorted(draw[:6]), 2):
                 cluster_counts[pair] += 1
         max_cluster = max(cluster_counts.values()) if cluster_counts else 1
 
-        # B. Frecuencia Reciente (Tendencia)
-        # Últimos 15 sorteos
         recent_nums = [n for d in history.winning_numbers[-15:] for n in d[:6]]
         freq_map = Counter(recent_nums)
         max_freq = max(freq_map.values()) if freq_map else 1
 
-        # C. Ley del Retorno (Zombies)
         last_app = {}
         for idx, draw in enumerate(reversed(history.winning_numbers)):
             for n in draw[:6]:
@@ -69,56 +68,49 @@ class HeuristicSelectorStrategy(ILotteryStrategy):
 
         # 3. SCORING DETERMINISTA
         ranked_candidates = []
+        
+        # Si NO es verbose (modo optimizador), no mostramos la barra de progreso
+        iterator = candidates
+        if verbose:
+             iterator = track(candidates, description="   📐 Calculando Geometría...")
 
-        # Analizamos TODOS los candidatos (sin filtro previo de IA)
-        # Esto nos dirá si la IA estaba recortando opciones buenas.
-        for ticket in track(candidates, description="   📐 Calculando Geometría..."):
-
-            # Layer 1: Clusters (50 pts)
-            c_score = sum(
-                cluster_counts.get(pair, 0)
-                for pair in itertools.combinations(ticket, 2)
-            )
+        for ticket in iterator:
+            # Layer 1: Clusters
+            c_score = sum(cluster_counts.get(pair, 0) for pair in itertools.combinations(ticket, 2))
             norm_cluster = c_score / (15 * max_cluster)
 
-            # Layer 2: Hotness (30 pts)
+            # Layer 2: Hotness
             h_score = sum(freq_map.get(n, 0) for n in ticket)
             norm_hot = h_score / (6 * max_freq)
 
-            # Layer 3: Balance (20 pts)
-            # Penalizamos extremos: Ni muy rezagados, ni muy repetidos
+            # Layer 3: Balance
             zombies = sum(1 for n in ticket if last_app.get(n, 0) > 18)
-            repeats = sum(
-                1 for n in ticket if last_app.get(n, 0) <= 1
-            )  # Salieron hace 1 sorteo
-
+            repeats = sum(1 for n in ticket if last_app.get(n, 0) <= 1)
+            
             balance_penalty = 0
-            if zombies > 2:
-                balance_penalty += 0.1
-            if repeats > 1:
-                balance_penalty += 0.1
-
-            # Score Final
+            if zombies > 2: balance_penalty += 0.1
+            if repeats > 1: balance_penalty += 0.1
+            
+            # Puntuación usando los pesos inyectados
             final_score = (
-                (norm_cluster * 0.5) + (norm_hot * 0.3) + (0.2 - balance_penalty)
+                (norm_cluster * w_cluster) + 
+                (norm_hot * w_hotness) + 
+                (w_balance * (1.0 - balance_penalty)) # Balance penaliza sobre el peso
             )
 
             ranked_candidates.append((final_score, ticket))
 
         # 4. SELECCIÓN
         ranked_candidates.sort(key=lambda x: x[0], reverse=True)
-
         selection = []
         seen = []
 
         for score, ticket in ranked_candidates:
             if len(selection) >= config.num_tickets:
                 break
-
-            # Mismo filtro de diversidad
             ticket_set = set(ticket)
             if not any(len(ticket_set & set(p)) >= 5 for p in seen):
                 selection.append(ticket)
                 seen.append(ticket)
 
-        return PredictionResultDTO("Heuristic V1 (No AI)", selection)
+        return PredictionResultDTO("Heuristic Optimized", selection)

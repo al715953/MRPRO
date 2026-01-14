@@ -27,7 +27,7 @@ from src.strategies.monte_carlo import MonteCarloStrategy
 from src.strategies.universe_reduction import UniverseReductionStrategy
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 
-# Importación segura para la estrategia Heurística (si falla, no rompe todo el programa hasta usarlo)
+# Importación segura para la estrategia Heurística
 try:
     from src.strategies.heuristic_selector import HeuristicSelectorStrategy
 except ImportError:
@@ -162,21 +162,48 @@ def main():
             print(
                 f"\n{Fore.MAGENTA}🧠 OPTIMIZADOR DE PARÁMETROS (GRID SEARCH){Style.RESET_ALL}"
             )
+            print("1. 🔧 Optimizar Filtros (Fase 1 - Universo)")
+            print("2. ⚖️  Optimizar Pesos Heurísticos (Fase 2 - Ranking)")
+
+            sub_opt = input("   👉 Selecciona objetivo (1): ") or "1"
+
             opt = StrategyOptimizer()
-            best_cfg = opt.optimize(history)
-            print(
-                f"\n{Fore.GREEN}💾 Guarda estos valores en data_access/config.py!{Style.RESET_ALL}"
-            )
+            best_cfg = {}
+
+            try:
+                if sub_opt == "1":
+                    best_cfg = opt.optimize_filters(history)
+                elif sub_opt == "2":
+                    best_cfg = opt.optimize_heuristics(history)
+                else:
+                    print(f"{Fore.RED}Opción inválida.{Style.RESET_ALL}")
+                    continue
+
+                print(
+                    f"\n{Fore.GREEN}🏆 MEJOR CONFIGURACIÓN ENCONTRADA:{Style.RESET_ALL}"
+                )
+                print(best_cfg)
+                print(
+                    f"\n{Fore.GREEN}💾 Actualiza 'BEST_SETTINGS' en data_access/config.py{Style.RESET_ALL}"
+                )
+
+            except Exception as e:
+                print(f"{Fore.RED}⚠ Error en optimización: {e}{Style.RESET_ALL}")
+
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
         # 5. GENERAR UNIVERSO (REDUCCIÓN)
         elif opcion == "5":
             print(f"\n{Fore.CYAN}🌌 GENERANDO UNIVERSO (MANUAL)...{Style.RESET_ALL}")
+
+            # --- CORRECCIÓN: Agregamos num_tickets=0 para evitar el TypeError ---
             config = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
+                num_tickets=0,  # <--- AGREGAR ESTA LÍNEA
                 filter_overrides=BEST_SETTINGS,
             )
+
             UniverseReductionStrategy().predict(history, config)
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
@@ -185,8 +212,10 @@ def main():
             print(
                 f"\n{Fore.CYAN}📡 LABORATORIO DE PRUEBAS (QA & COMPARATIVAS){Style.RESET_ALL}"
             )
-            print("1. Test de Cobertura (Solo Fase 1 - Universo)")
+            print("1. 🛡️  Test de Cobertura (Solo Fase 1 - Universo)")
             print("2. 🥊 DUELO: AI Sniper vs Heurística Clásica")
+            print("3. 🧠 Solo AI (Centauro V7)")
+            print("4. 📐 Solo Heurística Clásica")
 
             sub_op = input("   👉 Selecciona modo (2): ") or "2"
 
@@ -203,24 +232,24 @@ def main():
                 filter_overrides=BEST_SETTINGS,
             )
 
+            engine = BacktestEngine()
+
+            # --- OPCIÓN 1: COBERTURA ---
             if sub_op == "1":
                 print(
                     f"\n{Fore.BLUE}ℹ️  Verificando calidad de filtros en 'UniverseReduction'...{Style.RESET_ALL}"
                 )
                 CoverageTester().run(UniverseReductionStrategy(), history, config)
 
-            else:
-                # --- MODO DUELO ---
+            # --- OPCIÓN 2: DUELO ---
+            elif sub_op == "2":
                 if HeuristicSelectorStrategy is None:
                     print(
-                        f"{Fore.RED}❌ Error: No se encontró 'src/strategies/heuristic_selector.py'.{Style.RESET_ALL}"
+                        f"{Fore.RED}❌ Error: No se encontró 'heuristic_selector'.{Style.RESET_ALL}"
                     )
-                    input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
                     continue
 
-                engine = BacktestEngine()
-
-                # 1. Corremos la Clásica
+                # 1. Clásica
                 print(
                     f"\n{Fore.YELLOW}🥊 ROUND 1: Lógica Clásica (Sin IA)...{Style.RESET_ALL}"
                 )
@@ -232,9 +261,9 @@ def main():
                     verbose=True,
                 )
 
-                # 2. Corremos la IA
+                # 2. IA
                 print(
-                    f"\n{Fore.MAGENTA}🥊 ROUND 2: Inteligencia Artificial (Sniper V6)...{Style.RESET_ALL}"
+                    f"\n{Fore.MAGENTA}🥊 ROUND 2: Inteligencia Artificial (Centauro)...{Style.RESET_ALL}"
                 )
                 res_ai = engine.run(
                     strategy=GeneticSelectorStrategy(),
@@ -244,9 +273,9 @@ def main():
                     verbose=True,
                 )
 
-                # 3. COMPARATIVA FINAL
+                # 3. Comparativa
                 print(f"\n{Fore.GREEN}🏆 RESULTADO DEL DUELO{Style.RESET_ALL}")
-                print(f"{'METRICA':<20} | {'CLÁSICA':<15} | {'IA (V6)':<15}")
+                print(f"{'METRICA':<20} | {'CLÁSICA':<15} | {'IA (V7)':<15}")
                 print("-" * 55)
                 print(
                     f"{'Ganancia Total':<20} | ${res_classic.earnings:<14,.2f} | ${res_ai.earnings:<14,.2f}"
@@ -255,7 +284,6 @@ def main():
                     f"{'Balance Neto':<20} | ${res_classic.net_balance:<14,.2f} | ${res_ai.net_balance:<14,.2f}"
                 )
 
-                # Extracción segura de datos
                 c3 = res_classic.hit_distribution.get(3, 0)
                 a3 = res_ai.hit_distribution.get(3, 0)
                 c4p = sum([res_classic.hit_distribution.get(k, 0) for k in [4, 5, 6]])
@@ -263,6 +291,66 @@ def main():
 
                 print(f"{'Aciertos (3)':<20} | {c3:<15} | {a3:<15}")
                 print(f"{'Aciertos (4+)':<20} | {c4p:<15} | {a4p:<15}")
+
+            # --- OPCIÓN 3: SOLO AI ---
+            elif sub_op == "3":
+                print(
+                    f"\n{Fore.MAGENTA}🧠 EJECUTANDO DIAGNÓSTICO DE IA (CENTAURO V7)...{Style.RESET_ALL}"
+                )
+                res = engine.run(
+                    strategy=GeneticSelectorStrategy(),
+                    history=history,
+                    config=config,
+                    pre_process_strategy=UniverseReductionStrategy(),
+                    verbose=True,
+                )
+
+                print(f"\n{Fore.MAGENTA}📊 REPORTE DE IA:{Style.RESET_ALL}")
+                print(f"   💰 Inversión:   ${res.investment:,.2f}")
+                print(f"   💵 Ganancia:    ${res.earnings:,.2f}")
+
+                color_bal = Fore.GREEN if res.net_balance > 0 else Fore.RED
+                print(
+                    f"   📈 Balance:     {color_bal}${res.net_balance:,.2f}{Style.RESET_ALL}"
+                )
+
+                print(f"   🎯 Aciertos 3:  {res.hit_distribution.get(3, 0)}")
+                print(
+                    f"   🔥 Aciertos 4+: {sum([res.hit_distribution.get(k, 0) for k in [4, 5, 6]])}"
+                )
+
+            # --- OPCIÓN 4: SOLO HEURÍSTICA ---
+            elif sub_op == "4":
+                if HeuristicSelectorStrategy is None:
+                    print(
+                        f"{Fore.RED}❌ Error: No se encontró 'heuristic_selector'.{Style.RESET_ALL}"
+                    )
+                    continue
+
+                print(
+                    f"\n{Fore.YELLOW}📐 EJECUTANDO DIAGNÓSTICO HEURÍSTICO...{Style.RESET_ALL}"
+                )
+                res = engine.run(
+                    strategy=HeuristicSelectorStrategy(),
+                    history=history,
+                    config=config,
+                    pre_process_strategy=UniverseReductionStrategy(),
+                    verbose=True,
+                )
+
+                print(f"\n{Fore.YELLOW}📊 REPORTE HEURÍSTICO:{Style.RESET_ALL}")
+                print(f"   💰 Inversión:   ${res.investment:,.2f}")
+                print(f"   💵 Ganancia:    ${res.earnings:,.2f}")
+
+                color_bal = Fore.GREEN if res.net_balance > 0 else Fore.RED
+                print(
+                    f"   📈 Balance:     {color_bal}${res.net_balance:,.2f}{Style.RESET_ALL}"
+                )
+
+                print(f"   🎯 Aciertos 3:  {res.hit_distribution.get(3, 0)}")
+                print(
+                    f"   🔥 Aciertos 4+: {sum([res.hit_distribution.get(k, 0) for k in [4, 5, 6]])}"
+                )
 
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
