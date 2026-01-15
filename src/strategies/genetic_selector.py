@@ -3,7 +3,6 @@ import numpy as np
 import os
 import itertools
 from typing import List, Tuple, Dict, Optional, Any
-from rich.console import Console
 
 # --- CAPA HPC (Numba JIT) ---
 try:
@@ -17,9 +16,6 @@ from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
 from src.core.ai_scorer import LotteryAIModel
 
-console = Console()
-
-# --- KERNELS VECTORIZADOS ---
 if HAS_NUMBA:
 
     @jit(nopython=True, fastmath=True, cache=True)
@@ -29,7 +25,6 @@ if HAS_NUMBA:
         n_rows, n_cols = candidates.shape
         cluster_scores = np.zeros(n_rows, dtype=np.float32)
         hotness_scores = np.zeros(n_rows, dtype=np.float32)
-
         for i in range(n_rows):
             c_score = 0
             for j in range(n_cols):
@@ -37,7 +32,6 @@ if HAS_NUMBA:
                     a, b = candidates[i, j], candidates[i, k]
                     c_score += cluster_matrix[a, b]
             cluster_scores[i] = c_score
-
             h_score = 0
             for j in range(n_cols):
                 val = candidates[i, j]
@@ -46,25 +40,11 @@ if HAS_NUMBA:
             hotness_scores[i] = h_score
         return cluster_scores, hotness_scores
 
-else:
-
-    def calc_heuristics_vectorized(
-        candidates, cluster_matrix, hotness_vector, total_balls
-    ):
-        n_rows = len(candidates)
-        c_scores, h_scores = np.zeros(n_rows), np.zeros(n_rows)
-        for i in range(n_rows):
-            row = candidates[i]
-            c = sum(cluster_matrix[a, b] for a, b in itertools.combinations(row, 2))
-            h = sum(hotness_vector[val] for val in row if val <= total_balls)
-            c_scores[i], h_scores[i] = c, h
-        return c_scores, h_scores
-
 
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    ESTRATEGIA 'SNIPER' V29 (Deep Dive Protocol).
-    Arquitectura Híbrida: GPU para Universo -> Numba para Heurística -> Sniper para Selección.
+    SELECTOR V31.2: Estrategia de Caza de Alta Densidad.
+    Implementa Selección de Élite Ampliada y Muestreo Estocástico Power 10.
     """
 
     def __init__(self):
@@ -76,7 +56,6 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             "max_cluster": 1.0,
             "max_hotness": 1.0,
         }
-        # Coherencia Forense: Snapshot de la última ejecución
         self._forensic_snapshot = {
             "universe": None,
             "ai_scores": None,
@@ -98,18 +77,14 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             for a, b in itertools.combinations(sorted_draw, 2):
                 matrix[a, b] += 1
                 matrix[b, a] += 1
-
         flat_matrix = matrix.flatten()
         max_cluster_val = (
             np.percentile(flat_matrix[flat_matrix > 0], 99) if np.sum(matrix) > 0 else 1
         )
-
-        recent_draws = history.winning_numbers[-12:]
         freq_vec = np.zeros(total_balls + 2, dtype=np.uint16)
-        for draw in recent_draws:
+        for draw in history.winning_numbers[-12:]:
             for num in draw[:6]:
                 freq_vec[num] += 1
-
         self._matrix_cache.update(
             {
                 "cluster_matrix": matrix,
@@ -119,7 +94,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             }
         )
 
-    def _calculate_v29_scores(self, candidates_np, total_balls):
+    def _calculate_scores(self, candidates_np, total_balls):
         raw_c, raw_h = calc_heuristics_vectorized(
             candidates_np,
             self._matrix_cache["cluster_matrix"],
@@ -133,40 +108,29 @@ class GeneticSelectorStrategy(ILotteryStrategy):
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
-        verbose = getattr(config, "filter_overrides", {}).get("verbose", True)
+        AI_THRESHOLD, GEO_P_FLOOR = 0.84, 35.0
 
-        # --- PARÁMETROS V29 DEEP DIVE ---
-        AI_THRESHOLD = 0.84
-        GEO_P_FLOOR = 35.0
-
-        if verbose:
-            console.print(
-                f"\n[bold magenta]🎯 SNIPER V29 (Deep Dive Protocol) Activo...[/]"
-            )
-
-        # 1. Cargar Universo Reducido
+        # Cargamos el universo reducido generado por la Fase 1
         csv_path = os.path.join("data", "universo_reducido.csv")
         try:
             df = pd.read_csv(csv_path)
             candidates_np = df.iloc[:, :6].values.astype(np.uint8)
-        except Exception as e:
-            return PredictionResultDTO(f"Error cargando universo: {str(e)}", [])
+        except:
+            return PredictionResultDTO("Error CSV", [])
 
-        # 2. Motor de Scoring Híbrido
         self._train_model(history, config.total_balls)
-        tuples_list = [tuple(x) for x in candidates_np]
 
+        # Scoring de IA y Geometría
         raw_ai_scores = np.array(
-            self.ai_model.score_tickets(tuples_list), dtype=np.float32
+            self.ai_model.score_tickets([tuple(x) for x in candidates_np]),
+            dtype=np.float32,
         )
-        final_geo_scores = self._calculate_v29_scores(candidates_np, config.total_balls)
+        final_geo_scores = self._calculate_scores(candidates_np, config.total_balls)
 
-        # 3. Definición de Bandas (P35 Floor)
-        global_upper = np.percentile(final_geo_scores, 99.0)
         global_lower = np.percentile(final_geo_scores, GEO_P_FLOOR)
-        mid_point = (global_lower + global_upper) / 2
+        mid_point = (global_lower + np.max(final_geo_scores)) / 2
 
-        # Registro Snapshot para Auditoría Posterior
+        # Guardamos Snapshot para Auditoría de Rank
         self._forensic_snapshot = {
             "universe": candidates_np,
             "ai_scores": raw_ai_scores,
@@ -175,107 +139,106 @@ class GeneticSelectorStrategy(ILotteryStrategy):
                 "ai_limit": AI_THRESHOLD,
                 "geo_low": global_lower,
                 "geo_mid": mid_point,
-                "geo_high": global_upper,
             },
         }
 
-        if verbose:
-            console.print(
-                f"   📊 Floor P35: {global_lower:.4f} | AI Override: {AI_THRESHOLD}"
-            )
-
-        # 4. SELECCIÓN QUIRÚRGICA
         final_selection, seen_tickets = [], []
         indices = np.arange(len(final_geo_scores))
+        strat_counts = {"stars": 0, "stochastic_high": 0, "stochastic_low": 0}
 
-        def add_ticket(idx):
-            tup = tuple(candidates_np[idx])
+        def add_ticket(idx, category):
+            tup = tuple(sorted(candidates_np[idx]))
             t_set = set(tup)
-            # Filtro de Diversidad (Overlap < 5)
+            # Filtro de diversidad: Evitamos tickets demasiado similares
             if any(len(t_set.intersection(s)) >= 5 for s in seen_tickets):
                 return False
-            final_selection.append(tup)
+            final_selection.append(list(tup))
             seen_tickets.append(t_set)
+            strat_counts[category] += 1
             return True
 
-        # A. AI OVERRIDE (Super Stars)
-        mask_override = raw_ai_scores >= AI_THRESHOLD
-        idx_override = indices[mask_override]
-        sorted_override = idx_override[np.argsort(raw_ai_scores[mask_override])[::-1]]
+        # --- 1. SELECCIÓN DE ÉLITE (AMPLIADA A 10) ---
+        mask_stars = raw_ai_scores >= AI_THRESHOLD
+        idx_stars = indices[mask_stars]
+        if len(idx_stars) > 0:
+            # Ordenamos por los mejores AI Scores
+            sorted_stars = idx_stars[np.argsort(raw_ai_scores[mask_stars])[::-1]]
+            for idx in sorted_stars[:10]:  # Aseguramos el Top 10 absoluto
+                add_ticket(idx, "stars")
 
-        c_stars = 0
-        for idx in sorted_override:
-            if c_stars >= 4:
-                break  # Cupo expandido V29
-            if add_ticket(idx):
-                c_stars += 1
+        # --- 2. MUESTREO ESTOCÁSTICO (POWER 10) ---
+        def weighted_sample(mask, quota, category):
+            available_idx = indices[mask]
+            if len(available_idx) == 0:
+                return
 
-        # B. ESTRATIFICACIÓN (High / Low Band)
-        remaining = config.num_tickets - len(final_selection)
-        quota_high = int(remaining * 0.50)
+            # ELEVACIÓN DE PESO POWER 10: Concentración masiva en Ranks altos
+            weights = raw_ai_scores[mask] ** 12
+            prob = weights / weights.sum()
 
-        # High Band
-        mask_high = (final_geo_scores >= mid_point) & (final_geo_scores <= global_upper)
-        idx_high = indices[mask_high]
-        sorted_high = idx_high[np.argsort(raw_ai_scores[mask_high])[::-1]]
+            # Tomamos un pool de muestreo para filtrar por diversidad
+            sample_size = min(len(available_idx), quota * 5)
+            chosen = np.random.choice(
+                available_idx, size=sample_size, replace=False, p=prob
+            )
 
-        c = 0
-        for idx in sorted_high:
-            if c >= quota_high:
-                break
-            if add_ticket(idx):
-                c += 1
-
-        # Low Band (Captura de ganadores "feos" como #1595)
-        mask_low = (final_geo_scores >= global_lower) & (final_geo_scores < mid_point)
-        idx_low = indices[mask_low]
-        sorted_low = idx_low[np.argsort(raw_ai_scores[mask_low])[::-1]]
-
-        for idx in sorted_low:
-            if len(final_selection) >= config.num_tickets:
-                break
-            add_ticket(idx)
-
-        # Relleno Final
-        if len(final_selection) < config.num_tickets:
-            for idx in sorted_high:
-                if len(final_selection) >= config.num_tickets:
+            for idx in chosen:
+                if strat_counts[category] >= quota:
                     break
-                add_ticket(idx)
+                add_ticket(idx, category)
 
-        return PredictionResultDTO(
-            f"Sniper V29 (P35/AI{AI_THRESHOLD})", final_selection
-        )
+        remaining = config.num_tickets - len(final_selection)
+        if remaining > 0:
+            quota_high = int(remaining * 0.60)
+            quota_low = remaining - quota_high
 
-    def audit_winner(self, history, config, winning_ticket):
+            # Banda Alta (Muestreo ponderado sobre el punto medio geométrico)
+            weighted_sample(
+                (final_geo_scores >= mid_point), quota_high, "stochastic_high"
+            )
+
+            # Banda Baja (Muestreo ponderado sobre el piso geométrico)
+            weighted_sample(
+                (final_geo_scores >= global_lower) & (final_geo_scores < mid_point),
+                quota_low,
+                "stochastic_low",
+            )
+
+        result = PredictionResultDTO("Sniper V31.2", final_selection)
+        result.metadata = {
+            "total_candidates": int(len(candidates_np)),
+            "floor_p35": float(global_lower),
+            "ai_threshold": float(AI_THRESHOLD),
+            "stratification": strat_counts,
+        }
+        return result
+
+    def audit_winner(self, history, config, winning_ticket) -> dict:
+        """Auditoría forense para localizar al ganador dentro del ranking de la IA."""
         snap = self._forensic_snapshot
         if snap["universe"] is None:
-            return "[red]No hay snapshot de memoria disponible.[/]"
+            return {"found": False}
 
         target = np.array(sorted(winning_ticket[:6]))
         hits = np.sum(np.isin(snap["universe"], target), axis=1)
-        idx_6 = np.where(hits == 6)[0]
+        max_hits = int(np.max(hits))
 
-        msg = f"\n   🕵️‍♂️ [bold magenta]INFORME FORENSE V29 (Deep Dive):[/]\n"
-        if len(idx_6) > 0:
-            idx = idx_6[0]
-            ai_val = snap["ai_scores"][idx]
-            geo_val = snap["geo_scores"][idx]
-            th = snap["thresholds"]
+        # Localizamos el mejor ticket posible del universo
+        best_indices = np.where(hits == max_hits)[0]
+        if len(best_indices) == 0:
+            return {"found": False, "hits": 0}
 
-            status = "[bold red]ELIMINADO[/]"
-            if ai_val >= th["ai_limit"]:
-                status = "[bold magenta]🌟 CAPTURADO POR AI OVERRIDE 🌟[/]"
-            elif geo_val >= th["geo_low"]:
-                status = "[bold green]DENTRO DE BANDAS (CAPTURED)[/]"
+        idx_audit = best_indices[np.argsort(snap["ai_scores"][best_indices])[-1]]
+        ai_val = snap["ai_scores"][idx_audit]
+        rank = np.sum(snap["ai_scores"] > ai_val) + 1
 
-            msg += f"   🎯 [bold]Sujeto:[/bold] {tuple(target)}\n"
-            msg += f"   📊 [bold]GeoScore:[/bold] {geo_val:.5f} (P35: {th['geo_low']:.5f})\n"
-            msg += (
-                f"   📈 [bold]AI Score:[/bold] {ai_val:.5f} (Corte: {th['ai_limit']})\n"
-            )
-            msg += f"   📦 [bold]Status Final:[/bold] {status}\n"
-        else:
-            msg += f"   ❌ [red]Fallo Crítico: El ticket no sobrevivió a la Fase 1 (GPU Filters).[/]\n"
-
-        return msg
+        return {
+            "found": max_hits >= 4,
+            "is_jackpot": max_hits == 6,
+            "hits": max_hits,
+            "ai_score": float(ai_val),
+            "geo_score": float(snap["geo_scores"][idx_audit]),
+            "rank": int(rank),
+            "percentile": float((1 - (rank / len(snap["universe"]))) * 100),
+            "thresholds": {k: float(v) for k, v in snap["thresholds"].items()},
+        }

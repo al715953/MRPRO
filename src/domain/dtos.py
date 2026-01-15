@@ -36,6 +36,16 @@ class BacktestResultDTO:
     hit_distribution: Dict[int, int]
 
 
+# - Actualización de DTOs para soportar metadatos forenses
+@dataclass
+class PredictionResultDTO:
+    strategy_name: str
+    tickets: List[List[int]]
+    metadata: Dict[str, Any] = field(
+        default_factory=dict
+    )  # <--- Nuevo contenedor de evidencia
+
+
 # --- NUEVO: Infraestructura de Filtrado ---
 
 
