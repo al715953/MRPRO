@@ -36,7 +36,7 @@ class SniperReport:
 
     @staticmethod
     def render_draw_summary(metadata: dict, audit_data: dict):
-        """Versión V9.8.4: Estatus de impacto dinámico con colores jerárquicos."""
+        """Versión V9.8.6: Colores de Potencial + Estatus de Captura Real."""
         hits = audit_data.get("hits", 0)
         prox = audit_data.get("proximity", 0)
         ai_val = audit_data.get("ai_score", 0)
@@ -45,26 +45,42 @@ class SniperReport:
         d_id = audit_data.get("draw_id", "####")
         univ_size = audit_data.get("univ_size", 0)
 
-        # Lógica de Estatus y Colores
+        # 1. COLOR DEL POTENCIAL (Siempre visible, basado en el universo)
         if hits == 6:
-            status = Text("💎 JACKPOT!!", style="bold cyan")  # Azul Diamante
-            hit_color = "bold cyan"
+            potential_color = "bold cyan"  # Azul Diamante
         elif hits == 5:
-            status = Text("🔥 HIT (5/6)", style="bold green")  # Verde
-            hit_color = "bold green"
+            potential_color = "bold green"  # Verde
         elif hits == 4:
-            status = Text("🎯 HIT (4/6)", style="bold yellow")  # Amarillito
-            hit_color = "bold yellow"
+            potential_color = "bold yellow"  # Amarillito
+        else:
+            potential_color = "white"  # 3/6 o menos en blanco
+
+        # 2. LÓGICA DE CAPTURA REAL (Estatus)
+        is_hit = prox == 0
+        if is_hit:
+            if hits == 6:
+                status = Text("💎 JACKPOT!!", style="bold cyan")
+            elif hits == 5:
+                status = Text("🔥 HIT (5/6)", style="bold green")
+            else:
+                status = Text("🎯 HIT (4/6)", style="bold yellow")
         else:
             status = Text("❌ MISSED", style="bold red")
-            hit_color = "white"
+
+        # 3. COLOR DE DISTANCIA (Resaltar "escoltas" cercanos)
+        prox_color = (
+            "bold cyan" if prox == 0 else "bold magenta" if prox < 15 else "dim"
+        )
 
         line = Text.assemble(
             (f"#{d_id:4d} ", "bold white"),
             ("| ", "white"),
             (f"U: {univ_size:7,d} ", "dim cyan"),
             ("| ", "white"),
-            (f" {hits}/6 ", hit_color),
+            (
+                f" {hits}/6 ",
+                potential_color,
+            ),  # <--- Aquí devolvemos el color al potencial
             ("| ", "white"),
             ("AI: ", "dim"),
             (f"{ai_val:.4f} ", "yellow"),
@@ -72,7 +88,7 @@ class SniperReport:
             (f"{geo_val:.4f}", "yellow"),
             (f" | Rank: #{audit_data.get('rank', 0):,}", "cyan"),
             (f" (P{pctl:.1f}%) ", "dim"),
-            (f" | Dist: {prox:,} ", "bold magenta" if prox < 10 else "dim"),
+            (f" | Dist: {prox:,} ", prox_color),
             ("| ", "white"),
             status,
         )

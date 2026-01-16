@@ -38,8 +38,8 @@ BLANCO_B = "\033[1;37m"
 # Valores iniciales conservadores:
 BEST_SETTINGS = {
     # 1. Filtros Topológicos (Fase 1)
-    "sum_min": 110,
-    "sum_max": 130,
+    "sum_min": 112,
+    "sum_max": 128,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,

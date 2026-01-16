@@ -212,7 +212,7 @@ class UniverseReductionStrategy(ILotteryStrategy):
         # 6. CORTE TÉCNICO V9.3 (Punto de Equilibrio Rendimiento/Recall)
         # Fijamos P80 para mantener un universo manejable de ~300k candidatos.
         # Esto evita la saturación de memoria en el scoring de la IA.
-        TECHNICAL_REDUCTION_P = 88.0
+        TECHNICAL_REDUCTION_P = 92.0
         threshold = np.percentile(scores, TECHNICAL_REDUCTION_P)
         final_universe_np = candidates[scores >= threshold]
 
