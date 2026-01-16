@@ -61,6 +61,7 @@ class ConsoleUI:
         menu_table.add_row("5.", "🌌 Generar Universo Reducido (Fase 1)")
         menu_table.add_row("6.", "📡 Laboratorio de Pruebas (Backtest & QA)")
         menu_table.add_row("7.", "🎯 SELECTOR GENÉTICO FINAL (Producción)")
+        menu_table.add_row("8.", "- Reporte Plot")
         menu_table.add_row("", "")
         menu_table.add_row("0.", "🚪 Salir")
 

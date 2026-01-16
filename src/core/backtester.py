@@ -58,9 +58,16 @@ class BacktestEngine:
 
             # FASE 1: REDUCCIÓN
             has_gold = has_silver = has_bronze = False
+            current_univ_size = 0
             if pre_process_strategy:
                 config.filter_overrides["verbose"] = False
                 univ_result = pre_process_strategy.predict(current_history, config)
+
+                # Capturamos el tamaño para el reporte unificado
+                if hasattr(univ_result, "metadata"):
+                    current_univ_size = univ_result.metadata.get("final_size", 0)
+                    config.raw_universe_ptr = univ_result.metadata["raw_ndarray"]
+
                 if (
                     hasattr(univ_result, "metadata")
                     and "raw_ndarray" in univ_result.metadata
@@ -96,6 +103,7 @@ class BacktestEngine:
                 audit = strategy.audit_winner(current_history, config, target_draw)
                 audit["draw_id"] = int(target_id)
                 audit["actually_captured"] = captured
+                audit["univ_size"] = current_univ_size
                 self.audit_history.append(audit)  # Guardamos para el JSON
 
             for ticket in prediction.tickets:

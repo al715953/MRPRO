@@ -38,13 +38,13 @@ BLANCO_B = "\033[1;37m"
 # Valores iniciales conservadores:
 BEST_SETTINGS = {
     # 1. Filtros Topológicos (Fase 1)
-    "sum_min": 115,
-    "sum_max": 172,
-    "ac_min": 5,
+    "sum_min": 110,
+    "sum_max": 130,
+    "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
-    "prime_min": 1,
-    "prime_max": 4,
+    "prime_min": 2,
+    "prime_max": 3,
     # 2. Pesos de Decisión (Fase 2)
     # Define qué tanto caso le hacemos a cada experto
     "w_cluster": 0.45,  # Importancia de la estructura geométrica

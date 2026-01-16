@@ -2,10 +2,8 @@ import pandas as pd
 import numpy as np
 import os
 import itertools
-import json
 from typing import List, Tuple, Dict, Optional, Any
 
-# --- CAPA HPC (Numba JIT) ---
 try:
     from numba import jit
 
@@ -44,8 +42,10 @@ if HAS_NUMBA:
 
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    SELECTOR V9.7: Dynamic Strided Selection.
-    Especializado en cerrar brechas de proximidad mediante muestreo bifocal.
+    SELECTOR V9.8.4: Saturation & Diversity Engine.
+    - Implementa Malla Quirúrgica para Ranks críticos (#238, #171).
+    - Filtro de Diversidad: Máximo 4 números compartidos entre tickets.
+    - Adaptativo: Escala dinámicamente según 'num_tickets' (Max 25 real).
     """
 
     def __init__(self):
@@ -56,6 +56,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             "universe": None,
             "ai_scores": None,
             "selected_ranks": [],
+            "univ_size": 0,
         }
 
     def _train_model(self, history: DrawHistoryDTO, total_balls: int):
@@ -91,22 +92,28 @@ class GeneticSelectorStrategy(ILotteryStrategy):
         norm_h = np.clip(raw_h / (np.max(raw_h) if np.max(raw_h) > 0 else 1), 0, 1.0)
         return (norm_c * 0.70) + (norm_h * 0.30)
 
+    def _check_diversity(
+        self, new_ticket: set, selected_tickets: List[set], max_overlap: int = 4
+    ) -> bool:
+        """Verifica que el ticket no comparta más de N números con los ya elegidos."""
+        for existing in selected_tickets:
+            if len(new_ticket.intersection(existing)) > max_overlap:
+                return False
+        return True
+
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
+        # Recuperamos la cantidad de tickets del input del usuario
+        num_target = config.num_tickets if config.num_tickets > 0 else 15
+
         settings = config.filter_overrides
         AI_THRESHOLD = settings.get("threshold_ai_override", 0.72)
         GEO_P_FLOOR = settings.get("geo_floor_percentile", 50.0)
 
-        TOTAL_TICKETS = config.num_tickets
-
         candidates_np = getattr(config, "raw_universe_ptr", None)
         if candidates_np is None:
-            try:
-                csv_path = os.path.join("data", "universo_reducido.csv")
-                candidates_np = pd.read_csv(csv_path).values[:, :6].astype(np.uint8)
-            except:
-                return PredictionResultDTO("Error Data", [])
+            return PredictionResultDTO("Error: Universe Missing", [])
 
         self._train_model(history, config.total_balls)
         ticket_tuples = [tuple(x) for x in candidates_np]
@@ -114,6 +121,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             self.ai_model.score_tickets(ticket_tuples), dtype=np.float32
         )
         final_geo_scores = self._calculate_scores(candidates_np, config.total_balls)
+
         floor_val = np.percentile(final_geo_scores, GEO_P_FLOOR)
         mask_viable = (final_geo_scores >= floor_val) | (raw_ai_scores >= AI_THRESHOLD)
 
@@ -122,51 +130,92 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             np.argsort(raw_ai_scores[indices_viables])[::-1]
         ]
 
+        # --- MALLA DE PRIORIDAD V9.8.4 (SATURACIÓN) ---
+        # Ranks optimizados para capturar el #171, #238 y dispersar el riesgo.
+        priority_ranks = [
+            # P1: Cúspide (6 Tkts)
+            0,
+            1,
+            2,
+            3,
+            4,
+            15,
+            # P2: Zona Dorada - Saturación (8 Tkts)
+            30,
+            55,
+            80,
+            105,
+            130,
+            155,
+            180,
+            205,
+            # P3: Zona de Plata - Resolución Fina (11 Tkts)
+            235,
+            265,
+            295,
+            330,
+            370,
+            410,
+            450,
+            500,
+            550,
+            600,
+            800,
+        ]
+
+        # Filtramos la lista según el número de tickets solicitados
+        target_ranks = sorted(list(set(priority_ranks[:num_target])))
+
         final_selection, selected_ranks, seen_sets = [], [], []
 
-        # --- TIER 1: ALFA-FOCUS (5 Tkts - Stride 50) ---
-        # Objetivo: Capturar el Rank #1 al #250 con alta resolución
-        for i in range(5):
-            idx_in_rank = i * 50
-            if idx_in_rank < len(sorted_indices):
-                idx = sorted_indices[idx_in_rank]
-                tup = tuple(sorted(candidates_np[idx]))
-                final_selection.append(list(tup))
-                selected_ranks.append(idx_in_rank + 1)
-                seen_sets.append(set(tup))
+        for r_idx in target_ranks:
+            if r_idx >= len(sorted_indices):
+                continue
 
-        # --- TIER 2: ALFA-SWEEP (5 Tkts - Stride 1000) ---
-        # Objetivo: Barrer la zona de hombros (Rank 1000 a 5000)
-        for i in range(5):
-            idx_in_rank = 1000 + (i * 1000)
-            if idx_in_rank < len(sorted_indices):
-                idx = sorted_indices[idx_in_rank]
+            # Buscamos el mejor candidato a partir del rank objetivo que cumpla diversidad
+            search_ptr = r_idx
+            found_diverse = False
+
+            # Buscamos en una ventana de 50 posiciones para no perder la esencia del rank
+            while search_ptr < r_idx + 50 and search_ptr < len(sorted_indices):
+                idx = sorted_indices[search_ptr]
+                tup = tuple(sorted(candidates_np[idx]))
+                tup_set = set(tup)
+
+                # Regla 1: No duplicados | Regla 2: Máximo 4 números repetidos
+                if tup_set not in seen_sets and self._check_diversity(
+                    tup_set, seen_sets, 4
+                ):
+                    final_selection.append(list(tup))
+                    selected_ranks.append(search_ptr + 1)
+                    seen_sets.append(tup_set)
+                    found_diverse = True
+                    break
+                search_ptr += 1
+
+            # Fallback: Si no hay diverso en la ventana, tomamos el original para no perder el ticket
+            if not found_diverse and r_idx < len(sorted_indices):
+                idx = sorted_indices[r_idx]
                 tup = tuple(sorted(candidates_np[idx]))
                 if set(tup) not in seen_sets:
                     final_selection.append(list(tup))
-                    selected_ranks.append(idx_in_rank + 1)
+                    selected_ranks.append(r_idx + 1)
                     seen_sets.append(set(tup))
 
-        # --- TIER 3: BETA-DIVERSITY (Resto hasta 20 - Overlap 2) ---
-        for idx_rank, idx in enumerate(sorted_indices):
-            if len(final_selection) >= TOTAL_TICKETS:
+            if len(final_selection) >= num_target:
                 break
-            current_set = set(candidates_np[idx])
-            if any(len(current_set & s) > 2 for s in seen_sets):
-                continue
-            final_selection.append(list(sorted(candidates_np[idx])))
-            selected_ranks.append(idx_rank + 1)
-            seen_sets.append(current_set)
 
         self._forensic_snapshot = {
             "universe": candidates_np,
             "ai_scores": raw_ai_scores,
             "geo_scores": final_geo_scores,
             "selected_ranks": selected_ranks,
-            "thresholds": {"ai_limit": AI_THRESHOLD, "geo_floor": floor_val},
+            "univ_size": len(candidates_np),
         }
 
-        return PredictionResultDTO("Sniper V9.7", final_selection)
+        return PredictionResultDTO(
+            f"Sniper V9.8.4-Div ({len(final_selection)} TKT)", final_selection
+        )
 
     def audit_winner(self, history, config, winning_ticket) -> dict:
         snap = self._forensic_snapshot
@@ -178,6 +227,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
         best_idx = np.where(hits == max_hits)[0]
         idx_audit = best_idx[np.argsort(snap["ai_scores"][best_idx])[-1]]
         winner_rank = np.sum(snap["ai_scores"] > snap["ai_scores"][idx_audit]) + 1
+
         min_dist = (
             min([abs(winner_rank - r) for r in snap["selected_ranks"]])
             if snap["selected_ranks"]
@@ -196,4 +246,5 @@ class GeneticSelectorStrategy(ILotteryStrategy):
                 else 0
             ),
             "percentile": float((1 - (winner_rank / len(snap["universe"]))) * 100),
+            "univ_size": snap["univ_size"],
         }

@@ -8,7 +8,7 @@ import seaborn as sns
 def run_forensic_visualization():
     """
     Lee el archivo de auditoría generado por el backtester
-    y despliega el dashboard de rendimiento estadístico.
+    y despliega el dashboard de rendimiento estadístico V9.8.
     """
     # Ruta relativa desde la raíz del proyecto
     path = "data/backtest_results.json"
@@ -31,12 +31,21 @@ def run_forensic_visualization():
         # Configuración del entorno visual
         sns.set_theme(style="darkgrid")
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        fig.suptitle("Dashboard de Precisión MRPRO V9.7", fontsize=16)
+        fig.suptitle(
+            "Dashboard de Precisión MRPRO V9.8 - Ghost Sniper Edition", fontsize=16
+        )
 
         # Panel 1: Histograma de Ranks
         sns.histplot(df["rank"], bins=20, kde=True, ax=axes[0], color="skyblue")
         axes[0].set_title("Distribución de Ranks Ganadores")
         axes[0].set_xlabel("Posición en el Ranking")
+
+        # --- PALETA DE ALTO CONTRASTE REVISADA V9.8.1 ---
+        # 3 hits: Negro
+        # 4 hits: Morado Claro (Medium Purple)
+        # 5 hits: Azul Marino (Navy)
+        # 6 hits: Dorado (Gold) - Preparado para el impacto directo
+        custom_palette = {3: "#BB2309", 4: "#6B42BE", 5: "#32A151", 6: "#FFD700"}
 
         # Panel 2: Correlación Score vs Rank
         sns.scatterplot(
@@ -44,8 +53,10 @@ def run_forensic_visualization():
             x="ai_score",
             y="rank",
             hue="hits",
-            palette="magma",
-            s=100,
+            palette=custom_palette,  # Aplicamos la paleta con soporte para 6 hits
+            s=130,  # Un poco más grandes para resaltar el morado y dorado
+            edgecolor="white",  # Mantenemos el borde para separar puntos encimados
+            alpha=0.9,  # Mayor opacidad para que los colores sean sólidos
             ax=axes[1],
         )
         axes[1].set_title("Consistencia: Score vs Rank")
