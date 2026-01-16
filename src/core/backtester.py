@@ -1,19 +1,21 @@
+import json
+import os
 from rich.console import Console
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
 from src.data_access.report import SniperReport
-from src.data_access.config import BEST_SETTINGS
 
 
 class BacktestEngine:
     """
-    Motor V5.8: Corregido para iteración limpia y reportes acumulados.
+    Motor V6.0: Backtest con persistencia de Auditoría Forense para Visualización.
     """
 
     def __init__(self):
         self.rules = MelateRetroRules()
         self.console = Console()
+        self.audit_history = []  # Memoria de auditoría para visualización
 
     def run(
         self,
@@ -23,24 +25,18 @@ class BacktestEngine:
         verbose: bool = False,
         pre_process_strategy: ILotteryStrategy = None,
     ) -> BacktestResultDTO:
-
-        strategy_name = strategy.__class__.__name__
-
-        # 1. ENCABEZADO GLOBAL
-        if verbose:
-            SniperReport.render_global_header(BEST_SETTINGS, config.num_tickets)
-
+        self.audit_history = []  # Reset al inicio
         total_investment = 0.0
         total_earnings = 0.0
         hits_distribution = {i: 0 for i in range(7)}
-
         funnel_stats = {
             "total_draws": 0,
             "opp_gold": 0,
             "opp_silver": 0,
-            "opp_trash": 0,
+            "opp_bronze": 0,
             "captured_gold": 0,
             "captured_silver": 0,
+            "captured_bronze": 0,
         }
 
         full_history = list(
@@ -50,82 +46,82 @@ class BacktestEngine:
         test_size = min(config.backtest_size, len(full_history))
         start_index = len(full_history) - test_size
 
-        # --- INICIO DEL BUCLE DE SORTEOS ---
         for i in range(start_index, len(full_history)):
             funnel_stats["total_draws"] += 1
             _, target_draw, target_id = full_history[i]
             target_tuple = tuple(sorted(target_draw[:6]))
             target_set = set(target_draw[:6])
 
-            # Datos históricos previos al sorteo actual
             past_data = full_history[:i]
             p_dates, p_nums, p_ids = zip(*past_data)
             current_history = DrawHistoryDTO(list(p_dates), list(p_nums), list(p_ids))
 
             # FASE 1: REDUCCIÓN
-            has_gold_potential = False
-            has_silver_potential = False
-
+            has_gold = has_silver = has_bronze = False
             if pre_process_strategy:
                 config.filter_overrides["verbose"] = False
                 univ_result = pre_process_strategy.predict(current_history, config)
+                if (
+                    hasattr(univ_result, "metadata")
+                    and "raw_ndarray" in univ_result.metadata
+                ):
+                    config.raw_universe_ptr = univ_result.metadata["raw_ndarray"]
 
-                if verbose:
-                    ac_s = getattr(univ_result, "metadata", {}).get("ac_survivors", 0)
-                    f_univ = getattr(univ_result, "metadata", {}).get("final_size", 0)
-                    SniperReport.render_phase1_summary(target_id, ac_s, f_univ)
+                # Verificación de Potencial
+                max_hit = 0
+                for t in univ_result.tickets:
+                    h = len(set(t) & target_set)
+                    if h > max_hit:
+                        max_hit = h
+                    if h == 6:
+                        break
 
-                universe_set = set(tuple(sorted(t)) for t in univ_result.tickets)
-                if target_tuple in universe_set:
-                    has_gold_potential = True
+                if max_hit == 6:
                     funnel_stats["opp_gold"] += 1
-                else:
-                    max_hit_in_univ = 0
-                    for t in univ_result.tickets:
-                        h = len(set(t) & target_set)
-                        if h > max_hit_in_univ:
-                            max_hit_in_univ = h
-                        if h == 5:
-                            break
-
-                    if max_hit_in_univ == 5:
-                        has_silver_potential = True
-                        funnel_stats["opp_silver"] += 1
-                    else:
-                        funnel_stats["opp_trash"] += 1
+                    has_gold = True
+                elif max_hit == 5:
+                    funnel_stats["opp_silver"] += 1
+                    has_silver = True
+                elif max_hit == 4:
+                    funnel_stats["opp_bronze"] += 1
+                    has_bronze = True
 
             # FASE 3: SELECCIÓN
             prediction = strategy.predict(current_history, config)
             prediction_set = set(tuple(sorted(t)) for t in prediction.tickets)
-            actually_captured = target_tuple in prediction_set
+            captured = target_tuple in prediction_set
 
-            # EVALUACIÓN FINANCIERA
+            # Auditoría y Guardado
+            if hasattr(strategy, "audit_winner"):
+                audit = strategy.audit_winner(current_history, config, target_draw)
+                audit["draw_id"] = int(target_id)
+                audit["actually_captured"] = captured
+                self.audit_history.append(audit)  # Guardamos para el JSON
+
             for ticket in prediction.tickets:
                 total_investment += self.rules.ticket_cost
                 h_nat, h_add = self.rules.validate_ticket(ticket, target_draw)
-                prize = self.rules.calculate_prize(h_nat, h_add)
-                total_earnings += prize
+                total_earnings += self.rules.calculate_prize(h_nat, h_add)
                 hits_distribution[h_nat] += 1
 
-            if actually_captured:
-                if has_gold_potential:
+            if captured:
+                if has_gold:
                     funnel_stats["captured_gold"] += 1
-                else:
+                elif has_silver:
                     funnel_stats["captured_silver"] += 1
+                elif has_bronze:
+                    funnel_stats["captured_bronze"] += 1
 
-            # TELEMETRÍA (Dentro del bucle, uno por sorteo)
             if verbose:
-                meta = getattr(prediction, "metadata", {})
-                audit = {}
-                if hasattr(strategy, "audit_winner"):
-                    audit = strategy.audit_winner(current_history, config, target_draw)
+                SniperReport.render_draw_summary(
+                    getattr(prediction, "metadata", {}), audit
+                )
 
-                audit["actually_captured"] = actually_captured
-                SniperReport.render_draw_summary(meta, audit)
+        # PERSISTENCIA: Guardar resultados para visualización
+        os.makedirs("data", exist_ok=True)
+        with open("data/backtest_results.json", "w") as f:
+            json.dump(self.audit_history, f, indent=4)
 
-        # --- FIN DEL BUCLE ---
-
-        # 2. DASHBOARD FINAL (FUERA DEL BUCLE)
         if verbose:
             SniperReport.render_final_dashboard(
                 test_size,
@@ -136,10 +132,10 @@ class BacktestEngine:
             )
 
         return BacktestResultDTO(
-            strategy_name=strategy_name,
-            total_draws_tested=test_size,
-            investment=total_investment,
-            earnings=total_earnings,
-            net_balance=total_earnings - total_investment,
-            hit_distribution=hits_distribution,
+            strategy.__class__.__name__,
+            test_size,
+            total_investment,
+            total_earnings,
+            total_earnings - total_investment,
+            hits_distribution,
         )

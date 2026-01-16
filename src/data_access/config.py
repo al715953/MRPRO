@@ -59,9 +59,9 @@ BEST_SETTINGS = {
     "threshold_elite": 0.57,  # Bajamos de 0.70 a 0.65 para capturar mejores candidatos
     "threshold_mid": 0.45,  # Bajamos de 0.60 a 0.55 para ampliar la red
     # Deep Dive
-    "threshold_ai_override": 0.84,  # Bajado de 0.85 para capturar casos límite
-    "geo_floor_percentile": 35.0,  # Bajado de 40.0 para incluir el P35 (~0.58)
-    "quota_stars": 4,  # Incrementamos un cupo para Super Stars por el umbral más bajo
+    "threshold_ai_override": 0.72,  # Bajado de 0.85 para capturar casos límite
+    "geo_floor_percentile": 50.0,  # Bajado de 40.0 para incluir el P35 (~0.58)
+    "quota_stars": 15,  # Incrementamos un cupo para Super Stars por el umbral más bajo
     # General
     "verbose": True,  # Logs detallados
 }

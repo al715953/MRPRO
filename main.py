@@ -7,6 +7,7 @@ from colorama import Fore, Style
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- DOMAIN & DATA ACCESS ---
+from src.data_access.visualizer import run_forensic_visualization
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.loader import MelateLoader
 from src.data_access.config import (
@@ -203,13 +204,21 @@ def main():
             elif sub_op == "3":
                 print(f"\n{Fore.MAGENTA}🧠 EJECUTANDO MISIÓN IA...{Style.RESET_ALL}")
                 # Corrección: Argumentos nombrados para seguridad total
-                engine.run(
-                    strategy=GeneticSelectorStrategy(),
-                    history=history,
-                    config=config,
-                    verbose=True,
-                    pre_process_strategy=UniverseReductionStrategy(),
-                )
+                try:
+                    engine.run(
+                        strategy=GeneticSelectorStrategy(),
+                        history=history,
+                        config=config,
+                        verbose=True,
+                        pre_process_strategy=UniverseReductionStrategy(),
+                    )
+                except Exception as e:
+                    print(
+                        f"{Fore.RED}❌ ERROR CRÍTICO EN BACKTEST: {e}{Style.RESET_ALL}"
+                    )
+                    import traceback
+
+                    traceback.print_exc()
 
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
@@ -239,6 +248,10 @@ def main():
                     f"{Fore.RED}❌ Error: Generación fallida. Revisa el Paso 5.{Style.RESET_ALL}"
                 )
             input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+
+        elif opcion == "8":
+            run_forensic_visualization()
+            input("\nPresione ENTER para volver al menú...")
 
         else:
             print(f"{Fore.RED}Opción inválida.{Style.RESET_ALL}")
