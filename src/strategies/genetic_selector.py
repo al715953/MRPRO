@@ -11,6 +11,13 @@ try:
 except ImportError:
     HAS_NUMBA = False
 
+try:
+    import cupy as cp
+
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
+
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
 from src.core.ai_scorer import LotteryAIModel
@@ -42,29 +49,16 @@ if HAS_NUMBA:
 
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    SELECTOR V9.8.7: Zero-Gap Saturation Edition.
-    - Especializado en capturar Ranks de élite (#3, #9, #21, #51, #88).
-    - Malla de saturación total en el Top 100 (Zancada max 5).
-    - Filtro de Diversidad: Máximo 4 números compartidos.
+    SELECTOR V9.9.1: Neural Mesh Expansion (Telemetry Fixed).
+    - Malla de saturación K-Medoids en GPU RTX 4070 Ti.
+    - Telemetría completa para Dashboard (AI, Geo, Percentile).
     """
 
     def __init__(self):
         self.ai_model = LotteryAIModel()
         self._last_trained_date = None
         self._matrix_cache = {"cluster_matrix": None, "hotness_vector": None}
-        self._forensic_snapshot = {
-            "universe": None,
-            "ai_scores": None,
-            "selected_ranks": [],
-            "univ_size": 0,
-        }
-
-    def _train_model(self, history: DrawHistoryDTO, total_balls: int):
-        last_date = history.dates[-1] if history.dates else "None"
-        if self._last_trained_date != last_date:
-            self.ai_model.train(history.winning_numbers, total_balls)
-            self._update_heuristic_matrices(history, total_balls)
-            self._last_trained_date = last_date
+        self._forensic_snapshot = {}
 
     def _update_heuristic_matrices(self, history: DrawHistoryDTO, total_balls: int):
         matrix = np.zeros((total_balls + 2, total_balls + 2), dtype=np.uint16)
@@ -92,135 +86,95 @@ class GeneticSelectorStrategy(ILotteryStrategy):
         norm_h = np.clip(raw_h / (np.max(raw_h) if np.max(raw_h) > 0 else 1), 0, 1.0)
         return (norm_c * 0.70) + (norm_h * 0.30)
 
-    def _check_diversity(
-        self, new_ticket: set, selected_tickets: List[set], max_overlap: int = 4
-    ) -> bool:
-        """Protección contra fallos ancla (máximo 4 repetidos)."""
-        for existing in selected_tickets:
-            if len(new_ticket.intersection(existing)) > max_overlap:
-                return False
-        return True
+    def _gpu_kmedoids_selection(
+        self, top_candidates_np: np.ndarray, num_clusters: int = 20
+    ) -> List[int]:
+        if not HAS_CUPY:
+            return list(range(num_clusters))
+
+        X = cp.asarray(top_candidates_np, dtype=cp.float32)
+        n_samples = X.shape[0]
+        initial_idx = cp.random.choice(n_samples, num_clusters, replace=False)
+        medoids = X[initial_idx]
+
+        for _ in range(10):
+            distances = cp.sum(cp.abs(X[:, cp.newaxis, :] - medoids), axis=2)
+            labels = cp.argmin(distances, axis=1)
+            new_medoids_idx = cp.zeros(num_clusters, dtype=cp.int32)
+            for k in range(num_clusters):
+                mask = labels == k
+                if cp.any(mask):
+                    cluster_points = X[mask]
+                    dist_in_cluster = cp.sum(
+                        cp.abs(cluster_points[:, cp.newaxis, :] - cluster_points),
+                        axis=(1, 2),
+                    )
+                    rel_idx = cp.argmin(dist_in_cluster)
+                    new_medoids_idx[k] = cp.where(mask)[0][rel_idx]
+                else:
+                    new_medoids_idx[k] = cp.random.randint(0, n_samples)
+
+            if cp.all(initial_idx == new_medoids_idx):
+                break
+            initial_idx = new_medoids_idx
+            medoids = X[initial_idx]
+
+        return initial_idx.get().tolist()
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
         num_target = config.num_tickets if config.num_tickets > 0 else 20
-
-        settings = config.filter_overrides
-        AI_THRESHOLD = settings.get("threshold_ai_override", 0.72)
-        GEO_P_FLOOR = settings.get("geo_floor_percentile", 50.0)
-
         candidates_np = getattr(config, "raw_universe_ptr", None)
         if candidates_np is None:
             return PredictionResultDTO("Error: Universe Missing", [])
 
-        self._train_model(history, config.total_balls)
+        last_date = history.dates[-1] if history.dates else "None"
+        if self._last_trained_date != last_date:
+            self.ai_model.train(history.winning_numbers, config.total_balls)
+            self._update_heuristic_matrices(history, config.total_balls)
+            self._last_trained_date = last_date
+
+        # Scoring Dual (AI + Geométrico)
         ticket_tuples = [tuple(x) for x in candidates_np]
-        raw_ai_scores = np.array(
-            self.ai_model.score_tickets(ticket_tuples), dtype=np.float32
-        )
+        raw_ai_scores = self.ai_model.score_tickets(ticket_tuples)
         final_geo_scores = self._calculate_scores(candidates_np, config.total_balls)
 
-        floor_val = np.percentile(final_geo_scores, GEO_P_FLOOR)
-        mask_viable = (final_geo_scores >= floor_val) | (raw_ai_scores >= AI_THRESHOLD)
+        # Selección Geométrica en el Top 1000
+        TOP_N_POOL = 1000
+        sorted_indices = np.argsort(raw_ai_scores)[::-1]
+        pool_indices = sorted_indices[:TOP_N_POOL]
+        pool_data = candidates_np[pool_indices]
 
-        indices_viables = np.where(mask_viable)[0]
-        sorted_indices = indices_viables[
-            np.argsort(raw_ai_scores[indices_viables])[::-1]
+        centroid_rel_indices = self._gpu_kmedoids_selection(pool_data, num_target)
+        final_indices = pool_indices[centroid_rel_indices]
+
+        final_selection = [list(candidates_np[idx]) for idx in final_indices]
+        selected_ranks = [
+            int(np.where(sorted_indices == idx)[0][0] + 1) for idx in final_indices
         ]
-
-        # --- MALLA ZERO-GAP (20 TICKETS) ---
-        # Saturamos el Top 100 para capturar el #1551 (Rank #51) y similares.
-        priority_ranks = [
-            # P1: Cúspide (Zancada quirúrgica)
-            0,
-            1,
-            2,
-            3,
-            4,
-            8,
-            12,
-            16,
-            20,
-            # P2: Zona Oro (Zancada 5 para cerrar el gap del #51)
-            25,
-            30,
-            35,
-            40,
-            45,
-            50,
-            55,
-            60,
-            # P3: Zona Plata (Zancada controlada hasta el Rank 150)
-            70,
-            90,
-            120,
-            150,
-        ]
-
-        target_ranks = sorted(list(set(priority_ranks[:num_target])))
-        final_selection, selected_ranks, seen_sets = [], [], []
-
-        for r_idx in target_ranks:
-            if r_idx >= len(sorted_indices):
-                continue
-
-            search_ptr = r_idx
-            found_diverse = False
-            while search_ptr < r_idx + 30 and search_ptr < len(sorted_indices):
-                idx = sorted_indices[search_ptr]
-                tup = tuple(sorted(candidates_np[idx]))
-                tup_set = set(tup)
-
-                if tup_set not in seen_sets and self._check_diversity(
-                    tup_set, seen_sets, 4
-                ):
-                    final_selection.append(list(tup))
-                    selected_ranks.append(search_ptr + 1)
-                    seen_sets.append(tup_set)
-                    found_diverse = True
-                    break
-                search_ptr += 1
-
-            if not found_diverse and r_idx < len(sorted_indices):
-                idx = sorted_indices[r_idx]
-                tup = tuple(sorted(candidates_np[idx]))
-                if set(tup) not in seen_sets:
-                    final_selection.append(list(tup))
-                    selected_ranks.append(r_idx + 1)
-                    seen_sets.append(set(tup))
-
-            if len(final_selection) >= num_target:
-                break
 
         self._forensic_snapshot = {
             "universe": candidates_np,
             "ai_scores": raw_ai_scores,
             "geo_scores": final_geo_scores,
-            "selected_ranks": selected_ranks,
+            "selected_ranks": sorted(selected_ranks),
             "univ_size": len(candidates_np),
         }
 
-        return PredictionResultDTO(
-            f"Zero-Gap V9.8.7 ({len(final_selection)} TKT)", final_selection
-        )
+        return PredictionResultDTO(f"Neural Mesh V9.9.1 (GPU)", final_selection)
 
     def audit_winner(self, history, config, winning_ticket) -> dict:
         snap = self._forensic_snapshot
-        if snap["universe"] is None:
-            return {"found": False}
         target = np.array(sorted(winning_ticket[:6]))
         hits = np.sum(np.isin(snap["universe"], target), axis=1)
         max_hits = int(np.max(hits))
-        best_idx = np.where(hits == max_hits)[0]
-        idx_audit = best_idx[np.argsort(snap["ai_scores"][best_idx])[-1]]
-        winner_rank = np.sum(snap["ai_scores"] > snap["ai_scores"][idx_audit]) + 1
+        best_idx_group = np.where(hits == max_hits)[0]
 
-        min_dist = (
-            min([abs(winner_rank - r) for r in snap["selected_ranks"]])
-            if snap["selected_ranks"]
-            else 0
-        )
+        # Encontrar el mejor índice basado en AI score dentro del grupo de aciertos
+        idx_audit = best_idx_group[np.argsort(snap["ai_scores"][best_idx_group])[-1]]
+        winner_rank = np.sum(snap["ai_scores"] > snap["ai_scores"][idx_audit]) + 1
+        min_dist = min([abs(winner_rank - r) for r in snap["selected_ranks"]])
 
         return {
             "found": max_hits >= 4,
@@ -228,7 +182,8 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             "rank": int(winner_rank),
             "proximity": int(min_dist),
             "ai_score": float(snap["ai_scores"][idx_audit]),
-            "geo_score": float(snap.get("geo_scores", np.zeros(1))[idx_audit]),
-            "percentile": float((1 - (winner_rank / len(snap["universe"]))) * 100),
+            "geo_score": float(snap["geo_scores"][idx_audit]),
+            "percentile": float((1 - (winner_rank / snap["univ_size"])) * 100),
             "univ_size": snap["univ_size"],
+            "selected_ranks": snap["selected_ranks"],
         }
