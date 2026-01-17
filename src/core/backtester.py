@@ -8,28 +8,19 @@ from src.data_access.report import SniperReport
 
 
 class BacktestEngine:
-    """
-    Motor V6.1: Auditoría de Captura Real (Proximity 0).
-    Asegura que los HITS en el log y el Dashboard final sean capturas físicas, no solo potencial.
-    """
+    """Motor V6.1.1: Estable, Secuencial y libre de errores de RAM."""
 
     def __init__(self):
         self.rules = MelateRetroRules()
         self.console = Console()
         self.audit_history = []
 
-    def run(
-        self,
-        strategy: ILotteryStrategy,
-        history: DrawHistoryDTO,
-        config: PredictionConfigDTO,
-        verbose: bool = False,
-        pre_process_strategy: ILotteryStrategy = None,
-    ) -> BacktestResultDTO:
+    def run(self, strategy, history, config, verbose=False, pre_process_strategy=None):
         self.audit_history = []
         total_investment = 0.0
         total_earnings = 0.0
         hits_distribution = {i: 0 for i in range(7)}
+
         funnel_stats = {
             "total_draws": 0,
             "opp_gold": 0,
@@ -56,42 +47,43 @@ class BacktestEngine:
             p_dates, p_nums, p_ids = zip(*past_data)
             current_history = DrawHistoryDTO(list(p_dates), list(p_nums), list(p_ids))
 
-            # --- FASE 1: REDUCCIÓN (POTENCIAL DEL UNIVERSO) ---
+            # FASE 1: REDUCCIÓN (POTENCIAL)
             current_univ_size = 0
             if pre_process_strategy:
                 config.filter_overrides["verbose"] = False
                 univ_result = pre_process_strategy.predict(current_history, config)
 
                 if hasattr(univ_result, "metadata"):
-                    current_univ_size = univ_result.metadata.get("final_size", 0)
-                    config.raw_universe_ptr = univ_result.metadata["raw_ndarray"]
+                    meta = univ_result.metadata
+                    current_univ_size = meta.get("final_size", 0)
+                    config.raw_universe_ptr = meta.get("raw_ndarray")
 
-                max_hit_in_univ = 0
+                # CORRECCIÓN DE LA VARIABLE NameError: max_hit_univ
+                max_hit_univ = 0
                 for t in univ_result.tickets:
                     h = len(set(t) & target_set)
-                    if h > max_hit_in_univ:
-                        max_hit_in_univ = h
+                    if h > max_hit_univ:
+                        max_hit_univ = h
                     if h == 6:
                         break
 
-                if max_hit_in_univ == 6:
+                if max_hit_univ == 6:
                     funnel_stats["opp_gold"] += 1
-                elif max_hit_in_univ == 5:
+                elif max_hit_univ == 5:
                     funnel_stats["opp_silver"] += 1
-                elif max_hit_in_univ == 4:
+                elif max_hit_univ == 4:
                     funnel_stats["opp_bronze"] += 1
 
-            # --- FASE 3: SELECCIÓN (CAPTURA REAL) ---
+            # FASE 3: SELECCIÓN
             prediction = strategy.predict(current_history, config)
 
-            # Auditoría Forense
             audit = {}
             if hasattr(strategy, "audit_winner"):
                 audit = strategy.audit_winner(current_history, config, target_draw)
                 audit["draw_id"] = int(target_id)
                 audit["univ_size"] = current_univ_size
 
-            # Verificación de tickets realmente comprados
+            # Cálculo de premios real
             max_hits_captured = 0
             for ticket in prediction.tickets:
                 total_investment += self.rules.ticket_cost
@@ -101,15 +93,15 @@ class BacktestEngine:
                 if h_nat > max_hits_captured:
                     max_hits_captured = h_nat
 
-            # Sincronizamos la captura con el Funnel Stats
-            if max_hits_captured == 6:
-                funnel_stats["captured_gold"] += 1
-            elif max_hits_captured == 5:
-                funnel_stats["captured_silver"] += 1
-            elif max_hits_captured == 4:
-                funnel_stats["captured_bronze"] += 1
+            # Política de Honestidad (Proximity 0)
+            if audit.get("proximity", -1) == 0:
+                if max_hits_captured == 6:
+                    funnel_stats["captured_gold"] += 1
+                elif max_hits_captured == 5:
+                    funnel_stats["captured_silver"] += 1
+                elif max_hits_captured == 4:
+                    funnel_stats["captured_bronze"] += 1
 
-            # El log solo dirá HIT si la distancia es 0 (verificado en report.py)
             if verbose:
                 SniperReport.render_draw_summary(
                     getattr(prediction, "metadata", {}), audit
@@ -117,7 +109,7 @@ class BacktestEngine:
 
             self.audit_history.append(audit)
 
-        # Persistencia para Visualizer
+        # PERSISTENCIA
         os.makedirs("data", exist_ok=True)
         with open("data/backtest_results.json", "w") as f:
             json.dump(self.audit_history, f, indent=4)

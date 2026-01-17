@@ -42,10 +42,10 @@ if HAS_NUMBA:
 
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    SELECTOR V9.8.4: Saturation & Diversity Engine.
-    - Implementa Malla Quirúrgica para Ranks críticos (#238, #171).
-    - Filtro de Diversidad: Máximo 4 números compartidos entre tickets.
-    - Adaptativo: Escala dinámicamente según 'num_tickets' (Max 25 real).
+    SELECTOR V9.8.7: Zero-Gap Saturation Edition.
+    - Especializado en capturar Ranks de élite (#3, #9, #21, #51, #88).
+    - Malla de saturación total en el Top 100 (Zancada max 5).
+    - Filtro de Diversidad: Máximo 4 números compartidos.
     """
 
     def __init__(self):
@@ -95,7 +95,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
     def _check_diversity(
         self, new_ticket: set, selected_tickets: List[set], max_overlap: int = 4
     ) -> bool:
-        """Verifica que el ticket no comparta más de N números con los ya elegidos."""
+        """Protección contra fallos ancla (máximo 4 repetidos)."""
         for existing in selected_tickets:
             if len(new_ticket.intersection(existing)) > max_overlap:
                 return False
@@ -104,8 +104,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
-        # Recuperamos la cantidad de tickets del input del usuario
-        num_target = config.num_tickets if config.num_tickets > 0 else 15
+        num_target = config.num_tickets if config.num_tickets > 0 else 20
 
         settings = config.filter_overrides
         AI_THRESHOLD = settings.get("threshold_ai_override", 0.72)
@@ -130,59 +129,49 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             np.argsort(raw_ai_scores[indices_viables])[::-1]
         ]
 
-        # --- MALLA DE PRIORIDAD V9.8.4 (SATURACIÓN) ---
-        # Ranks optimizados para capturar el #171, #238 y dispersar el riesgo.
+        # --- MALLA ZERO-GAP (20 TICKETS) ---
+        # Saturamos el Top 100 para capturar el #1551 (Rank #51) y similares.
         priority_ranks = [
-            # P1: Cúspide (6 Tkts)
+            # P1: Cúspide (Zancada quirúrgica)
             0,
             1,
             2,
             3,
             4,
-            15,
-            # P2: Zona Dorada - Saturación (8 Tkts)
+            8,
+            12,
+            16,
+            20,
+            # P2: Zona Oro (Zancada 5 para cerrar el gap del #51)
+            25,
             30,
+            35,
+            40,
+            45,
+            50,
             55,
-            80,
-            105,
-            130,
-            155,
-            180,
-            205,
-            # P3: Zona de Plata - Resolución Fina (11 Tkts)
-            235,
-            265,
-            295,
-            330,
-            370,
-            410,
-            450,
-            500,
-            550,
-            600,
-            800,
+            60,
+            # P3: Zona Plata (Zancada controlada hasta el Rank 150)
+            70,
+            90,
+            120,
+            150,
         ]
 
-        # Filtramos la lista según el número de tickets solicitados
         target_ranks = sorted(list(set(priority_ranks[:num_target])))
-
         final_selection, selected_ranks, seen_sets = [], [], []
 
         for r_idx in target_ranks:
             if r_idx >= len(sorted_indices):
                 continue
 
-            # Buscamos el mejor candidato a partir del rank objetivo que cumpla diversidad
             search_ptr = r_idx
             found_diverse = False
-
-            # Buscamos en una ventana de 50 posiciones para no perder la esencia del rank
-            while search_ptr < r_idx + 50 and search_ptr < len(sorted_indices):
+            while search_ptr < r_idx + 30 and search_ptr < len(sorted_indices):
                 idx = sorted_indices[search_ptr]
                 tup = tuple(sorted(candidates_np[idx]))
                 tup_set = set(tup)
 
-                # Regla 1: No duplicados | Regla 2: Máximo 4 números repetidos
                 if tup_set not in seen_sets and self._check_diversity(
                     tup_set, seen_sets, 4
                 ):
@@ -193,7 +182,6 @@ class GeneticSelectorStrategy(ILotteryStrategy):
                     break
                 search_ptr += 1
 
-            # Fallback: Si no hay diverso en la ventana, tomamos el original para no perder el ticket
             if not found_diverse and r_idx < len(sorted_indices):
                 idx = sorted_indices[r_idx]
                 tup = tuple(sorted(candidates_np[idx]))
@@ -214,7 +202,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
         }
 
         return PredictionResultDTO(
-            f"Sniper V9.8.4-Div ({len(final_selection)} TKT)", final_selection
+            f"Zero-Gap V9.8.7 ({len(final_selection)} TKT)", final_selection
         )
 
     def audit_winner(self, history, config, winning_ticket) -> dict:
@@ -240,11 +228,7 @@ class GeneticSelectorStrategy(ILotteryStrategy):
             "rank": int(winner_rank),
             "proximity": int(min_dist),
             "ai_score": float(snap["ai_scores"][idx_audit]),
-            "geo_score": (
-                float(snap.get("geo_scores", np.zeros(1))[idx_audit])
-                if "geo_scores" in snap
-                else 0
-            ),
+            "geo_score": float(snap.get("geo_scores", np.zeros(1))[idx_audit]),
             "percentile": float((1 - (winner_rank / len(snap["universe"]))) * 100),
             "univ_size": snap["univ_size"],
         }
