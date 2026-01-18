@@ -1,16 +1,13 @@
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    TimeElapsedColumn,
-    BarColumn,
-    TextColumn,
-)
+import json
+import os
+import time
 from rich.console import Console
 from rich.table import Table
 from rich import box
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
+from src.data_access.report import SniperReport
 
 
 class BacktestEngine:
@@ -61,7 +58,6 @@ class BacktestEngine:
             "captured_4": 0,
         }
 
-        # Preparar historia
         full_history = list(
             zip(history.dates, history.winning_numbers, history.concursos)
         )

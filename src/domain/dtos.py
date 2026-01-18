@@ -1,8 +1,11 @@
+import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Any, Dict, Tuple, Optional
 
 
-# --- DTOs Existentes (Se mantienen igual) ---
+# --- Infraestructura de Datos Base ---
+
+
 @dataclass
 class DrawHistoryDTO:
     dates: List[Any]
@@ -16,7 +19,8 @@ class PredictionConfigDTO:
     ticket_size: int
     num_tickets: int
     backtest_size: int = 10
-    # NUEVO: Diccionario para inyectar hiperparámetros desde el Backtester
+    # DECLARACIÓN PARA EL IDE:
+    raw_universe_ptr: Optional[np.ndarray] = None
     filter_overrides: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -24,6 +28,8 @@ class PredictionConfigDTO:
 class PredictionResultDTO:
     strategy_name: str
     tickets: List[List[int]]
+    # Contenedor para evidencia forense (Rank, AI Score, Geo Score, etc.)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,7 +42,7 @@ class BacktestResultDTO:
     hit_distribution: Dict[int, int]
 
 
-# --- NUEVO: Infraestructura de Filtrado ---
+# --- Infraestructura de Filtrado de Alto Rendimiento ---
 
 
 class CandidateCombination:
@@ -55,7 +61,6 @@ class CandidateCombination:
     )
 
     def __init__(self, numbers: Tuple[int, ...]):
-        # Asumimos que los números ya entran ordenados
         self.numbers = numbers
         self._total_sum: Optional[int] = None
         self._even_count: Optional[int] = None
@@ -77,21 +82,13 @@ class CandidateCombination:
 
     @property
     def primes_count(self) -> int:
-        """Cuenta cuántos números primos tiene la combinación."""
         if self._primes_count is None:
-            # Primos hasta el 56 (Melate Retro es 39, pero cubrimos más por si acaso)
             primes = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53}
             self._primes_count = sum(1 for n in self.numbers if n in primes)
         return self._primes_count
 
     @property
     def ac_value(self) -> int:
-        """
-        Arithmetic Complexity (Complejidad Aritmética).
-        AC = D - (r - 1)
-        Donde D = número de diferencias únicas entre todos los pares.
-        r = tamaño del ticket (ej. 6).
-        """
         if self._ac_value is None:
             diffs = set()
             n_len = len(self.numbers)
@@ -99,14 +96,10 @@ class CandidateCombination:
                 for j in range(i + 1, n_len):
                     d = self.numbers[j] - self.numbers[i]
                     diffs.add(d)
-
-            # Fórmula oficial
             self._ac_value = len(diffs) - (n_len - 1)
         return self._ac_value
 
     def has_numbers_from(self, other_numbers: List[int]) -> bool:
-        """Verifica eficientemente si hay intersección con otra lista (ej. sorteo anterior)."""
-        # Convertimos a set solo lo necesario para intersección rápida
         return not set(self.numbers).isdisjoint(other_numbers)
 
     def __repr__(self):
