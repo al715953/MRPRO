@@ -1,17 +1,18 @@
-import pandas as pd
 import numpy as np
 import os
 import itertools
-from collections import Counter
 from typing import List, Tuple
-from rich.console import Console
-from rich.progress import track
+
+try:
+    import cupy as cp
+
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
 
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
 from src.core.ai_scorer import LotteryAIModel
-
-console = Console()
 
 
 class GeneticSelectorStrategy(ILotteryStrategy):
