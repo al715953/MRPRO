@@ -3,9 +3,8 @@ import pandas as pd
 import os
 import itertools
 from collections import Counter
-from typing import List, Tuple, Dict, Any
-
-# --- RICH UI ---
+from typing import List, Tuple
+from numba import jit
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -14,222 +13,167 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-# --- GPU (CuPy) - Engine V9.3 ---
 try:
     import cupy as cp
 
     HAS_CUPY = True
-    pool = cp.cuda.MemoryPool(cp.cuda.malloc_managed)
-    cp.cuda.set_allocator(pool.malloc)
 except ImportError:
     HAS_CUPY = False
-
-# --- CPU (Numba JIT) ---
-try:
-    from numba import jit
-
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
 
 from src.domain.interfaces import ILotteryStrategy
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
 from src.data_access.config import BEST_SETTINGS
 
-# --- CONFIGURACIÓN DE ALTA DENSIDAD ---
+# --- CONFIGURACIÓN HPC OPTIMIZADA ---
 RAW_GENERATION_SIZE = 5_000_000
 GPU_CHUNK_SIZE = 1_000_000
-BATCH_BUFFER_RATE = 1.9
+BATCH_BUFFER_RATE = 2.5  # Aumentado para compensar filtros
 
-if HAS_NUMBA:
 
-    @jit(nopython=True, fastmath=True, cache=True)
-    def check_ac_original(candidates, ac_min):
-        """Capa Numba: Filtro de Complejidad Aritmética de alto rendimiento."""
-        n_rows, n_cols = candidates.shape
-        keep_mask = np.empty(n_rows, dtype=np.bool_)
-        for i in range(n_rows):
-            diffs = np.zeros(15, dtype=np.int16)
-            count = 0
-            for j in range(n_cols):
-                for k in range(j + 1, n_cols):
-                    d = candidates[i, k] - candidates[i, j]
-                    exists = False
-                    for x in range(count):
-                        if diffs[x] == d:
-                            exists = True
-                            break
-                    if not exists:
-                        diffs[count] = d
-                        count += 1
-            ac_value = count - (n_cols - 1)
-            keep_mask[i] = ac_value >= ac_min
-        return keep_mask
+@jit(nopython=True, fastmath=True, cache=True)
+def check_ac_original(candidates, ac_min):
+    n_rows, n_cols = candidates.shape
+    keep_mask = np.empty(n_rows, dtype=np.bool_)
+    for i in range(n_rows):
+        diffs = np.zeros(15, dtype=np.int16)
+        count = 0
+        for j in range(n_cols):
+            for k in range(j + 1, n_cols):
+                d = candidates[i, k] - candidates[i, j]
+                exists = False
+                for x in range(count):
+                    if diffs[x] == d:
+                        exists = True
+                        break
+                if not exists:
+                    diffs[count] = d
+                    count += 1
+        keep_mask[i] = (count - 5) >= ac_min
+    return keep_mask
 
-else:
 
-    def check_ac_original(candidates, ac_min):
-        return np.ones(len(candidates), dtype=bool)
+@jit(nopython=True, fastmath=True, cache=True)
+def check_interval_harmony(candidates, max_gap=22):
+    """
+    Filtro Relaxed Harmony V9.5.1.
+    - max_gap subido de 15 a 22 para permitir dispersión natural.
+    """
+    n_rows, n_cols = candidates.shape
+    keep_mask = np.empty(n_rows, dtype=np.bool_)
+    for i in range(n_rows):
+        is_harmonious = True
+        consecutive_count = 0
+        for j in range(n_cols - 1):
+            gap = candidates[i, j + 1] - candidates[i, j]
+            if gap == 1:
+                consecutive_count += 1
+            else:
+                consecutive_count = 0
+            # Solo bloquea si hay 4 números seguidos (3 gaps de 1) o gap extremo
+            if consecutive_count >= 3 or gap > max_gap:
+                is_harmonious = False
+                break
+        keep_mask[i] = is_harmonious
+    return keep_mask
 
 
 def generate_hybrid_batch(
     target_total_raw, ticket_size, total_balls, weights_np, filter_cfg, verbose=False
 ):
-    """Motor de generación acelerado por GPU CuPy para reducción de universo."""
     pool_nums_gpu = cp.arange(1, total_balls + 1, dtype=cp.uint8)
     weights_gpu = cp.asarray(weights_np, dtype=cp.float32)
     weights_gpu /= weights_gpu.sum()
-
     survivors_gpu_list = []
     generated_count = 0
     total_raw_needed = int(target_total_raw * BATCH_BUFFER_RATE)
 
-    progress = None
-    if verbose:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold green]⚡ GPU Generating (Engine V9.3)...[/]"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-        )
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold green]⚡ Harmony Engine V9.5.1...[/]"),
+        BarColumn(),
+        disable=not verbose,
+    ) as progress:
         task = progress.add_task("GPU", total=total_raw_needed)
-        progress.start()
-
-    try:
         while generated_count < total_raw_needed:
-            remaining = total_raw_needed - generated_count
-            current_chunk = min(remaining, GPU_CHUNK_SIZE)
-
-            # Generación aleatoria ponderada en el espacio de la GPU
+            chunk = min(total_raw_needed - generated_count, GPU_CHUNK_SIZE)
             raw_batch = cp.random.choice(
-                pool_nums_gpu,
-                size=(current_chunk, ticket_size),
-                replace=True,
-                p=weights_gpu,
+                pool_nums_gpu, size=(chunk, ticket_size), replace=True, p=weights_gpu
             ).astype(cp.uint8)
             raw_batch.sort(axis=1)
-
-            # Filtro de duplicados internos (vectorización CuPy)
-            diffs = cp.diff(raw_batch, axis=1)
-            mask = cp.min(diffs, axis=1) > 0
-            candidates = raw_batch[mask]
-
-            if len(candidates) > 0:
-                # Filtro de Suma optimizado
-                sums = cp.sum(candidates, axis=1)
-                mask_f = (sums >= filter_cfg["sum_min"]) & (
-                    sums <= filter_cfg["sum_max"]
-                )
-                valid_gpu = candidates[mask_f]
-                if len(valid_gpu) > 0:
-                    survivors_gpu_list.append(cp.asnumpy(valid_gpu))
-
-            generated_count += current_chunk
-            if verbose and progress:
-                progress.update(task, advance=current_chunk)
-    finally:
-        if verbose and progress:
-            progress.stop()
+            mask = (
+                (cp.min(cp.diff(raw_batch, axis=1), axis=1) > 0)
+                & (cp.sum(raw_batch, axis=1) >= filter_cfg["sum_min"])
+                & (cp.sum(raw_batch, axis=1) <= filter_cfg["sum_max"])
+            )
+            if cp.any(mask):
+                survivors_gpu_list.append(cp.asnumpy(raw_batch[mask]))
+            generated_count += chunk
+            progress.update(task, advance=chunk)
 
     if not survivors_gpu_list:
         return np.array([]), 0
+    candidates = np.unique(np.concatenate(survivors_gpu_list, axis=0), axis=0)
 
-    # Consolidación en memoria CPU
-    candidates_cpu = np.concatenate(survivors_gpu_list, axis=0)
-    candidates_cpu = np.unique(candidates_cpu, axis=0)
+    # Aplicar filtros con Válvula de Seguridad
+    filtered = candidates[check_interval_harmony(candidates, max_gap=22)]
+    if len(filtered) < 1000:  # Si el filtro mató casi todo, recuperamos originales
+        filtered = candidates
 
-    # Filtrado AC vía Numba
-    ac_survivors_count = 0
-    if len(candidates_cpu) > 0:
-        mask_ac = check_ac_original(candidates_cpu, filter_cfg["ac_min"])
-        candidates_cpu = candidates_cpu[mask_ac]
-        ac_survivors_count = len(candidates_cpu)
-
-    return candidates_cpu, ac_survivors_count
+    filtered = filtered[check_ac_original(filtered, filter_cfg["ac_min"])]
+    return filtered, len(filtered)
 
 
 class UniverseReductionStrategy(ILotteryStrategy):
-    """
-    Fase 1: Reducción de Universo V9.3 (Zero-Copy HPC).
-    Implementa un Corte Técnico P80 para garantizar agilidad en la Fase 3.
-    """
-
-    def predict(
-        self, history: DrawHistoryDTO, config: PredictionConfigDTO
-    ) -> PredictionResultDTO:
-        overrides = getattr(config, "filter_overrides", {})
-        verbose = overrides.get("verbose", False)
-
-        # 1. Configuración Táctica
-        final_cfg = BEST_SETTINGS.copy()
-        final_cfg.update(overrides)
-
-        # 2. Análisis de Pesos (Frecuencia Histórica)
-        freq_counter = Counter()
-        for draw in history.winning_numbers:
-            freq_counter.update(draw[:6])
-
-        weights_np = np.array(
-            [freq_counter.get(n, 1) + 1 for n in range(1, config.total_balls + 1)],
-            dtype=float,
-        )
-        weights_np /= weights_np.sum()
-
-        # 3. Pre-cálculo de Matriz de Adyacencia para Scoring Geométrico
-        cluster_matrix = np.zeros(
-            (config.total_balls + 1, config.total_balls + 1), dtype=np.uint16
-        )
+    def _calculate_geo_scores(self, candidates, history):
+        matrix = np.zeros((41, 41), dtype=np.uint16)
         for draw in history.winning_numbers:
             for a, b in itertools.combinations(sorted(draw[:6]), 2):
-                cluster_matrix[a, b] += 1
-                cluster_matrix[b, a] += 1
+                matrix[a, b] += 1
+                matrix[b, a] += 1
+        scores = np.zeros(len(candidates), dtype=np.int32)
+        for i in range(len(candidates)):
+            r = candidates[i]
+            for j in range(6):
+                for k in range(j + 1, 6):
+                    scores[i] += matrix[r[j], r[k]]
+        return scores
 
-        # 4. Ejecución del Motor Híbrido (GPU + Numba)
-        candidates, ac_surv = generate_hybrid_batch(
-            RAW_GENERATION_SIZE,
-            config.ticket_size,
-            config.total_balls,
-            weights_np,
-            final_cfg,
-            verbose,
+    def predict(self, history, config):
+        final_cfg = BEST_SETTINGS.copy()
+        final_cfg.update(getattr(config, "filter_overrides", {}))
+        freq = Counter([n for d in history.winning_numbers for n in d[:6]])
+        weights = np.array(
+            [freq.get(n, 1) + 1 for n in range(1, config.total_balls + 1)], dtype=float
         )
 
+        candidates, _ = generate_hybrid_batch(
+            RAW_GENERATION_SIZE,
+            6,
+            39,
+            weights,
+            final_cfg,
+            final_cfg.get("verbose", False),
+        )
         if len(candidates) == 0:
             return PredictionResultDTO("Empty", [])
 
-        # 5. Scoring Geométrico Vectorizado
-        n = len(candidates)
-        scores = np.zeros(n, dtype=int)
-        for i in range(n):
-            row = candidates[i]
-            s = 0
-            for j in range(config.ticket_size):
-                for k in range(j + 1, config.ticket_size):
-                    s += cluster_matrix[row[j], row[k]]
-            scores[i] = s
+        scores = self._calculate_geo_scores(candidates, history)
+        # Rescate Equilibrado
+        d1 = np.sum((candidates >= 1) & (candidates <= 9), axis=1)
+        d2 = np.sum((candidates >= 10) & (candidates <= 19), axis=1)
+        d3 = np.sum((candidates >= 20) & (candidates <= 29), axis=1)
+        d4 = np.sum((candidates >= 30) & (candidates <= 39), axis=1)
+        balanced_mask = (d1 >= 1) & (d2 >= 1) & (d3 >= 1) & (d4 >= 1)
 
-        # 6. CORTE TÉCNICO V9.3 (Punto de Equilibrio Rendimiento/Recall)
-        # Fijamos P80 para mantener un universo manejable de ~300k candidatos.
-        # Esto evita la saturación de memoria en el scoring de la IA.
-        TECHNICAL_REDUCTION_P = 92.0
-        threshold = np.percentile(scores, TECHNICAL_REDUCTION_P)
-        final_universe_np = candidates[scores >= threshold]
+        threshold = np.percentile(scores, 85.0)
+        final_universe = candidates[
+            (scores >= threshold)
+            | (balanced_mask & (scores >= np.percentile(scores, 60.0)))
+        ]
 
-        # 7. PERSISTENCIA Y TRANSFERENCIA ZERO-COPY
-        # Guardamos en disco para análisis forense, pero usamos RAM para ejecución activa.
-        os.makedirs("data", exist_ok=True)
-        pd.DataFrame(final_universe_np).to_csv(
-            os.path.join("data", "universo_reducido.csv"), index=False
-        )
-
-        # Inyectamos el ndarray en metadatos para evitar lecturas de disco en el Sniper
-        res = PredictionResultDTO(
-            "Universe V9.3 - Zero-Copy", [tuple(x) for x in final_universe_np]
-        )
+        res = PredictionResultDTO("Universe V9.5.1", [tuple(x) for x in final_universe])
         res.metadata = {
-            "ac_survivors": int(ac_surv),
-            "final_size": int(len(final_universe_np)),
-            "raw_ndarray": final_universe_np,  # <--- PUNTERO CRÍTICO HPC
+            "final_size": len(final_universe),
+            "raw_ndarray": final_universe,
         }
         return res
