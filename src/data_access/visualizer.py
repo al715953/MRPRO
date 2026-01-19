@@ -7,7 +7,10 @@ import seaborn as sns
 
 
 def run_forensic_visualization():
-    """Visualizador V3.4: Dashboard de Saturación Neural (2x2)."""
+    """
+    Visualizador V3.5: Dashboard de Precisión Alpha Sniper (3x2).
+    Añade análisis de correlación de confianza y tendencia de proximidad.
+    """
     path = "data/backtest_results.json"
 
     if not os.path.exists(path):
@@ -21,24 +24,25 @@ def run_forensic_visualization():
     if df.empty:
         return
 
-    # --- CONFIGURACIÓN DE COLORES SNIPER ---
+    # --- CONFIGURACIÓN ESTÉTICA ---
     custom_palette = {3: "#A9A9A9", 4: "#FFD700", 5: "#228B22", 6: "#00FFFF"}
     sns.set_theme(style="darkgrid")
 
-    # Cambiamos a 2x2 para acomodar la nueva métrica
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    # Expandimos a 3 filas y 2 columnas
+    fig, axes = plt.subplots(3, 2, figsize=(18, 18))
     fig.suptitle(
-        "Dashboard de Precisión MRPRO V9.9.1 - Neural Mesh Edition",
-        fontsize=20,
+        "Dashboard de Misión Alpha Global - Sniper V3.5",
+        fontsize=22,
         fontweight="bold",
+        color="#1f77b4",
     )
 
-    # 1. DISTRIBUCIÓN DE RANKS (Arriba-Izquierda)
+    # 1. DISTRIBUCIÓN DE RANKS (0,0)
     sns.histplot(df["rank"], bins=30, kde=True, ax=axes[0, 0], color="skyblue")
-    axes[0, 0].set_title("Distribución Global de Ranks Ganadores", fontsize=14)
+    axes[0, 0].set_title("1. Distribución Global de Ranks Ganadores", fontsize=14)
     axes[0, 0].set_xlabel("Rank (IA Score)")
 
-    # 2. CONSISTENCIA: SCORE VS RANK (Arriba-Derecha)
+    # 2. CONSISTENCIA: SCORE VS RANK (0,1)
     sns.scatterplot(
         data=df[df["hits"] >= 3],
         x="ai_score",
@@ -51,35 +55,25 @@ def run_forensic_visualization():
         ax=axes[0, 1],
     )
     axes[0, 1].invert_yaxis()
-    axes[0, 1].set_title("Consistencia: AI Score vs Rank Real", fontsize=14)
+    axes[0, 1].set_title("2. Consistencia: AI Score vs Rank Real", fontsize=14)
 
-    # 3. AUDITORÍA DE DISTANCIA (Abajo-Izquierda)
+    # 3. AUDITORÍA DE DISTANCIA (1,0)
     sns.boxplot(y=df["proximity"], ax=axes[1, 0], color="salmon", width=0.4)
     sns.stripplot(y=df["proximity"], color="black", alpha=0.3, ax=axes[1, 0])
-    axes[1, 0].set_title("Desviación de Malla (Proximity)", fontsize=14)
+    axes[1, 0].set_title("3. Desviación de Malla (Proximity)", fontsize=14)
     axes[1, 0].set_ylabel("Distancia al Ticket más cercano")
 
-    # 4. NUEVO: MAPA DE CALOR DE SATURACIÓN (Abajo-Derecha)
-    # Visualizamos los 20 Ranks seleccionados vs el Rank ganador por sorteo
-    draws = []
-    ranks_selected = []
-
-    # Aplanamos los datos para el heatmap de puntos
+    # 4. MAPA DE SATURACIÓN (1,1)
+    draws, ranks_selected = [], []
     for i, row in df.iterrows():
         d_id = row.get("draw_id", i)
-        winner_r = row["rank"]
-        selected_rs = row.get("selected_ranks", [])
-
-        for r in selected_rs:
+        for r in row.get("selected_ranks", []):
             draws.append(d_id)
             ranks_selected.append(r)
 
-    # Graficamos la malla (los 20 tickets)
     axes[1, 1].scatter(
-        draws, ranks_selected, s=5, color="gray", alpha=0.3, label="Malla (20 Tkt)"
+        draws, ranks_selected, s=5, color="gray", alpha=0.2, label="Malla"
     )
-
-    # Graficamos el ganador (Highlight)
     sns.scatterplot(
         data=df,
         x="draw_id",
@@ -91,17 +85,48 @@ def run_forensic_visualization():
         ax=axes[1, 1],
         legend=False,
     )
-
-    axes[1, 1].set_yscale("log")  # Escala logarítmica para ver mejor el Top 100
+    axes[1, 1].set_yscale("log")
     axes[1, 1].invert_yaxis()
-    axes[1, 1].set_title(
-        "Mapa de Saturación: Malla vs Ganador (Log Scale)", fontsize=14
+    axes[1, 1].set_title("4. Saturación: Malla vs Ganador (Log Scale)", fontsize=14)
+
+    # --- NUEVAS MÉTRICAS ALPHA GLOBAL ---
+
+    # 5. CORRELACIÓN: CONFIANZA VS PROXIMIDAD (2,0)
+    # Aquí vemos si la repulsión dinámica funciona: A mayor Score, menor Proximidad.
+    sns.regplot(
+        data=df,
+        x="ai_score",
+        y="proximity",
+        scatter_kws={"alpha": 0.5, "s": 80, "color": "purple"},
+        line_kws={"color": "red", "label": "Tendencia de Colapso"},
+        ax=axes[2, 0],
     )
-    axes[1, 1].set_xlabel("Sorteo ID")
-    axes[1, 1].set_ylabel("Rank")
+    axes[2, 0].set_title(
+        "5. Correlación: Confianza (AI) vs Distancia Crítica", fontsize=14
+    )
+    axes[2, 0].set_xlabel("AI Confidence Score")
+    axes[2, 0].set_ylabel("Distancia (Proximity)")
+
+    # 6. EVOLUCIÓN TEMPORAL DE PROXIMIDAD (2,1)
+    # Nos dice si el Forensic Loop está mejorando el sistema sorteo tras sorteo.
+    axes[2, 1].plot(
+        df["draw_id"],
+        df["proximity"],
+        marker="o",
+        linestyle="-",
+        color="teal",
+        alpha=0.7,
+    )
+    axes[2, 1].axhline(y=10, color="red", linestyle="--", label="Zona de Éxito (<10)")
+    axes[2, 1].set_title("6. Evolución de la Distancia Crítica", fontsize=14)
+    axes[2, 1].set_xlabel("Sorteo ID")
+    axes[2, 1].set_ylabel("Distancia")
+    axes[2, 1].legend()
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-    # Guardar para inspección
-    plt.savefig("data/precision_dashboard_v9.9.png", dpi=300)
+    # Guardamos la versión mejorada
+    output_path = "data/alpha_global_dashboard_v3.5.png"
+    plt.savefig(output_path, dpi=300)
+    print(f"✅ Dashboard Alpha Sniper guardado en: {output_path}")
     plt.show()

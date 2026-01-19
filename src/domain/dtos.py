@@ -40,6 +40,7 @@ class BacktestResultDTO:
     earnings: float
     net_balance: float
     hit_distribution: Dict[int, int]
+    version_tag: str = "v1.0"
 
 
 # --- Infraestructura de Filtrado de Alto Rendimiento ---

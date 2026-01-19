@@ -1,67 +1,69 @@
 import os
 import sys
 
-# Detectar si estamos en modo Ejecutable (.exe) o Script (.py)
+# --- INFRAESTRUCTURA DE RUTAS ---
+# Detectar si estamos en modo Ejecutable (.exe) o Script (.py) para persistencia en Windows
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Carpetas
+# Carpetas de Proyecto
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
+if not os.path.exists(DATA_FOLDER):
+    os.makedirs(DATA_FOLDER)
 
-# Archivos
+# Archivos de Datos
 CSV_FILE_PATH = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
 FILE_APUESTAS = os.path.join(DATA_FOLDER, "Mis_Apuestas.csv")
+MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
+
+# --- IDENTIFICACIÓN DE MISIÓN ---
+# Etiqueta para la bitácora de experimentos
+VERSION_TAG = "V6.9.3 - Consistencia 5/6"
+
+# --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
 TICKET_SIZE = 6
-
-# URL Oficial
 URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQB0AGUALQBSAGUAdAByAG8A"
 
-# Constantes del Juego
-PRIMES = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}
-UNIVERSE_MAX = 39
+# --- CONFIGURACIÓN DE HARDWARE (UHPC) ---
+# Forzar uso de núcleos CUDA en RTX 4070 Ti
+GPU_ENABLED = True
+NUM_SIMULACIONES = 200000
+NUM_CANDIDATOS_MONTECARLO = 10000000
 
-# --- NUEVA CONFIGURACIÓN MONTECARLO ---
-NUM_SIMULACIONES = 200000  # 200k sorteos teóricos para calibrar
-NUM_CANDIDATOS = 10000000  # 10M combinaciones para generación masiva
-
-# Colores
-CYAN = "\033[0;36m"
-RESET = "\033[0m"
-VERDE = "\033[0;32m"
-BLANCO_B = "\033[1;37m"
-
-# --- CONFIGURACIÓN "CAMPEONA" (OPTIMIZADA) ---
-# Estos parámetros controlan los filtros de la FASE 1 (Universe Reduction).
-# Cualquier ticket que no cumpla esto, NI SIQUIERA llega a la IA.
+# --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
+# Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
-    # 1. Filtros Topológicos (Fase 1)
-    "sum_min": 112,
-    "sum_max": 128,
+    # 1. Filtros Topológicos (Fase 1: Harmony Engine)
+    "sum_min": 110,
+    "sum_max": 135,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
     "prime_min": 2,
     "prime_max": 3,
-    # 2. Pesos de Decisión (Fase 2)
-    # Define qué tanto caso le hacemos a cada experto
-    "w_cluster": 0.55,  # Importancia de la estructura geométrica
-    "w_hotness": 0.05,  # Importancia de la frecuencia reciente
-    "w_ai": 0.40,  # Importancia del modelo XGBoost
-    # 3. Alineación Táctica (Fase 3 - Cuotas)
-    # Cuántos tickets seleccionamos de cada estrato (Total 15)
-    "quota_elite": 3,  # Tickets con Score > 0.70 (Pocos, zona muerta reciente)
-    "quota_mid": 10,  # Tickets con Score 0.60-0.70 (Zona Calidad)
-    "quota_low": 2,  # Tickets con Score 0.50-0.60 (Zona Volumen/Guerra)
-    # --- NUEVO: UMBRALES DINÁMICOS ---
-    "threshold_elite": 0.85,  # Bajamos de 0.70 a 0.65 para capturar mejores candidatos
-    "threshold_mid": 0.45,  # Bajamos de 0.60 a 0.55 para ampliar la red
-    # Deep Dive
-    "threshold_ai_override": 0.72,  # Bajado de 0.85 para capturar casos límite
-    "geo_floor_percentile": 50.0,  # Bajado de 40.0 para incluir el P35 (~0.58)
-    "quota_stars": 15,  # Incrementamos un cupo para Super Stars por el umbral más bajo
+    # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
+    # scale_pos_weight: Eleva agresivamente los ganadores en el ranking
+    "scale_pos_weight": 7.5,
+    "n_estimators": 2000,
+    "learning_rate": 0.01,
+    # 3. Malla Cuántica (Fase 3: Genetic Selector)
+    # alpha_core_size: Asegura que el Top 5 de la IA sea inamovible
+    "alpha_core_size": 6,
+    # repulsion_strength: Controla el colapso de la malla (8.0 es el punto dulce)
+    "repulsion_strength": 5.0,
+    "sampling_top": 2,  # Tickets de cobertura aleatoria en el Top 100
+    # Umbrales de Calidad
+    "threshold_ai_override": 0.72,
+    "geo_floor_percentile": 50.0,
     # General
-    "verbose": True,  # Logs detallados
+    "verbose": True,
 }
+
+# --- ESTÉTICA DE CONSOLA (ANSI) ---
+CYAN = "\033[0;36m"
+VERDE = "\033[0;32m"
+BLANCO_B = "\033[1;37m"
+RESET = "\033[0m"

@@ -1,7 +1,8 @@
 import numpy as np
 import os
 import itertools
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
+from rich.console import Console
 
 try:
     import cupy as cp
@@ -15,279 +16,170 @@ from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResul
 from src.core.ai_scorer import LotteryAIModel
 
 
-def _gpu_dynamic_kmedoids(self, top_data, scores, n_clusters, expansion_factor):
-    """Clustering adaptativo con soporte híbrido (GPU/CPU)."""
-    # SELECCIÓN DE BACKEND
-    xp = cp if HAS_CUPY else np
-
-    X = xp.asarray(top_data, dtype=xp.float32)
-    S = xp.asarray(scores, dtype=xp.float32)
-    n_samples = X.shape[0]
-
-    # Potencia de probabilidad según factor de expansión
-    p_power = 2.0 if expansion_factor < 1.4 else 1.0
-    probs = xp.asnumpy(S**p_power)
-    probs /= probs.sum()
-
-    # Inicialización de medoides
-    initial_idx = xp.asarray(
-        np.random.choice(n_samples, n_clusters, replace=False, p=probs)
-    )
-    medoids = X[initial_idx]
-
-    # Bucle de optimización (K-Medoids)
-    for _ in range(15):
-        # Distancia Manhattan vectorial
-        distances = xp.sum(xp.abs(X[:, xp.newaxis, :] - medoids), axis=2)
-
-        # Factor de Atracción Gravitacional
-        weighted_dist = distances / (S[:, xp.newaxis] ** expansion_factor + 1e-6)
-        labels = xp.argmin(weighted_dist, axis=1)
-
-        new_idx = xp.zeros(n_clusters, dtype=xp.int32)
-        for k in range(n_clusters):
-            mask = labels == k
-            if xp.any(mask):
-                cluster_pts = X[mask]
-                # Cálculo de distancias internas para encontrar el nuevo medoide
-                d_int = xp.sum(
-                    xp.abs(cluster_pts[:, xp.newaxis, :] - cluster_pts), axis=(1, 2)
-                )
-                new_idx[k] = xp.where(mask)[0][xp.argmin(d_int)]
-            else:
-                # Si un cluster queda vacío, re-inicializar aleatoriamente
-                new_idx[k] = xp.asarray(np.random.choice(n_samples, p=probs))
-
-        if xp.all(initial_idx == new_idx):
-            break
-        initial_idx, medoids = new_idx, X[new_idx]
-
-    return (initial_idx.get() if HAS_CUPY else initial_idx).tolist()
-
-
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
-    ESTRATEGIA 'CENTAURO' V7 (Hybrid Ensemble) - ULTIMATE EDITION.
-
-    Arquitectura de 3 Capas de Blindaje:
-    1. VELOCIDAD: Cálculo Heurístico Vectorizado (Numpy).
-    2. ROBUSTEZ: Protocolo de Consenso de Estabilidad (5 Expertos IA).
-    3. DIVERSIDAD: Filtro 'Hard Cap Anti-Monopolio' para evitar fijación numérica.
+    SELECTOR V10.5: Quantum Alpha Core & Dynamic Mesh.
+    - Alpha-Core: Reserva determinista de los Ranks #1-#3 para evitar saltos de malla.
+    - GPA Dinámico: Ajusta la repulsión según la confianza de la IA (Top 10 Mean).
+    - Zero-Leak VRAM: Gestión explícita de memoria para estabilidad en Windows.
     """
+
+    def __init__(self):
+        self.ai_model = LotteryAIModel()
+        self.console = Console()
+        self._last_trained_date = None
+        self._matrix_cache = {"cluster_matrix": None}
+        self._forensic_snapshot = {}
+
+    def _update_heuristics(self, history: DrawHistoryDTO, total_balls: int):
+        """Actualiza la matriz de co-ocurrencia para el cálculo de resonancia."""
+        matrix = np.zeros((total_balls + 2, total_balls + 2), dtype=np.uint16)
+        for draw in history.winning_numbers:
+            for a, b in itertools.combinations(sorted(draw[:6]), 2):
+                matrix[a, b] += 1
+                matrix[b, a] += 1
+        self._matrix_cache["cluster_matrix"] = matrix
+
+    def _calculate_geo_scores(self, candidates_np: np.ndarray) -> np.ndarray:
+        """Calcula el Geo Score basado en la fuerza de los pares históricos."""
+        matrix = self._matrix_cache["cluster_matrix"]
+        if matrix is None:
+            return np.zeros(len(candidates_np), dtype=np.float32)
+
+        scores = np.zeros(len(candidates_np), dtype=np.float32)
+        # Vectorización del cálculo de pares para el universo actual
+        for i in range(6):
+            for j in range(i + 1, 6):
+                scores += matrix[candidates_np[:, i], candidates_np[:, j]]
+
+        max_s = np.max(scores)
+        return scores / max_s if max_s > 0 else scores
+
+    def _quantum_attraction_mesh(self, candidates_np, ai_scores, n_tickets=20):
+        """
+        Motor de Interferencia Gravitacional con Ajuste Dinámico de Repulsión.
+        """
+        xp = cp if HAS_CUPY else np
+        X = xp.asarray(candidates_np, dtype=xp.float32)
+        S = xp.asarray(ai_scores, dtype=xp.float32)
+
+        # 1. ALPHA-CORE: Aseguramos la captura del Top 3 absoluto de la IA
+        sorted_indices = xp.argsort(S)[::-1]
+        alpha_core_idx = sorted_indices[:5].tolist()
+
+        # 2. CALIBRACIÓN DE REPULSIÓN DINÁMICA
+        # Evaluamos la densidad de probabilidad en el pico
+        top_10_mean = xp.mean(S[sorted_indices[:10]])
+        # Si la confianza es > 0.85, reducimos la repulsión para concentrar fuego
+        dynamic_repulsion = (
+            8.0 if top_10_mean < 0.70 else 5.0 if top_10_mean < 0.85 else 4.5
+        )
+
+        # 3. MALLA DE INTERFERENCIA (GPA)
+        X_min, X_max = X.min(axis=0), X.max(axis=0)
+        X_norm = (X - X_min) / (X_max - X_min + 1e-6)
+
+        elite_mask = sorted_indices[:500]
+        Elite_X = X_norm[elite_mask]
+        Elite_S = S[elite_mask]
+
+        potential = xp.zeros(len(X_norm), dtype=xp.float32)
+        chunk_size = 100
+        for i in range(0, 500, chunk_size):
+            e_x = Elite_X[i : i + chunk_size]
+            e_s = Elite_S[i : i + chunk_size]
+            # Distancia Euclidiana 6D vectorizada
+            dists_sq = xp.sum((X_norm[:, xp.newaxis, :] - e_x) ** 2, axis=2)
+            potential += xp.sum(e_s / (dists_sq + 0.05), axis=1)
+
+        # 4. SELECCIÓN POR DESPLAZAMIENTO (Resto de cuota)
+        mesh_indices = []
+        current_potential = potential.copy()
+
+        # Aplicamos repulsión inicial desde los puntos del Alpha-Core
+        for idx in alpha_core_idx:
+            dists_to_sel = xp.sum((X_norm - X_norm[idx]) ** 2, axis=1)
+            current_potential *= 1.0 - xp.exp(-dists_to_sel * dynamic_repulsion)
+
+        for _ in range(n_tickets - len(alpha_core_idx)):
+            best_idx = int(xp.argmax(current_potential))
+            mesh_indices.append(best_idx)
+            # Actualizamos zona de repulsión gaussiana
+            dists_to_new = xp.sum((X_norm - X_norm[best_idx]) ** 2, axis=1)
+            current_potential *= 1.0 - xp.exp(-dists_to_new * dynamic_repulsion)
+
+        return [int(i) for i in alpha_core_idx] + [int(i) for i in mesh_indices]
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
-        # --- CONFIGURACIÓN DE ROBUSTEZ ---
-        N_ROUNDS = 5  # Número de "expertos" (IAs independientes)
-        MIN_CONSENSUS = 3  # Votos mínimos para considerar un ticket "Fuerte"
-        TOP_CANDIDATES_PER_ROUND = 60  # Cuántos tickets nomina cada experto
+        candidates_np = config.raw_universe_ptr
+        if candidates_np is None or len(candidates_np) == 0:
+            return PredictionResultDTO("Empty Universe", [])
 
-        console.print(
-            f"\n[bold yellow]🧬 INICIANDO PROTOCOLO CENTAURO V7 (Full Spectrum)...[/bold yellow]"
+        # Sincronización de entrenamiento y heurística
+        if self._last_trained_date != history.dates[-1]:
+            # El entrenamiento ya incluye el bucle forense inyectado por el Backtester
+            self.ai_model.train(history.winning_numbers, config.total_balls)
+            self._update_heuristics(history, config.total_balls)
+            self._last_trained_date = history.dates[-1]
+
+        # Scoring Híbrido
+        raw_ai_scores = self.ai_model.score_tickets([tuple(x) for x in candidates_np])
+        geo_scores = self._calculate_geo_scores(candidates_np)
+
+        # Selección V10.5
+        final_indices = self._quantum_attraction_mesh(
+            candidates_np, raw_ai_scores, config.num_tickets
         )
 
-        # 1. CARGAR UNIVERSO (Modo Vectorial)
-        csv_path = os.path.join("data", "universo_reducido.csv")
-        if not os.path.exists(csv_path):
-            console.print(
-                "[red]❌ No se encontró el universo reducido (Ejecuta Fase 1 primero).[/red]"
-            )
-            return PredictionResultDTO("Error", [])
+        # Mapeo de Ranks para auditoría forense
+        sorted_ai_idx = np.argsort(raw_ai_scores)[::-1]
+        selected_ranks = [
+            int(np.where(sorted_ai_idx == idx)[0][0] + 1) for idx in final_indices
+        ]
 
-        try:
-            # Cargamos directamente como matriz de Numpy (Int32 es suficiente y rápido)
-            df = pd.read_csv(csv_path)
-            candidates_np = df.iloc[:, :6].values.astype(int)
-            num_candidates = len(candidates_np)
+        # Snapshot para Telemetría Sniper V6.3.3
+        self._forensic_snapshot = {
+            "universe": candidates_np,
+            "ai_scores": raw_ai_scores,
+            "geo_scores": geo_scores,
+            "selected_ranks": sorted(selected_ranks),
+            "univ_size": len(candidates_np),
+        }
 
-            if num_candidates == 0:
-                return PredictionResultDTO("Empty Universe", [])
+        if HAS_CUPY:
+            cp.get_default_memory_pool().free_all_blocks()
 
-            console.print(f"   📥 Universo Cargado: {num_candidates:,} tickets.")
-
-        except Exception as e:
-            console.print(f"[red]❌ Error leyendo CSV: {e}[/red]")
-            return PredictionResultDTO("Error", [])
-
-        # --- FASE PREVIA: CÁLCULO HEURÍSTICO VECTORIZADO (Determinista) ---
-        # Calculamos esto UNA sola vez porque los datos históricos no cambian entre rondas.
-        console.print(
-            "📐 [bold]Pre-calculando Estructura Geométrica (Vectorizado)...[/bold]"
+        return PredictionResultDTO(
+            "V10.5 Alpha Core", [list(candidates_np[idx]) for idx in final_indices]
         )
 
-        # A. PREPARAR TABLAS DE BÚSQUEDA (LOOKUP TABLES)
+    def audit_winner(self, history, config, winning_ticket) -> dict:
+        """Auditoría de alta resolución para detectar la Distancia Crítica."""
+        snap = self._forensic_snapshot
+        if "universe" not in snap:
+            return {"found": False, "hits": 0}
 
-        # 1. Hotness Lookup (Frecuencia Reciente - Últimos 20)
-        recent_nums = [n for d in history.winning_numbers[-20:] for n in d[:6]]
-        freq_map = Counter(recent_nums)
-        max_freq = max(freq_map.values()) if freq_map else 1
+        target = np.array(sorted(winning_ticket[:6]))
+        hits_array = np.sum(np.isin(snap["universe"], target), axis=1)
+        max_hits = int(np.max(hits_array)) if len(hits_array) > 0 else 0
 
-        hotness_lookup = np.zeros(config.total_balls + 1, dtype=float)
-        for ball, count in freq_map.items():
-            if ball <= config.total_balls:
-                hotness_lookup[ball] = count
+        if max_hits == 0:
+            return {"found": False, "hits": 0}
 
-        # 2. Cluster Matrix (Matriz de Adyacencia para Pares)
-        cluster_counts = Counter()
-        for draw in history.winning_numbers:
-            for pair in itertools.combinations(sorted(draw[:6]), 2):
-                cluster_counts[pair] += 1
-        max_cluster = max(cluster_counts.values()) if cluster_counts else 1
+        best_indices = np.where(hits_array == max_hits)[0]
+        # Seleccionamos el representante con mejor IA score dentro de la zona de éxito
+        idx_audit = best_indices[np.argsort(snap["ai_scores"][best_indices])[-1]]
+        w_rank = np.sum(snap["ai_scores"] > snap["ai_scores"][idx_audit]) + 1
 
-        # Matriz simétrica (40x40)
-        cluster_matrix = np.zeros(
-            (config.total_balls + 1, config.total_balls + 1), dtype=float
-        )
-        for (a, b), count in cluster_counts.items():
-            if a <= config.total_balls and b <= config.total_balls:
-                cluster_matrix[a, b] = count
-                cluster_matrix[b, a] = count  # Simetría
-
-        # 3. Zombie Lookup (Antigüedad)
-        last_app = {}
-        for idx, draw in enumerate(reversed(history.winning_numbers)):
-            for n in draw[:6]:
-                if n not in last_app:
-                    last_app[n] = idx
-
-        zombie_lookup = np.zeros(config.total_balls + 1, dtype=int)
-        for ball, age in last_app.items():
-            if ball <= config.total_balls:
-                zombie_lookup[ball] = age
-
-        # B. CÁLCULO MASIVO DE SCORES
-
-        # Score Hotness: Suma de frecuencias normalizada
-        h_vals = hotness_lookup[candidates_np].sum(axis=1)
-        norm_hot = h_vals / (6 * max_freq)
-
-        # Score Clusters: Suma de pesos de pares
-        # Iteramos sobre las 15 combinaciones de columnas (indices 0..5)
-        c_vals = np.zeros(num_candidates, dtype=float)
-        for i in range(6):
-            for j in range(i + 1, 6):
-                col_i = candidates_np[:, i]
-                col_j = candidates_np[:, j]
-                c_vals += cluster_matrix[col_i, col_j]
-
-        norm_cluster = c_vals / (15 * max_cluster)
-
-        # Penalización Zombie (>20 sorteos sin salir)
-        ages = zombie_lookup[candidates_np]
-        zombie_counts = (ages > 20).sum(axis=1)
-        penalties = np.where(zombie_counts > 2, 0.1, 0.0)
-
-        # Heurística Base (60% Cluster, 40% Hotness)
-        # Este score es fijo para todos los rounds
-        base_heuristic_score = (norm_cluster * 0.6) + (norm_hot * 0.4)
-
-        # --- BUCLE DE ESTABILIDAD (CONSENSUS LOOP) ---
-        ticket_votes = Counter()
-
-        # Preparamos lista de tuplas una sola vez para pasarla al scorer (interfaz compatibilidad)
-        candidates_tuples = [tuple(row) for row in candidates_np]
-
-        # Iteramos N veces para eliminar el factor suerte del ruido de la IA
-        for round_i in track(
-            range(N_ROUNDS), description="🗳️  Consultando Expertos (AI Consensus)..."
-        ):
-
-            # 1. Nueva IA (Nuevo Ruido Inteligente)
-            ai_engine = LotteryAIModel()
-            ai_engine.train(history.winning_numbers, config.total_balls)
-
-            # 2. Score IA
-            ai_scores = ai_engine.score_tickets(candidates_tuples)
-
-            # 3. Fusión Híbrida de esta ronda
-            # Heurística (60%) + IA (40%) - Penalización
-            final_scores = (
-                (base_heuristic_score * 0.60) + (ai_scores * 0.40) - penalties
-            )
-
-            # 4. Votación de esta ronda
-            # Obtenemos los índices de los mejores candidatos
-            sorted_indices = np.argsort(final_scores)[::-1]  # Descendente
-            top_indices = sorted_indices[:TOP_CANDIDATES_PER_ROUND]
-
-            for idx in top_indices:
-                t_tuple = candidates_tuples[idx]
-                ticket_votes[t_tuple] += 1
-
-        # --- SELECCIÓN FINAL (HARD CAP DIVERSITY) ---
-        console.print(f"   ⚖️  Filtrando por Consenso y Diversidad Forzada...")
-
-        # 1. Obtener TODOS los candidatos votados (no solo los del consenso estricto)
-        # Esto asegura que tengamos una piscina profunda para pescar si los tops se agotan por el hard cap.
-        all_candidates = [t for t, votes in ticket_votes.most_common()]
-
-        final_selection = []
-        seen_tickets = []
-
-        # --- HARD CAP: Límite estricto de apariciones ---
-        # 4 es un buen número para 15 tickets. Ningún número dominará más del 25-30%
-        MAX_USAGES = 4
-        global_number_usage = Counter()
-
-        # Primera Pasada: Búsqueda Estricta (Respetando el Hard Cap)
-        for ticket in all_candidates:
-            if len(final_selection) >= config.num_tickets:
-                break
-
-            # A. Filtro de Diversidad (Ticket vs Ticket) - Evitar clones
-            is_diverse = True
-            ticket_set = set(ticket)
-            for picked in seen_tickets:
-                if len(ticket_set & set(picked)) >= 5:  # Muy parecidos
-                    is_diverse = False
-                    break
-            if not is_diverse:
-                continue
-
-            # B. Filtro Anti-Monopolio (HARD CAP)
-            # Si ALGUNA bola del ticket ya excedió su uso, DESCARTAMOS el ticket.
-            has_exhausted_ball = False
-            for ball in ticket:
-                if global_number_usage[ball] >= MAX_USAGES:
-                    has_exhausted_ball = True
-                    break
-
-            if has_exhausted_ball:
-                continue  # Sin piedad: salta al siguiente candidato para buscar variedad
-
-            # C. Aprobado
-            final_selection.append(ticket)
-            seen_tickets.append(ticket)
-            for ball in ticket:
-                global_number_usage[ball] += 1
-
-        # Fallback: Si fuimos demasiado estrictos y no llenamos los 15, rellenamos con lo mejor disponible
-        # (Relajando el Anti-Monopolio, pero manteniendo diversidad de tickets)
-        if len(final_selection) < config.num_tickets:
-            console.print(
-                f"[dim]   ⚠️ Rellenando {config.num_tickets - len(final_selection)} cupos con reservas (Relajando Hard Cap)...[/dim]"
-            )
-            for ticket in all_candidates:
-                if len(final_selection) >= config.num_tickets:
-                    break
-
-                if ticket in seen_tickets:
-                    continue
-
-                # Solo chequeo de clonación, ignoramos monopolio aquí
-                ticket_set = set(ticket)
-                is_diverse = True
-                for picked in seen_tickets:
-                    if len(ticket_set & set(picked)) >= 5:
-                        is_diverse = False
-                        break
-
-                if is_diverse:
-                    final_selection.append(ticket)
-                    seen_tickets.append(ticket)
-
-        console.print(
-            f"[bold green]✅ CENTAURO V7 COMPLETADO: {len(final_selection)} tickets generados (Hard Diversity).[/]"
-        )
-        return PredictionResultDTO("Centaur V7 (Hard Cap)", final_selection)
+        return {
+            "found": max_hits >= 4,
+            "hits": max_hits,
+            "rank": int(w_rank),
+            "proximity": int(min([abs(w_rank - r) for r in snap["selected_ranks"]])),
+            "ai_score": float(snap["ai_scores"][idx_audit]),
+            "geo_score": float(snap["geo_scores"][idx_audit]),
+            "univ_size": snap["univ_size"],
+            "selected_ranks": snap["selected_ranks"],
+        }
