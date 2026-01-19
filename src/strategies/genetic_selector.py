@@ -15,6 +15,56 @@ from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResul
 from src.core.ai_scorer import LotteryAIModel
 
 
+def _gpu_dynamic_kmedoids(self, top_data, scores, n_clusters, expansion_factor):
+    """Clustering adaptativo con soporte híbrido (GPU/CPU)."""
+    # SELECCIÓN DE BACKEND
+    xp = cp if HAS_CUPY else np
+
+    X = xp.asarray(top_data, dtype=xp.float32)
+    S = xp.asarray(scores, dtype=xp.float32)
+    n_samples = X.shape[0]
+
+    # Potencia de probabilidad según factor de expansión
+    p_power = 2.0 if expansion_factor < 1.4 else 1.0
+    probs = xp.asnumpy(S**p_power)
+    probs /= probs.sum()
+
+    # Inicialización de medoides
+    initial_idx = xp.asarray(
+        np.random.choice(n_samples, n_clusters, replace=False, p=probs)
+    )
+    medoids = X[initial_idx]
+
+    # Bucle de optimización (K-Medoids)
+    for _ in range(15):
+        # Distancia Manhattan vectorial
+        distances = xp.sum(xp.abs(X[:, xp.newaxis, :] - medoids), axis=2)
+
+        # Factor de Atracción Gravitacional
+        weighted_dist = distances / (S[:, xp.newaxis] ** expansion_factor + 1e-6)
+        labels = xp.argmin(weighted_dist, axis=1)
+
+        new_idx = xp.zeros(n_clusters, dtype=xp.int32)
+        for k in range(n_clusters):
+            mask = labels == k
+            if xp.any(mask):
+                cluster_pts = X[mask]
+                # Cálculo de distancias internas para encontrar el nuevo medoide
+                d_int = xp.sum(
+                    xp.abs(cluster_pts[:, xp.newaxis, :] - cluster_pts), axis=(1, 2)
+                )
+                new_idx[k] = xp.where(mask)[0][xp.argmin(d_int)]
+            else:
+                # Si un cluster queda vacío, re-inicializar aleatoriamente
+                new_idx[k] = xp.asarray(np.random.choice(n_samples, p=probs))
+
+        if xp.all(initial_idx == new_idx):
+            break
+        initial_idx, medoids = new_idx, X[new_idx]
+
+    return (initial_idx.get() if HAS_CUPY else initial_idx).tolist()
+
+
 class GeneticSelectorStrategy(ILotteryStrategy):
     """
     SELECTOR V10.3.1: Quantum Dynamic Mesh (Null-Safety Edition).

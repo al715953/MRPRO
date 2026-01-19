@@ -47,16 +47,16 @@ BEST_SETTINGS = {
     "prime_max": 3,
     # 2. Pesos de Decisión (Fase 2)
     # Define qué tanto caso le hacemos a cada experto
-    "w_cluster": 0.45,  # Importancia de la estructura geométrica
-    "w_hotness": 0.10,  # Importancia de la frecuencia reciente
-    "w_ai": 0.45,  # Importancia del modelo XGBoost
+    "w_cluster": 0.55,  # Importancia de la estructura geométrica
+    "w_hotness": 0.05,  # Importancia de la frecuencia reciente
+    "w_ai": 0.40,  # Importancia del modelo XGBoost
     # 3. Alineación Táctica (Fase 3 - Cuotas)
     # Cuántos tickets seleccionamos de cada estrato (Total 15)
     "quota_elite": 3,  # Tickets con Score > 0.70 (Pocos, zona muerta reciente)
     "quota_mid": 10,  # Tickets con Score 0.60-0.70 (Zona Calidad)
     "quota_low": 2,  # Tickets con Score 0.50-0.60 (Zona Volumen/Guerra)
     # --- NUEVO: UMBRALES DINÁMICOS ---
-    "threshold_elite": 0.57,  # Bajamos de 0.70 a 0.65 para capturar mejores candidatos
+    "threshold_elite": 0.85,  # Bajamos de 0.70 a 0.65 para capturar mejores candidatos
     "threshold_mid": 0.45,  # Bajamos de 0.60 a 0.55 para ampliar la red
     # Deep Dive
     "threshold_ai_override": 0.72,  # Bajado de 0.85 para capturar casos límite
