@@ -37,17 +37,17 @@ NUM_CANDIDATOS_MONTECARLO = 10000000
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 108,
-    "sum_max": 132,
+    "sum_min": 110,
+    "sum_max": 130,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
     "max_per_decade":3,
     "prime_min": 1,
     "prime_max": 3,
-    "max_delta": 12,          # Saltos más cortos (más realista)
-    "std_min": 7.8,           # Dispersión más controlada
-    "std_max": 12.8,
+    "max_delta": 15,          # Saltos más cortos (más realista)
+    "std_min": 7.5,           # Dispersión más controlada
+    "std_max": 13,
     "max_same_last_digit": 3, # Solo máximo 2 números con misma terminación
 
 

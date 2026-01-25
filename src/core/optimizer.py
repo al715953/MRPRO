@@ -8,126 +8,103 @@ from colorama import Fore, Style
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO
 from src.data_access.config import TOTAL_BALLS, TICKET_SIZE, BEST_SETTINGS
 from src.strategies.universe_reduction import UniverseReductionStrategy
-from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.heuristic_selector import HeuristicSelectorStrategy
 from src.core.backtester import BacktestEngine
 
 # Colores para telemetría
-CYAN, GREEN, RED, YELLOW, RESET = (
-    Fore.CYAN,
-    Fore.GREEN,
-    Fore.RED,
-    Fore.YELLOW,
-    Style.RESET_ALL,
-)
-
+CYAN, GREEN, RED, YELLOW, RESET = (Fore.CYAN, Fore.GREEN, Fore.RED, Fore.YELLOW, Style.RESET_ALL)
 
 class StrategyOptimizer:
-    """Optimizador Maestro V7.2: Calibración Estocástica de Alto Rendimiento."""
+    """Optimizador V8.0: Calibración de Precisión para el Golden Ratio."""
 
     def __init__(self):
         self.backtester = BacktestEngine()
+        self.reducer = UniverseReductionStrategy()
 
-    def _print_progress(self, current, total, value, label="Iter", is_money=True):
+    def _print_progress(self, current, total, value, label="Iter", is_money=True, u_size=0):
         percent = int((current + 1) / (total if total > 0 else 1) * 100)
         val_str = f"${value:,.0f}" if is_money else f"{value:.4f}"
-        color = (
-            GREEN if (is_money and value > 0) or (not is_money and value > 0.5) else RED
-        )
+        color = GREEN if (is_money and value > 0) else (RED if value < 0 else YELLOW)
+        
+        u_color = GREEN if u_size <= 100000 else RED
+        u_info = f" | Universe: {u_color}{u_size:,}{RESET}" if u_size > 0 else ""
 
         bar = "█" * (20 * (current + 1) // (total if total > 0 else 1))
         sys.stdout.write(
-            f"\r   {CYAN}[{bar:<20}] {percent}%{RESET} | {label} {current+1}/{total} | Val: {color}{val_str}{RESET}"
+            f"\r   {CYAN}[{bar:<20}] {percent}%{RESET} | {label} {current+1}/{total} | ROI: {color}{val_str}{RESET}{u_info}"
         )
         sys.stdout.flush()
 
-    def optimize_filters(
-        self, history: DrawHistoryDTO, draws_to_test: int = 20
-    ) -> Dict[str, Any]:
-        """FASE 1: Búsqueda de la topología óptima de filtros."""
-        print(f"\n{CYAN}🔬 FASE 1: Calibración de Filtros (Topología)...{RESET}")
+    def optimize_filters(self, history: DrawHistoryDTO, draws_to_test: int = 20) -> Dict[str, Any]:
+        """FASE 1: Calibración de la Malla Posicional y Agregación."""
+        print(f"\n{CYAN}🔬 FASE 1: Calibración de Filtros (Búsqueda del Golden Ratio)...{RESET}")
 
-        sums = [(110, 180), (120, 170), (122, 168)]
-        combinations = list(itertools.product(sums, [(2, 4)], [4, 5]))
+        # Espacio de búsqueda refinado basado en el histórico real
+        sum_ranges = [(108, 132), (110, 130), (112, 128)]
+        f1_limits = [10, 12, 14]
+        f6_limits = [28, 30, 32]
+        ac_limits = [7, 8]
 
-        best_roi, best_params = -float("inf"), BEST_SETTINGS.copy()
+        combinations = list(itertools.product(sum_ranges, f1_limits, f6_limits, ac_limits))
+        
+        best_score = -float("inf")
+        best_params = BEST_SETTINGS.copy()
+        
         strategy = HeuristicSelectorStrategy()
         config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, 15, draws_to_test)
 
-        for i, (sum_r, even_r, ac_val) in enumerate(combinations):
+        for i, (s_range, f1, f6, ac) in enumerate(combinations):
             params = {
-                "sum_min": sum_r[0],
-                "sum_max": sum_r[1],
-                "even_min": even_r[0],
-                "even_max": even_r[1],
-                "ac_min": ac_val,
-                "verbose": False,
+                "sum_min": s_range[0],
+                "sum_max": s_range[1],
+                "f1_max": f1,
+                "f6_min": f6,
+                "ac_min": ac,
+                "verbose": False
             }
+            
+            # Prueba rápida de volumen sobre el último sorteo
+            # Si el volumen es > 150k, descartamos por ineficiencia antes de backtestear
+            test_universe = self.reducer.reduce(history, params, verbose=False)
+            u_size = len(test_universe)
+            
+            if u_size > 150000:
+                self._print_progress(i, len(combinations), 0, "Skip", u_size=u_size)
+                continue
+
             config.filter_overrides = params
             res = self.backtester.run(
                 strategy,
                 history,
                 config,
-                pre_process_strategy=UniverseReductionStrategy(),
+                pre_process_strategy=self.reducer,
             )
-            self._print_progress(i, len(combinations), res.net_balance, "Filtros")
+            
+            # MÉTRICA DE ÉXITO: ROI ponderado por el inverso del volumen
+            # Castiga universos grandes y premia los que caben en < 100k
+            efficiency_multiplier = 1.0 if u_size <= 100000 else (100000 / u_size)
+            current_score = res.net_balance * efficiency_multiplier
 
-            if res.net_balance > best_roi:
-                best_roi, best_params = res.net_balance, params.copy()
+            self._print_progress(i, len(combinations), res.net_balance, "Filtros", u_size=u_size)
 
-        print(f"\n   ✅ Mejor ROI Fase 1: ${best_roi:,.0f}")
+            if current_score > best_score:
+                best_score = current_score
+                best_params = params.copy()
+
+        print(f"\n   ✅ Mejor Configuración Encontrada:")
+        for k, v in best_params.items():
+            print(f"      {k}: {v}")
+        
         return best_params
-
-    def optimize_quotas(
-        self, history: DrawHistoryDTO, base_params: Dict, draws_to_test: int = 20
-    ) -> Dict[str, Any]:
-        """FASE 3: Calibración estructural de umbrales de IA."""
-        print(f"\n{CYAN}🧱 FASE 3: Calibración Estructural (Umbrales)...{RESET}")
-        analyze_depth = max(draws_to_test, 50)
-
-        selector = GeneticSelectorStrategy()
-        # Alineación con el método real de entrenamiento de la IA
-        selector.ai_model.train(history.winning_numbers, TOTAL_BALLS)
-
-        # Escaneo de scores históricos para determinar percentiles de éxito
-        winners = history.winning_numbers[-analyze_depth:]
-        scores_log = []
-
-        for i, w_draw in enumerate(winners):
-            target = [tuple(sorted(w_draw[:6]))]
-            # Uso de score_tickets directo desde el modelo de la estrategia
-            s = selector.ai_model.score_tickets(target)[0]
-            scores_log.append(s)
-            self._print_progress(i, len(winners), s, label="Scan", is_money=False)
-
-        scores_log.sort(reverse=True)
-        # Lógica de cálculo de umbrales basada en distribución real
-        idx_elite = int(len(scores_log) * 0.20)
-        s_elite = float(round(scores_log[idx_elite], 2)) if scores_log else 0.70
-        s_mid = float(round(np.percentile(scores_log, 50), 2)) if scores_log else 0.55
-
-        best_quotas = {
-            "quota_elite": 3,
-            "quota_mid": 10,
-            "quota_low": 2,
-            "threshold_elite": s_elite,
-            "threshold_mid": s_mid,
-        }
-
-        print(f"\n   ✅ Estructura Optimizada: {best_quotas}")
-        final_params = base_params.copy()
-        final_params.update(best_quotas)
-        return final_params
 
     def optimize_full_stack(self, history: DrawHistoryDTO, draws_to_test: int = 20):
         """Misión de Optimización Total."""
-        print(f"\n{YELLOW}🚀 INICIANDO OPTIMIZACIÓN FULL STACK (V7.2 Híbrida){RESET}")
+        print(f"\n{YELLOW}🚀 INICIANDO OPTIMIZACIÓN FULL STACK (V8.0 Precision){RESET}")
         start_time = time.time()
 
+        # En esta sesión nos enfocamos en filtros para ganar el reto del universo
         cfg = self.optimize_filters(history, draws_to_test)
-        # Nota: La Fase 2 de pesos se omite por brevedad pero sigue la misma lógica
-        final_cfg = self.optimize_quotas(history, cfg, draws_to_test)
 
         elapsed = time.time() - start_time
         print(f"\n{GREEN}📊 TIEMPO TOTAL DE CALIBRACIÓN: {elapsed/60:.1f} min{RESET}")
-        return final_cfg
+        return cfg

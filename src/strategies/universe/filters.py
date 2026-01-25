@@ -26,7 +26,8 @@ def calculate_ac_values(candidates):
     return ac_results
 
 class VectorizedFilters:
-    """Librería Sniper V11.9.1: Reglas con Red de Seguridad."""
+    """Motor Sniper V13.8: Recuperación de Jackpots y Log Detallado."""
+    
     def __init__(self, xp):
         self.xp = xp
         self.is_prime = xp.array([
@@ -35,41 +36,54 @@ class VectorizedFilters:
             False, False, False, True, False, False, False, False, False, True, 
             False, True, False, False, False, False, False, True, False, False
         ], dtype=bool)
-        # Perfiles de Élite como respaldo para asegurar el "Punto Dulce"
-        self.default_profiles = ["2-1-2-1", "1-2-2-1", "2-2-1-1", "1-1-2-2", "2-1-1-2", "1-2-1-2"]
+
+        # Perfiles Élite V13.8: Top 19 histórico
+        self.default_profiles = [
+            2112, 1212, 2121, 1221, 1122, 2211, # Bloque Simétrico
+            1311, 3111, 1131, 1113,             # Concentrados
+            222, 2202, 1230, 2022, 231,         # Con décadas vacías (0)
+            2310, 1203, 3021, 2220
+        ]
 
     def generate_universe(self):
         raw = np.fromiter(itertools.chain.from_iterable(itertools.combinations(range(1, 40), 6)),
                           dtype=np.uint8).reshape(-1, 6)
         return self.xp.asarray(raw)
 
+    def apply_positional_limits(self, universe, cfg):
+        """V13.8: Corredores de seguridad del 95% para preservar Jackpots."""
+        if len(universe) == 0: return universe
+        # Cerramos F1 a 11 y F6 a 30 para permitir Jackpots extremos
+        mask = (universe[:, 0] <= cfg.get("f1_max", 11)) & \
+               (universe[:, 5] >= cfg.get("f6_min", 30))
+        return universe[mask]
+
     def apply_aggregation(self, universe, cfg):
+        """V13.8: Regresa la Raíz 7 y Suma 108-132."""
         sums = self.xp.sum(universe, axis=1)
-        # 84k Target: 105-135 es el rango ideal
-        mask = (sums >= cfg.get("sum_min", 105)) & (sums <= cfg.get("sum_max", 135))
+        mask = (sums >= cfg.get("sum_min", 108)) & (sums <= cfg.get("sum_max", 132))
         universe, sums = universe[mask], sums[mask]
-        root_mask = self.xp.isin((sums - 1) % 9 + 1, self.xp.array([1, 4, 9]))
+        
+        # Recuperamos la Raíz 7 (Frecuencia 10.1% histórica)
+        roots = self.xp.array([1, 4, 7, 9])
+        root_mask = self.xp.isin((sums - 1) % 9 + 1, roots)
         return universe[root_mask]
 
     def apply_structure(self, universe, cfg):
         evens = self.xp.sum(universe % 2 == 0, axis=1)
         primes = self.xp.sum(self.is_prime[universe], axis=1)
         deltas = self.xp.diff(universe, axis=1)
-        mask = (evens >= cfg.get("even_min", 2)) & (evens <= cfg.get("even_max", 4)) & \
-               (primes >= cfg.get("prime_min", 1)) & (primes <= cfg.get("prime_max", 3)) & \
-               (self.xp.sum(deltas == 1, axis=1) <= 1) & \
-               (self.xp.max(deltas, axis=1) <= cfg.get("max_delta", 15))
+        # Delta max 15 para no asfixiar el 6/6
+        mask = (evens >= 2) & (evens <= 4) & (primes >= 1) & (primes <= 3) & \
+               (self.xp.sum(deltas == 1, axis=1) <= 1) & (self.xp.max(deltas, axis=1) <= 15)
         return universe[mask]
 
     def apply_spatial(self, universe, cfg):
-        m_decade = cfg.get("max_per_decade", 3)
-        lows = self.xp.sum(universe <= 19, axis=1)
         d1 = self.xp.sum((universe >= 1) & (universe <= 10), axis=1)
         d2 = self.xp.sum((universe >= 11) & (universe <= 20), axis=1)
         d3 = self.xp.sum((universe >= 21) & (universe <= 30), axis=1)
         d4 = self.xp.sum((universe >= 31) & (universe <= 39), axis=1)
-        mask = (d1 <= m_decade) & (d2 <= m_decade) & (d3 <= m_decade) & (d4 <= m_decade) & \
-               (lows >= 2) & (lows <= 4)
+        mask = (d1 <= 3) & (d2 <= 3) & (d3 <= 3) & (d4 <= 3)
         return universe[mask], (d1[mask], d2[mask], d3[mask], d4[mask])
 
     def apply_terminal_poda(self, universe, cfg):
@@ -79,17 +93,11 @@ class VectorizedFilters:
         counts = np.zeros((len(last_digits), 10), dtype=np.uint8)
         for i in range(6):
             counts[np.arange(len(last_digits)), last_digits[:, i]] += 1
-        max_term = counts.max(axis=1)
-        # Ajuste a 3 para el Golden Ratio (84k)
-        mask = self.xp.asarray(max_term <= cfg.get("max_same_last_digit", 3))
+        mask = self.xp.asarray(counts.max(axis=1) <= 3)
         return universe[mask], mask
 
     def apply_profile_poda(self, universe, d_vecs, cfg):
-        # Si config no trae perfiles, usamos el fallback para no perder el Punto Dulce
-        valid = cfg.get("valid_decade_profiles", [])
-        if not valid: valid = self.default_profiles
-        
-        profiles = [f"{int(d_vecs[0][i])}-{int(d_vecs[1][i])}-{int(d_vecs[2][i])}-{int(d_vecs[3][i])}" 
-                    for i in range(len(universe))]
-        mask = self.xp.isin(self.xp.array(profiles), self.xp.array(valid))
+        valid_ints = self.xp.array(self.default_profiles, dtype=self.xp.int32)
+        profile_hashes = (d_vecs[0] * 1000 + d_vecs[1] * 100 + d_vecs[2] * 10 + d_vecs[3]).astype(self.xp.int32)
+        mask = self.xp.isin(profile_hashes, valid_ints)
         return universe[mask]
