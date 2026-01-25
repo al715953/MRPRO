@@ -1,15 +1,15 @@
 import numpy as np
 import itertools
 import numba
-from src.data_access.config import TOTAL_BALLS, TICKET_SIZE
+
 
 @numba.jit(nopython=True, parallel=True)
-def calculate_ac_values(candidates):
+def calculate_ac_numba(candidates):
     n_rows = candidates.shape[0]
     ac_results = np.empty(n_rows, dtype=np.int8)
     for i in numba.prange(n_rows):
         row = candidates[i]
-        diffs = np.zeros(15, dtype=np.int16) 
+        diffs = np.zeros(15, dtype=np.int16)
         count = 0
         for j in range(6):
             for k in range(j + 1, 6):
@@ -25,58 +25,127 @@ def calculate_ac_values(candidates):
         ac_results[i] = count - 5
     return ac_results
 
+
 class VectorizedFilters:
-    """Motor Sniper V13.8: Recuperación de Jackpots y Log Detallado."""
-    
     def __init__(self, xp):
         self.xp = xp
-        self.is_prime = xp.array([
-            False, False, True, True, False, True, False, True, False, False, 
-            False, True, False, True, False, False, False, True, False, True, 
-            False, False, False, True, False, False, False, False, False, True, 
-            False, True, False, False, False, False, False, True, False, False
-        ], dtype=bool)
+        self.is_prime = self.xp.array(
+            [
+                False,
+                False,
+                True,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+                False,
+                False,
+                True,
+                False,
+                True,
+                False,
+                False,
+                False,
+                True,
+                False,
+                True,
+                False,
+                False,
+                False,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                False,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                False,
+                False,
+            ],
+            dtype=bool,
+        )
 
-        # Perfiles Élite V13.8: Top 19 histórico
-        self.default_profiles = [
-            2112, 1212, 2121, 1221, 1122, 2211, # Bloque Simétrico
-            1311, 3111, 1131, 1113,             # Concentrados
-            222, 2202, 1230, 2022, 231,         # Con décadas vacías (0)
-            2310, 1203, 3021, 2220
-        ]
+        self.default_profiles = self.xp.array(
+            [
+                2112,
+                1212,
+                2121,
+                1221,
+                1122,
+                2211,
+                1311,
+                3111,
+                1131,
+                1113,
+                222,
+                2202,
+                1230,
+                2022,
+                231,
+                2310,
+                1203,
+                3021,
+                2220,
+            ],
+            dtype=self.xp.int32,
+        )
 
     def generate_universe(self):
-        raw = np.fromiter(itertools.chain.from_iterable(itertools.combinations(range(1, 40), 6)),
-                          dtype=np.uint8).reshape(-1, 6)
+        raw = np.fromiter(
+            itertools.chain.from_iterable(itertools.combinations(range(1, 40), 6)),
+            dtype=np.uint8,
+        ).reshape(-1, 6)
         return self.xp.asarray(raw)
 
     def apply_positional_limits(self, universe, cfg):
-        """V13.8: Corredores de seguridad del 95% para preservar Jackpots."""
-        if len(universe) == 0: return universe
-        # Cerramos F1 a 11 y F6 a 30 para permitir Jackpots extremos
-        mask = (universe[:, 0] <= cfg.get("f1_max", 11)) & \
-               (universe[:, 5] >= cfg.get("f6_min", 30))
+        if len(universe) == 0:
+            return universe
+        mask = (universe[:, 0] <= cfg.get("f1_max", 11)) & (
+            universe[:, 5] >= cfg.get("f6_min", 30)
+        )
         return universe[mask]
 
     def apply_aggregation(self, universe, cfg):
-        """V13.8: Regresa la Raíz 7 y Suma 108-132."""
         sums = self.xp.sum(universe, axis=1)
         mask = (sums >= cfg.get("sum_min", 108)) & (sums <= cfg.get("sum_max", 132))
         universe, sums = universe[mask], sums[mask]
-        
-        # Recuperamos la Raíz 7 (Frecuencia 10.1% histórica)
-        roots = self.xp.array([1, 4, 7, 9])
-        root_mask = self.xp.isin((sums - 1) % 9 + 1, roots)
+        root_mask = self.xp.isin((sums - 1) % 9 + 1, self.xp.array([1, 4, 7, 9]))
         return universe[root_mask]
 
     def apply_structure(self, universe, cfg):
         evens = self.xp.sum(universe % 2 == 0, axis=1)
         primes = self.xp.sum(self.is_prime[universe], axis=1)
         deltas = self.xp.diff(universe, axis=1)
-        # Delta max 15 para no asfixiar el 6/6
-        mask = (evens >= 2) & (evens <= 4) & (primes >= 1) & (primes <= 3) & \
-               (self.xp.sum(deltas == 1, axis=1) <= 1) & (self.xp.max(deltas, axis=1) <= 15)
+        mask = (
+            (evens >= cfg.get("evens_min", 2))
+            & (evens <= cfg.get("evens_max", 4))
+            & (primes >= cfg.get("primes_min", 1))
+            & (primes <= cfg.get("primes_max", 3))
+            & (self.xp.sum(deltas == 1, axis=1) <= cfg.get("max_contig", 1))
+        )
         return universe[mask]
+
+    def apply_terminal_poda(self, universe, cfg):
+        if len(universe) == 0:
+            return universe, self.xp.array([], dtype=bool)
+        last_digits = (universe % 10).astype(self.xp.int32)
+        counts = self.xp.zeros((len(last_digits), 10), dtype=self.xp.int32)
+        for i in range(6):
+            self.xp.add.at(
+                counts, (self.xp.arange(len(last_digits)), last_digits[:, i]), 1
+            )
+        mask = self.xp.max(counts, axis=1) <= cfg.get("max_terminals", 3)
+        return universe[mask], mask
 
     def apply_spatial(self, universe, cfg):
         d1 = self.xp.sum((universe >= 1) & (universe <= 10), axis=1)
@@ -86,18 +155,44 @@ class VectorizedFilters:
         mask = (d1 <= 3) & (d2 <= 3) & (d3 <= 3) & (d4 <= 3)
         return universe[mask], (d1[mask], d2[mask], d3[mask], d4[mask])
 
-    def apply_terminal_poda(self, universe, cfg):
-        if len(universe) == 0: return universe, self.xp.array([], dtype=bool)
-        univ_cpu = universe.get() if hasattr(universe, 'get') else universe
-        last_digits = univ_cpu % 10
-        counts = np.zeros((len(last_digits), 10), dtype=np.uint8)
-        for i in range(6):
-            counts[np.arange(len(last_digits)), last_digits[:, i]] += 1
-        mask = self.xp.asarray(counts.max(axis=1) <= 3)
-        return universe[mask], mask
-
     def apply_profile_poda(self, universe, d_vecs, cfg):
-        valid_ints = self.xp.array(self.default_profiles, dtype=self.xp.int32)
-        profile_hashes = (d_vecs[0] * 1000 + d_vecs[1] * 100 + d_vecs[2] * 10 + d_vecs[3]).astype(self.xp.int32)
-        mask = self.xp.isin(profile_hashes, valid_ints)
-        return universe[mask]
+        hashes = (
+            d_vecs[0] * 1000 + d_vecs[1] * 100 + d_vecs[2] * 10 + d_vecs[3]
+        ).astype(self.xp.int32)
+        return universe[self.xp.isin(hashes, self.default_profiles)]
+
+    def apply_ac_complexity(self, universe, cfg):
+        ac_min = cfg.get("ac_min", 7)
+        if len(universe) == 0:
+            return universe
+        if self.xp.__name__ == "cupy":
+            idx = [
+                (0, 1),
+                (0, 2),
+                (0, 3),
+                (0, 4),
+                (0, 5),
+                (1, 2),
+                (1, 3),
+                (1, 4),
+                (1, 5),
+                (2, 3),
+                (2, 4),
+                (2, 5),
+                (3, 4),
+                (3, 5),
+                (4, 5),
+            ]
+            diffs = self.xp.column_stack(
+                [universe[:, j] - universe[:, i] for i, j in idx]
+            )
+            diffs.sort(axis=1)
+            changes = self.xp.column_stack(
+                [
+                    self.xp.ones(diffs.shape[0], dtype=bool),
+                    diffs[:, 1:] != diffs[:, :-1],
+                ]
+            )
+            return universe[(self.xp.sum(changes, axis=1) - 5) >= ac_min]
+        else:
+            return universe[calculate_ac_numba(universe) >= ac_min]
