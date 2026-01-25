@@ -37,13 +37,21 @@ NUM_CANDIDATOS_MONTECARLO = 10000000
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 110,
-    "sum_max": 135,
+    "sum_min": 108,
+    "sum_max": 132,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
-    "prime_min": 2,
+    "max_per_decade":3,
+    "prime_min": 1,
     "prime_max": 3,
+    "max_delta": 12,          # Saltos más cortos (más realista)
+    "std_min": 7.8,           # Dispersión más controlada
+    "std_max": 12.8,
+    "max_same_last_digit": 3, # Solo máximo 2 números con misma terminación
+
+
+
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     # scale_pos_weight: Eleva agresivamente los ganadores en el ranking
     "scale_pos_weight": 7.5,
@@ -60,7 +68,12 @@ BEST_SETTINGS = {
     "geo_floor_percentile": 50.0,
     # General
     "verbose": True,
-}
+
+    # 2. Poda por Perfiles de Décadas (Topología)
+    # Solo permitimos perfiles que representen la mayor frecuencia histórica
+    "valid_decade_profiles": [
+        "2-1-2-1", "1-2-2-1", "2-2-1-1", "1-1-2-2", "2-1-1-2", "1-2-1-2"
+    ],}
 
 # --- ESTÉTICA DE CONSOLA (ANSI) ---
 CYAN = "\033[0;36m"
