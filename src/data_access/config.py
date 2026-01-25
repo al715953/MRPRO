@@ -48,12 +48,12 @@ BEST_SETTINGS = {
     "prime_min": 1,
     "prime_max": 3,
     "max_delta": 15,  # Saltos más cortos (más realista)
-    "std_min": 8,  # Dispersión más controlada
-    "std_max": 12,
-    "entropy_min": 2.05,  # Punto dulce detectado en V13
-    "entropy_max": 2.55,  # Filtra el ruido estético excesivo
-    "sdr_min": 22,  # Suma de Raíces Digitales mínima
-    "sdr_max": 44,  # Suma de Raíces Digitales máxima
+    "std_min": 8.2,  # Dispersión más controlada
+    "std_max": 12.4,
+    "entropy_min": 2.15,  # Punto dulce detectado en V13
+    "entropy_max": 2.45,  # Filtra el ruido estético excesivo
+    "sdr_min": 20,  # Suma de Raíces Digitales mínima
+    "sdr_max": 42,  # Suma de Raíces Digitales máxima
     "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     # scale_pos_weight: Eleva agresivamente los ganadores en el ranking
@@ -88,3 +88,27 @@ CYAN = "\033[0;36m"
 VERDE = "\033[0;32m"
 BLANCO_B = "\033[1;37m"
 RESET = "\033[0m"
+
+
+# --- REJILLA DE BÚSQUEDA (OPTIMIZER V8.11) ---
+# Define los ejes para la Calibración Forense Exhaustiva
+SEARCH_GRID = {
+    "e_min": [2.00, 2.05, 2.10, 2.15],
+    "e_max": [2.45, 2.50, 2.55, 2.60],
+    "s_min": [20, 22, 24],
+    "s_max": [42, 44, 46],
+    "ac": [7, 8],
+    "std_min": [7.8, 8.0, 8.2],
+    "std_max": [12.4, 12.6, 12.8],
+}
+
+# Ejemplo de Rejilla Rápida (Para validación de 5 minutos)
+# SEARCH_GRID = {
+#    "e_min": [2.10],
+#    "e_max": [2.50],
+#    "s_min": [24],
+#    "s_max": [42],
+#    "ac": [7, 8],
+#    "std_min": [8.2],
+#    "std_max": [12.4],
+# }
