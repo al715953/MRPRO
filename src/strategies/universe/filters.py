@@ -5,6 +5,7 @@ import numba
 
 @numba.jit(nopython=True, parallel=True)
 def calculate_ac_numba(candidates):
+    # ... (Mantenemos la lógica de AC Numba para CPU fallback) ...
     n_rows = candidates.shape[0]
     ac_results = np.empty(n_rows, dtype=np.int8)
     for i in numba.prange(n_rows):
@@ -106,6 +107,51 @@ class VectorizedFilters:
             dtype=np.uint8,
         ).reshape(-1, 6)
         return self.xp.asarray(raw)
+
+    # --- NUEVAS CAPAS DE DISSECCIÓN ---
+
+    def apply_entropy_shannon(self, universe, cfg):
+        """
+        Filtro de Entropía: Mide el 'desorden' de los saltos entre números.
+        Elimina combinaciones demasiado predecibles o excesivamente caóticas.
+        """
+        if len(universe) == 0:
+            return universe
+
+        # 1. Calculamos deltas (distancias entre números)
+        deltas = self.xp.diff(universe, axis=1).astype(self.xp.float32)
+
+        # 2. Normalizamos para obtener una distribución de probabilidad local
+        row_sums = self.xp.sum(deltas, axis=1)[:, self.xp.newaxis]
+        p = deltas / row_sums
+
+        # 3. Fórmula de Shannon: -sum(p * log2(p))
+        # Añadimos epsilon 1e-9 para evitar log(0)
+        entropy = -self.xp.sum(p * self.xp.log2(p + 1e-9), axis=1)
+
+        e_min = cfg.get("entropy_min", 2.1)
+        e_max = cfg.get("entropy_max", 2.5)
+
+        mask = (entropy >= e_min) & (entropy <= e_max)
+        return universe[mask]
+
+    def apply_digital_root_sum(self, universe, cfg):
+        """
+        Calcula la raíz digital individual de cada número y su suma total.
+        Fórmula: dr(n) = 1 + ((n - 1) % 9)
+        """
+        if len(universe) == 0:
+            return universe
+
+        # Cálculo vectorial de raíces digitales para los 6 números
+        roots = 1 + ((universe.astype(self.xp.int32) - 1) % 9)
+        sdr_total = self.xp.sum(roots, axis=1)
+
+        sdr_min = cfg.get("sdr_min", 20)
+        sdr_max = cfg.get("sdr_max", 45)
+
+        mask = (sdr_total >= sdr_min) & (sdr_total <= sdr_max)
+        return universe[mask]
 
     def apply_positional_limits(self, universe, cfg):
         if len(universe) == 0:

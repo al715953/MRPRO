@@ -48,8 +48,12 @@ BEST_SETTINGS = {
     "prime_min": 1,
     "prime_max": 3,
     "max_delta": 15,  # Saltos más cortos (más realista)
-    "std_min": 8.2,  # Dispersión más controlada
-    "std_max": 12.4,
+    "std_min": 8,  # Dispersión más controlada
+    "std_max": 12,
+    "entropy_min": 2.05,  # Punto dulce detectado en V13
+    "entropy_max": 2.55,  # Filtra el ruido estético excesivo
+    "sdr_min": 22,  # Suma de Raíces Digitales mínima
+    "sdr_max": 44,  # Suma de Raíces Digitales máxima
     "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     # scale_pos_weight: Eleva agresivamente los ganadores en el ranking

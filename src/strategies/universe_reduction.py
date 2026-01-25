@@ -4,45 +4,42 @@ from src.domain.dtos import PredictionResultDTO
 from .universe.backend import UniverseBackend
 from .universe.filters import VectorizedFilters
 
-# IMPORTANTE: Ahora el coordinador está vinculado al archivo de configuración
+# IMPORTANTE: Vinculación con configuración global
 from src.data_access.config import BEST_SETTINGS
 
 
 class UniverseReductionStrategy:
-    """Coordinador Sniper V13.9.8: Vinculación Real con Config y GPU."""
+    """Coordinador Sniper V14.1: Optimización de Interfaz para Calibración."""
 
     def __init__(self):
         self.xp, self.backend_name = UniverseBackend.get_xp()
         self.filters = VectorizedFilters(self.xp)
 
-    def predict(self, history, config) -> PredictionResultDTO:
-        universe = self.reduce(history, config)
+    def predict(self, history, config, verbose=True) -> PredictionResultDTO:
+        """Punto de entrada universal con soporte para modo silencioso."""
+        universe = self.reduce(history, config, verbose=verbose)
         return PredictionResultDTO(
-            strategy_name=f"Sniper V13.9.8 ({self.backend_name})",
+            strategy_name=f"Sniper V14.1 ({self.backend_name})",
             tickets=universe.tolist() if hasattr(universe, "tolist") else universe,
         )
 
     def reduce(self, history, config, verbose=True):
+        """Motor de reducción con capas de Entropía y SDR integradas."""
         start_time = time.time()
-
-        # LÓGICA DE PRIORIDAD:
-        # 1. Overrides del Optimizador (si estamos calibrando)
-        # 2. BEST_SETTINGS del config.py (si estamos ejecutando normal)
-        # 3. Diccionario vacío (activará los hardcoded defaults en filters.py)
 
         cfg = getattr(config, "filter_overrides", None)
         if not cfg:
             cfg = BEST_SETTINGS
 
         if verbose:
-            print(f"🚀 Sniper V13.9.8 [Hardware: {self.backend_name}]")
+            print(f"🚀 Sniper V14.1 [Hardware: {self.backend_name}]")
 
         # --- ETAPA 1: ORIGEN ---
         universe = self.filters.generate_universe()
         if verbose:
             print(f"   ├─ Universo Base: {len(universe):,}")
 
-        # --- ETAPA 2: FRONTERAS (Ahora dinámicas) ---
+        # --- ETAPA 2: FRONTERAS ---
         universe = self.filters.apply_positional_limits(universe, cfg)
         if verbose:
             print(f"   ├─ Frontera Posicional: {len(universe):,}")
@@ -70,6 +67,15 @@ class UniverseReductionStrategy:
             if verbose:
                 print(f"   ├─ Poda Perfiles: {len(universe):,}")
 
+            # --- NUEVA ETAPA: DISSECCIÓN QUIRÚRGICA ---
+            universe = self.filters.apply_entropy_shannon(universe, cfg)
+            if verbose:
+                print(f"   ├─ Entropía Shannon: {len(universe):,}")
+
+            universe = self.filters.apply_digital_root_sum(universe, cfg)
+            if verbose:
+                print(f"   ├─ Raíz Digital (SDR): {len(universe):,}")
+
             # --- ETAPA 5: COMPLEXITY ---
             universe = self.filters.apply_ac_complexity(universe, cfg)
             if verbose:
@@ -77,9 +83,9 @@ class UniverseReductionStrategy:
 
             # Pulido final
             stds = self.xp.std(universe.astype(self.xp.float32), axis=1)
-            std_min = cfg.get("std_min", 7.8)
-            std_max = cfg.get("std_max", 12.8)
-            universe = universe[(stds >= std_min) & (stds <= std_max)]
+            universe = universe[
+                (stds >= cfg.get("std_min", 8.0)) & (stds <= cfg.get("std_max", 12.6))
+            ]
             if verbose:
                 print(f"   ├─ Pulido Final (Std): {len(universe):,}")
 

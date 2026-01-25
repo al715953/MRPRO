@@ -42,6 +42,15 @@ class BacktestResultDTO:
     hit_distribution: Dict[int, int]
     version_tag: str = "v1.0"
 
+    @property
+    def metrics(self) -> Dict[str, Any]:
+        """Proporciona una interfaz de métricas legible para el optimizador."""
+        return {
+            "hits_5_6": self.hit_distribution.get(5, 0),
+            "hits_4_6": self.hit_distribution.get(4, 0),
+            "hits_3_6": self.hit_distribution.get(3, 0),
+        }
+
 
 # --- Infraestructura de Filtrado de Alto Rendimiento ---
 
