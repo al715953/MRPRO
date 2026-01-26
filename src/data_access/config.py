@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "ENGINE V5.0: Quantum Jump Edition."
+VERSION_TAG = "V35.1: Budget Controlled Edition (Fixed)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
