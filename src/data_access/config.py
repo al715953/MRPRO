@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V5.8: Quantum Dithering + Omega Cloud"
+VERSION_TAG = "ENGINE V5.9.7: Triple-Threat Resonance (Power Boost)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
