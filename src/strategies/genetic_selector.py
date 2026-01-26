@@ -88,30 +88,55 @@ class GeneticSelectorStrategy:
         return ai_scores, geo_scores
 
     def _apply_mutant_mesh(self, u_xp, hybrid_scores, ai_norm, xp):
-        # Implementación del Filtro N-4 Dinámico
+        """
+        MALLA DE DIVERSIDAD V35.0: Elite Handler Edition.
+        Protege a los candidatos de alta resonancia (AI > 0.85) y aplica filtro N-4.
+        """
+        # 1. Ordenar por Score Híbrido (Mezcla IA + Histórica)
         sorted_indices = xp.argsort(hybrid_scores)[::-1]
         selected_indices = []
-        zones = [(0, 20, 8), (21, 200, 6), (201, 1500, 4), (1501, 5000, 2)]
+
+        # 2. Zonas de Quota Dinámicas (V35.0): Más profundidad en el Top 2000
+        # (inicio, fin, cantidad_a_seleccionar)
+        zones = [(0, 50, 10), (51, 500, 15), (501, 2000, 15)]
 
         for start, end, quota in zones:
             zone_count = 0
             for idx in sorted_indices[start:end]:
                 idx_int = int(idx)
-                ticket_set = set(
-                    u_xp[idx_int].get().tolist()
-                    if hasattr(u_xp[idx_int], "get")
-                    else u_xp[idx_int].tolist()
-                )
 
+                # Conversión eficiente GPU -> CPU para comparación de sets
+                ticket_val = (
+                    u_xp[idx_int].get()
+                    if hasattr(u_xp[idx_int], "get")
+                    else u_xp[idx_int]
+                )
+                ticket_set = set(ticket_val.tolist())
+
+                # --- 🟢 FASE A: RESCATE DE ÉLITE (Quantum Jump) ---
+                # Si el score de IA es > 0.85, el ticket es una anomalía de alta confianza.
+                # Lo inyectamos directamente ignorando la redundancia moderada.
+                if float(ai_norm[idx_int]) > 0.85:
+                    if idx_int not in selected_indices:
+                        selected_indices.append(idx_int)
+                        zone_count += 1
+                    continue
+
+                # --- 🔴 FASE B: FILTRO DE REDUNDANCIA N-4 ---
                 is_redundant = False
                 for s_idx in selected_indices:
-                    sel_ticket = set(
-                        u_xp[s_idx].get().tolist()
+                    sel_val = (
+                        u_xp[s_idx].get()
                         if hasattr(u_xp[s_idx], "get")
-                        else u_xp[s_idx].tolist()
+                        else u_xp[s_idx]
                     )
+                    sel_ticket = set(sel_val.tolist())
+
                     overlap = len(ticket_set & sel_ticket)
-                    # Rescate si AI Score > 0.92
+
+                    # Criterio N-4:
+                    # - Si comparten 5 o 6 números: Redundancia Absoluta.
+                    # - Si comparten 4 números: Solo se acepta si el AI Score es muy alto (>0.92).
                     if overlap >= 5 or (
                         overlap == 4 and float(ai_norm[idx_int]) < 0.92
                     ):
@@ -121,6 +146,9 @@ class GeneticSelectorStrategy:
                 if not is_redundant:
                     selected_indices.append(idx_int)
                     zone_count += 1
+
+                # Salir de la zona si ya cumplimos la cuota
                 if zone_count >= quota:
                     break
+
         return selected_indices

@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "ENGINE V4.6: Contrast Injection Edition."
+VERSION_TAG = "ENGINE V5.0: Quantum Jump Edition."
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
@@ -87,9 +87,9 @@ BEST_SETTINGS = {
     ],
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     "ensemble_config": {
-        "alpha_ancla": {"depth": 6, "weight": 0.50},  # El protector del 5/6
-        "beta_sniper": {"depth": 9, "weight": 0.30},  # El equilibrio actual
-        "omega_hunter": {"depth": 11, "weight": 0.20},  # El cazador del Jackpot 6/6
+        "alpha_ancla": {"depth": 6, "weight": 0.25},  # El protector del 5/6
+        "beta_sniper": {"depth": 9, "weight": 0.35},  # El equilibrio actual
+        "omega_hunter": {"depth": 13, "weight": 0.40},  # El cazador del Jackpot 6/6
     },
     "focal_gamma": 4.0,  # Para penalizar errores en el Top de la pirámide
     "mutant_threshold_omega": 0.92,

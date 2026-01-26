@@ -3,161 +3,179 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 from src.data_access.config import DATA_FOLDER
 
 
 def run_forensic_visualization():
     """
-    DASHBOARD V4.5.2: Sniper X-Ray.
-    Optimizado para detectar colapsos de energía y validar la Trifecta.
+    VISUALIZER V5.1: Conflict & Dilution Auditor.
+    Evolucionado para detectar por qué los expertos anulan la señal del Jackpot.
+    Resuelve el ValueError de mapeo de tipos en la paleta de Seaborn.
     """
-    # Ruta maestra del JSON generado por el PerformanceTracker
-    path = os.path.join(DATA_FOLDER, "backtest_results.json")
+    # 1. LOCALIZACIÓN DE TELEMETRÍA
+    log_path = "data/detailed_forensic_log.csv"
+    json_path = "data/backtest_results.json"
 
-    if not os.path.exists(path):
-        # Fallback para rutas absolutas en entornos UHPC
-        path = r"D:\Python\MRPro\data\backtest_results.json"
-
-    if not os.path.exists(path):
-        print(f"❌ Error: Archivo de resultados no encontrado en {path}")
+    if os.path.exists(log_path):
+        df = pd.read_csv(log_path)
+        source = "CSV (Detallado)"
+    elif os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            data = json.load(f)
+            df = pd.DataFrame(data)
+        source = "JSON (Resumen)"
+    else:
+        print("❌ Error: No se encontraron archivos de telemetría en la carpeta data.")
         return
 
-    with open(path, "r") as f:
-        data = json.load(f)
-
-    df = pd.DataFrame(data)
-    if df.empty:
-        print("⚠️ El JSON está vacío. Corra el backtest nuevamente.")
-        return
-
-    # Limpieza de columnas para compatibilidad total
+    # 2. LIMPIEZA Y BLINDAJE DE DATOS
     df.columns = [c.lower().strip() for c in df.columns]
 
-    # Mapeo de compatibilidad: Si no hay 'hybrid_score', usamos 'ai_score'
-    if "hybrid_score" not in df.columns and "ai_score" in df.columns:
-        df["hybrid_score"] = df["ai_score"]
+    # CRÍTICO: Convertir hits a entero para que coincida con las llaves de la paleta
+    if "hits" in df.columns:
+        df["hits"] = pd.to_numeric(df["hits"], errors="coerce").fillna(0).astype(int)
+    else:
+        print("❌ Error: La columna 'hits' no existe en los logs.")
+        return
 
-    # --- CONFIGURACIÓN SNIPER V4.5 ---
-    sns.set_theme(style="darkgrid")
-    custom_palette = {3: "#A9A9A9", 4: "#FFD700", 5: "#228B22", 6: "#00FFFF"}
-    fig, axes = plt.subplots(3, 2, figsize=(22, 22))
+    # 3. CONFIGURACIÓN ESTÉTICA (Dark Mode para Ingeniería)
+    plt.style.use("dark_background")
+    fig, axes = plt.subplots(2, 3, figsize=(24, 16))
     fig.suptitle(
-        f"Dashboard Sniper V4.5.2 - Análisis de Fuga de Energía\nArchivo: {os.path.basename(path)}",
-        fontsize=26,
+        f"AUDITORÍA MRPRO V5.1 - Diagnóstico de Señal\nFuente: {source} | Foco: Ruptura del Muro de Energía",
+        fontsize=28,
+        color="#00d4ff",
         fontweight="bold",
-        color="#1f77b4",
-        y=0.98,
     )
 
-    # 1. DISTRIBUCIÓN DE RANKS (Zoom Zona de Captura)
-    sns.histplot(
-        df[df["rank"] <= 5000]["rank"],
-        bins=50,
-        kde=True,
-        ax=axes[0, 0],
-        color="#7fcdbb",
-    )
-    axes[0, 0].set_title("1. Distribución de Ranks (Foco Top 5000)", fontsize=16)
+    # Paleta técnica con llaves enteras
+    palette = {
+        0: "#2a2a2a",
+        1: "#3a3a3a",
+        2: "#4a4a4a",
+        3: "#5a5a5a",
+        4: "#ffcc00",
+        5: "#ff3300",
+        6: "#00ffff",
+    }
 
-    # 2. ANÁLISIS DEL COLAPSO (0.15 Diagnostic)
+    # --- PANEL 1: MAPA DE CONFLICTO (ALPHA VS OMEGA) ---
+    # Detecta si el modelo ancla está matando la señal del cazador
+    x_col = "score_alpha" if "score_alpha" in df.columns else "ai_score"
+    y_col = "score_omega" if "score_omega" in df.columns else "geo_score"
+
     sns.scatterplot(
         data=df,
-        x="hybrid_score",
-        y="rank",
+        x=x_col,
+        y=y_col,
         hue="hits",
-        palette=custom_palette,
+        palette=palette,
         s=150,
-        edgecolor="black",
-        alpha=0.7,
+        alpha=0.8,
+        ax=axes[0, 0],
+    )
+    axes[0, 0].set_title(
+        f"1. Espacio de Conflicto: {x_col} vs {y_col}", fontsize=16, color="cyan"
+    )
+    axes[0, 0].grid(True, alpha=0.1)
+
+    # --- PANEL 2: ESPECTRO DE ENERGÍA (IDENTIFICADOR DE MUROS) ---
+    sns.histplot(
+        data=df,
+        x="ai_score",
+        hue="hits",
+        multiple="stack",
+        bins=40,
+        palette=palette,
         ax=axes[0, 1],
     )
-    axes[0, 1].set_yscale("log")
-    axes[0, 1].invert_yaxis()
-    # Línea crítica del bono de alerta
-    axes[0, 1].axvline(x=0.15, color="red", linestyle="--", label="Bono Mutante (0.15)")
-    axes[0, 1].set_title("2. Energía Híbrida vs Rank (Muro de los 0.15)", fontsize=16)
+    axes[0, 1].axvline(
+        0.15, color="#00ffff", linestyle="--", label="Bono Mutante (0.15)"
+    )
+    axes[0, 1].axvline(
+        0.1028, color="#ff00ff", linestyle=":", label="Muro de Residuos (0.1028)"
+    )
+    axes[0, 1].set_title(
+        "2. Espectro de Energía: Identificación de Muros", fontsize=16, color="cyan"
+    )
     axes[0, 1].legend()
 
-    # 3. DESGLOSE DE LA TRIFECTA (Alpha, Beta, Omega)
-    # Buscamos si el JSON tiene el ADN desglosado
-    cols_expert = ["score_alpha", "score_beta", "score_omega"]
-    if all(c in df.columns for c in cols_expert) and df["score_alpha"].sum() > 0:
-        recent = df.tail(15)
-        recent[cols_expert].plot(
-            kind="bar",
-            stacked=True,
-            ax=axes[1, 0],
-            color=["#3498db", "#e67e22", "#2ecc71"],
-        )
-        axes[1, 0].set_title(
-            "3. Desglose de Energía: Alpha | Beta | Omega", fontsize=16
-        )
-        axes[1, 0].set_xticklabels(recent["draw_id"], rotation=45)
-    else:
-        axes[1, 0].text(
-            0.5,
-            0.5,
-            "SIN DATOS DE TRIFECTA\n(Verifique snapshot en Selector)",
-            ha="center",
-            va="center",
-            fontsize=14,
-            color="red",
-        )
-        axes[1, 0].set_title("3. Desglose de Energía (Inactivo)", fontsize=16)
-
-    # 4. SATURACIÓN TEMPORAL
-    sns.scatterplot(
+    # --- PANEL 3: EFICIENCIA DE RANKING (BOXENPLOT CORREGIDO) ---
+    # Usamos hue='hits' para evitar el Warning de Seaborn v0.13
+    sns.boxenplot(
         data=df,
-        x="draw_id",
+        x="hits",
         y="rank",
         hue="hits",
-        palette=custom_palette,
-        s=120,
-        marker="X",
-        ax=axes[1, 1],
+        palette=palette,
+        legend=False,
+        ax=axes[0, 2],
     )
-    axes[1, 1].set_yscale("log")
-    axes[1, 1].invert_yaxis()
-    axes[1, 1].set_title("4. Saturación: Evolución de Ranks", fontsize=16)
-
-    # 5. CORRELACIÓN IA VS PROXIMIDAD (Order 2)
-    sns.regplot(
-        data=df,
-        x="hybrid_score",
-        y="proximity",
-        order=2,
-        ax=axes[2, 0],
-        scatter_kws={"alpha": 0.4, "s": 100},
-        line_kws={"color": "red"},
+    axes[0, 2].set_yscale("log")
+    axes[0, 2].invert_yaxis()
+    axes[0, 2].set_title(
+        "3. Profundidad de Captura (Rank Log Scale)", fontsize=16, color="cyan"
     )
-    axes[2, 0].set_title("5. Correlación: Confianza vs Distancia Crítica", fontsize=16)
 
-    # 6. MAPA DE CALOR DE HITS (AI vs GEO)
-    if "geo_score" in df.columns:
+    # --- PANEL 4: CRONOLOGÍA DE RESONANCIA ---
+    if "draw_id" in df.columns:
+        sns.lineplot(
+            data=df, x="draw_id", y="ai_score", color="white", alpha=0.2, ax=axes[1, 0]
+        )
         sns.scatterplot(
             data=df,
-            x="hybrid_score",
-            y="geo_score",
+            x="draw_id",
+            y="ai_score",
             hue="hits",
-            size="rank",
-            sizes=(20, 200),
-            palette=custom_palette,
-            ax=axes[2, 1],
+            palette=palette,
+            s=100,
+            ax=axes[1, 0],
         )
-        axes[2, 1].set_title(
-            "6. Resonancia Híbrida: AI Score vs Geo Score", fontsize=16
+        axes[1, 0].set_title(
+            "4. Evolución de Energía por Sorteo", fontsize=16, color="cyan"
         )
-    else:
-        sns.lineplot(data=df, x="draw_id", y="proximity", marker="o", ax=axes[2, 1])
-        axes[2, 1].set_title("6. Evolución de Proximidad", fontsize=16)
+
+    # --- PANEL 5: ENERGÍA VS PROXIMIDAD ---
+    if "proximity" in df.columns:
+        sns.regplot(
+            data=df,
+            x="ai_score",
+            y="proximity",
+            scatter=False,
+            color="#00d4ff",
+            ax=axes[1, 1],
+        )
+        sns.scatterplot(
+            data=df,
+            x="ai_score",
+            y="proximity",
+            hue="hits",
+            palette=palette,
+            s=100,
+            ax=axes[1, 1],
+        )
+        axes[1, 1].set_title(
+            "5. Correlación: Energía vs Proximidad Real", fontsize=16, color="cyan"
+        )
+
+    # --- PANEL 6: HISTOGRAMA DE RENDIMIENTO ---
+    hits_count = df["hits"].value_counts().sort_index()
+    hits_count.plot(kind="bar", color="#00d4ff", ax=axes[1, 2])
+    axes[1, 2].set_title(
+        "6. Distribución Total de Aciertos (Hits)", fontsize=16, color="cyan"
+    )
+    for i, v in enumerate(hits_count):
+        axes[1, 2].text(
+            i, v + 0.1, str(v), ha="center", color="white", fontweight="bold"
+        )
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-    # Guardar reporte de alta fidelidad
-    output_img = os.path.join(DATA_FOLDER, "diagnostico_sniper_v4.5.jpg")
+    # Guardado de alta fidelidad para el equipo
+    output_img = os.path.join(DATA_FOLDER, "diagnostico_v5_conflict.png")
     plt.savefig(output_img, dpi=300)
-    print(f"✅ Dashboard V4.5.2 generado: {output_img}")
-    plt.show()
+    print(f"✅ Reporte Visual V5.1 generado con éxito: {output_img}")
 
 
 if __name__ == "__main__":
