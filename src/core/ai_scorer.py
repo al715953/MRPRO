@@ -17,8 +17,8 @@ except ImportError:
 
 class LotteryAIModel:
     """
-    ENGINE V5.0: Quantum Jump Edition.
-    Evita el colapso a 0.0000 mediante Recuperación de Señal Logarítmica.
+    ENGINE V5.3: Gamma Flexible Edition.
+    Ajusta la curvatura de aprendizaje para capturar 'vecindarios' ganadores.
     """
 
     def __init__(self):
@@ -29,16 +29,16 @@ class LotteryAIModel:
         self._build_ensemble()
 
     def _build_ensemble(self):
-        # Parametrización para evitar el colapso de árboles (Poda más suave)
+        # CONFIGURACIÓN V5.3: Gamma 1.5 para mayor flexibilidad
         base_params = {
-            "n_estimators": self.config.get("n_estimators", 2000),
+            "n_estimators": self.config.get("n_estimators", 2200),
             "learning_rate": 0.03,
             "subsample": 0.9,
             "colsample_bytree": 0.9,
-            "objective": "reg:pseudohubererror",  # Cambiamos a Pseudo-Huber para mayor robustez
+            "objective": "reg:pseudohubererror",
             "device": "cuda" if HAS_GPU else "cpu",
             "tree_method": "hist" if HAS_GPU else "auto",
-            "gamma": 1.0,  # Reducimos gamma para permitir que los árboles crezcan
+            "gamma": 1.5,  # Reducción táctica para evitar rigidez
         }
 
         ensemble_cfg = self.config.get("ensemble_config", {})
@@ -62,10 +62,11 @@ class LotteryAIModel:
         primes_arr = xp.array([2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37])
         prime_count = xp.sum(xp.isin(data, primes_arr), axis=1)
 
+        # Aceleración de segundo orden
         d1 = xp.diff(data, axis=1)
         avg_acceleration = xp.mean(xp.abs(xp.diff(d1, axis=1)), axis=1)
 
-        # RASGO DE SEGURIDAD: Estructura Intrínseca (Nunca es cero)
+        # RASGO DE SEGURIDAD: Armonía Estructural
         harmony = (sums / 120.0) * (stds / 11.0) * ((evens + 1) / 4.0)
 
         features = xp.column_stack(
@@ -80,6 +81,7 @@ class LotteryAIModel:
         X_pos, _ = self._extract_features(winners)
         y_pos = np.linspace(0.9, 1.0, len(winners), dtype=np.float32)
 
+        # Ruido controlado para el Láser
         raw_noise = np.sort(
             np.random.choice(np.arange(1, total_balls + 1), (len(winners) * 12, 6)),
             axis=1,
@@ -105,23 +107,18 @@ class LotteryAIModel:
         resonance_pool = []
 
         for name, expert in self.experts.items():
-            score = expert["model"].predict(X_scaled)
-            # Clip para evitar ceros negativos
-            score = np.maximum(score, 1e-6)
+            score = np.maximum(expert["model"].predict(X_scaled), 1e-6)
             breakdown[name] = score
-            resonance_pool.append(
-                np.log1p(score) * expert["weight"]
-            )  # Fusión Logarítmica
+            # Fusión Logarítmica para expandir micro-señales
+            resonance_pool.append(np.log1p(score) * expert["weight"])
 
-        # 1. Energía Base Logarítmica
         final_energy = np.sum(resonance_pool, axis=0)
 
-        # 2. SEGURO CONTRA SINGULARIDAD: Si la IA falla, la Armonía rescata el ticket
-        # Esto evita el 0.0000 absoluto
+        # Seguro de Armonía Estructural (Anti-Singularidad)
         harmony_val = harmony.get() if hasattr(harmony, "get") else harmony
         final_energy = np.maximum(final_energy, harmony_val * 0.05)
 
-        # 3. Normalización Soft-Max (No lineal)
+        # Normalización Dinámica
         f_max = final_energy.max() + 1e-10
         final_energy = final_energy / f_max
 

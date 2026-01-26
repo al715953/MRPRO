@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V35.1: Budget Controlled Edition (Fixed)"
+VERSION_TAG = "V5.8: Quantum Dithering + Omega Cloud"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
