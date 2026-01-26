@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "ENGINE V5.9.7: Triple-Threat Resonance (Power Boost)"
+VERSION_TAG = "ENGINE V5.9.8: Omni-Cloud Diffusion (Elite Mesh)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
