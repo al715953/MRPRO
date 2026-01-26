@@ -1,8 +1,7 @@
-import json
-import os
 import time
 import numpy as np
 from rich.console import Console
+from rich.table import Table
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -18,46 +17,41 @@ try:
 except ImportError:
     HAS_CUPY = False
 
-from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, BacktestResultDTO
+from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
-from src.core.analytics import PerformanceTracker  # Módulo de bitácora
-from src.data_access.config import VERSION_TAG  # Tag de versión
+from src.core.analytics import PerformanceTracker
+from src.data_access.config import VERSION_TAG
 
 
 class BacktestEngine:
-    """
-    Motor Sniper V6.3.4: Telemetría de Alta Resolución y Bitácora Automática.
-    - Preserva el formato de log original.
-    - Integra PerformanceTracker para persistencia histórica.
-    - Optimizado para evitar saturación de memoria en Windows.
-    """
+    """Motor Sniper V14.9: Integración de Telemetría y Gestión de Memoria."""
 
     def __init__(self):
-        self.rules = MelateRetroRules()
-        self.console = Console()
-        self.forensic_data = []  # Almacena errores de distancia para el Scorer
-        self.tracker = PerformanceTracker()  # Inicialización de bitácora
+        self.rules, self.console = MelateRetroRules(), Console()
+        self.tracker, self.forensic_data = PerformanceTracker(), []
 
     def run(
         self,
         strategy,
         history: DrawHistoryDTO,
-        config: PredictionConfigDTO,
-        verbose: bool = True,
+        config,
+        verbose=True,
         pre_process_strategy=None,
     ):
-        total_investment = 0.0
-        total_earnings = 0.0
-        hits_distribution = {i: 0 for i in range(7)}
-        coverage_6_count = 0
+        """
+        Ejecuta la misión de backtest con arquitectura desacoplada.
+        Delegación total de IA a la estrategia y validación financiera estricta.
+        """
+        total_inv, total_earn, coverage_6 = 0.0, 0.0, 0
+        hits_dist = {i: 0 for i in range(7)}  # Registro de impacto 0/6 a 6/6
 
-        full_history = list(
-            zip(history.dates, history.winning_numbers, history.concursos)
+        # Preparación del historial cronológico
+        full_h = sorted(
+            zip(history.dates, history.winning_numbers, history.concursos),
+            key=lambda x: x[2],
         )
-        full_history.sort(key=lambda x: x[2])
-
-        test_size = min(config.backtest_size, len(full_history))
-        start_index = len(full_history) - test_size
+        test_size = min(config.backtest_size, len(full_h))
+        start_idx = len(full_h) - test_size
 
         self.console.print(
             f"\n[bold magenta]🚀 INICIANDO MISIÓN ALPHA GLOBAL ({VERSION_TAG})[/bold magenta]"
@@ -65,129 +59,156 @@ class BacktestEngine:
 
         with Progress(
             SpinnerColumn(),
-            TextColumn(
-                "[bold blue]📡 Sniper Lab:[/][white] Analizando picos de probabilidad...[/]"
-            ),
+            TextColumn("[bold blue]📡 Sniper Lab:[/][white] Analizando Malla...[/]"),
             BarColumn(bar_width=20),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=self.console,
             disable=not verbose,
         ) as progress:
-            task_id = progress.add_task("Misión", total=test_size)
+            task = progress.add_task("Misión", total=test_size)
 
-            for i in range(start_index, len(full_history)):
-                iter_start = time.time()
-                _, target_draw, target_id = full_history[i]
+            for i in range(start_idx, len(full_h)):
+                t_start = time.time()
+                _, target, t_id = full_h[i]  # Sorteo real a batir
 
-                # 1. Preparar Historial "Ciego"
-                past_data = full_history[:i]
-                p_dates, p_nums, p_ids = zip(*past_data)
-                current_history = DrawHistoryDTO(
-                    list(p_dates), list(p_nums), list(p_ids)
+                # Ventana de datos históricos hasta el sorteo actual
+                past = full_h[:i]
+                d_past, n_past, ids_past = zip(*past)
+                curr_h = DrawHistoryDTO(list(d_past), list(n_past), list(ids_past))
+
+                # --- FASE 1: REDUCCIÓN (Handshake V14.1) ---
+                if pre_process_strategy:
+                    res_univ = pre_process_strategy.predict(
+                        curr_h, config, verbose=False
+                    )
+                    # Sincronización del puntero físico para la Fase 2
+                    config.raw_universe_ptr = res_univ.metadata.get("raw_ndarray")
+
+                    # Radar de Cobertura (Jackpot Tracker)
+                    if config.raw_universe_ptr is not None:
+                        xp = (
+                            cp.get_array_module(config.raw_universe_ptr)
+                            if HAS_CUPY
+                            else np
+                        )
+                        t_xp = xp.asarray(target[:6], dtype=xp.uint8)
+                        if (
+                            int(
+                                xp.max(
+                                    xp.sum(
+                                        xp.isin(config.raw_universe_ptr, t_xp), axis=1
+                                    )
+                                )
+                            )
+                            == 6
+                        ):
+                            coverage_6 += 1
+
+                # --- FASE 2: ESTRATEGIA (IA & Selección) ---
+                # El entrenamiento ahora es interno: strategy se auto-gestiona
+                prediction = strategy.predict(curr_h, config)
+
+                # Auditoría Forense: Rank y Distancia
+                audit = (
+                    strategy.audit_winner(curr_h, config, target)
+                    if hasattr(strategy, "audit_winner")
+                    else {}
                 )
 
-                # 2. Fase 1: Reducción de Universo
-                if pre_process_strategy:
-                    config.filter_overrides["verbose"] = False
-                    univ_result = pre_process_strategy.predict(current_history, config)
-                    config.raw_universe_ptr = univ_result.metadata.get("raw_ndarray")
-
-                    # Radar de Cobertura en Universo Reducido
-                    if config.raw_universe_ptr is not None:
-                        hits_in_univ = np.max(
-                            np.sum(
-                                np.isin(config.raw_universe_ptr, target_draw[:6]),
-                                axis=1,
-                            )
-                        )
-                        if hits_in_univ == 6:
-                            coverage_6_count += 1
-
-                # 3. Fase 2: Entrenamiento y Selección
-                # Inyectamos el feedback forense acumulado
-                if hasattr(strategy.ai_model, "train"):
-                    strategy.ai_model.train(
-                        current_history.winning_numbers,
-                        config.total_balls,
-                        feedback_loop=self.forensic_data,
-                    )
-
-                prediction = strategy.predict(current_history, config)
-
-                # 4. Auditoría Forense (AI, Geo y Hits)
-                audit = {}
-                if hasattr(strategy, "audit_winner"):
-                    audit = strategy.audit_winner(current_history, config, target_draw)
-                    audit["draw_id"] = int(target_id)
-                    audit["internal_idx"] = i
+                if audit:
+                    audit["draw_id"] = int(t_id)
                     self.forensic_data.append(audit)
 
-                # 5. Validación Financiera
-                for ticket in prediction.tickets:
-                    total_investment += self.rules.ticket_cost
-                    h_nat, h_add = self.rules.validate_ticket(ticket, target_draw)
-                    total_earnings += self.rules.calculate_prize(h_nat, h_add)
-                    hits_distribution[h_nat] += 1
+                # --- FASE 3: VALIDACIÓN FINANCIERA ---
+                for tkt in prediction.tickets:
+                    total_inv += self.rules.ticket_cost
+                    h_n, h_a = self.rules.validate_ticket(
+                        tkt, target
+                    )  # Conteo de hits reales
+                    total_earn += self.rules.calculate_prize(h_n, h_a)
+                    hits_dist[h_n] += 1
 
-                # 6. TELEMETRÍA (FORMATO ORIGINAL PRESERVADO)
+                # Telemetría en tiempo real
                 if verbose and audit:
-                    self._render_telemetry(audit, target_id, iter_start)
+                    self._render_telemetry(audit, t_id, t_start)
 
-                # 7. Limpieza explícita de VRAM para Windows
+                # Gestión de memoria GPU (RTX 4070 Ti)
                 if HAS_CUPY:
                     cp.get_default_memory_pool().free_all_blocks()
 
-                progress.advance(task_id)
+                progress.advance(task)
 
-        # Construir DTO final
-        result = self._build_result(
+        # Empaquetado de resultados finales
+        res = BacktestResultDTO(
+            f"Sniper Global (Dynamic Hybrid)",
             test_size,
-            total_investment,
-            total_earnings,
-            hits_distribution,
-            coverage_6_count,
+            total_inv,
+            total_earn,
+            total_earn - total_inv,
+            hits_dist,
         )
 
-        # REGISTRO EN BITÁCORA CSV
-        self.tracker.log_run(result, tag=VERSION_TAG, audit_history=self.forensic_data)
+        self._print_final_report(res, coverage_6)
+        self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
+        return res
 
-        return result
+    def _render_telemetry(self, audit, t_id, t_s):
+        """Renderizado con Geo-Score integrado y paleta Sniper."""
+        d, r, h = (
+            audit.get("proximity", 999),
+            audit.get("rank", 0),
+            audit.get("hits", 0),
+        )
+        ai_s = audit.get("ai_score", 0.0)
+        geo_s = audit.get("geo_score", 0.0)  # Recuperamos el Geo
+        u_s = audit.get("univ_size", 0)
 
-    def _render_telemetry(self, audit, target_id, start_time):
-        """Mantiene el formato de log exacto solicitado."""
-        dist = audit.get("proximity", 999)
-        rank = audit.get("rank", 0)
-        hits = audit.get("hits", 0)
-        ai_score = audit.get("ai_score", 0.0)
-        geo_score = audit.get("geo_score", 0.0)
+        st_c = "bold green" if d == 0 else "bold red"
+        h_c = "bold yellow" if h >= 5 else "cyan" if h == 4 else "white"
+        d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
 
-        # Colores dinámicos para visibilidad técnica
-        st_col = "bold green" if dist == 0 else "bold red"
-        h_col = "bold yellow" if hits >= 5 else "cyan" if hits == 4 else "white"
-        d_col = "bold green" if dist == 0 else "bold yellow" if dist < 20 else "white"
+        status = "🎯 HIT" if d == 0 else "❌"
 
-        hit_label = "🎯 HIT" if dist == 0 else "❌ MISSED"
-
-        # Log de salida: #ID | U: size | X/6 | AI: score | Geo: score | Rank: #pos | Dist: dist | STATUS | TIME
+        # Formato de log extendido con Geo
         self.console.print(
-            f"[bold blue]#{target_id}[/] | "
-            f"U: [white]{audit.get('univ_size', 0):>6,d}[/] | "
-            f"[{h_col}]{hits}/6[/] | "
-            f"AI: [bold yellow]{ai_score:.4f}[/] | "
-            f"Geo: [bold cyan]{geo_score:.4f}[/] | "
-            f"Rank: [white]#{rank:<5,d}[/] | "
-            f"Dist: [{d_col}]{dist:<4,d}[/] | "
-            f"[{st_col}]{hit_label}[/] | [dim]⏱ {time.time()-start_time:.2f}s[/dim]"
+            f"[bold blue]#{t_id}[/] | "
+            f"U: {u_s:>6,d} | "
+            f"[{h_c}]{h}/6[/] | "
+            f"AI: [bold yellow]{ai_s:.4f}[/] | "
+            f"Geo: [bold cyan]{geo_s:.4f}[/] | "
+            f"Rank: #{r:<5} | "
+            f"Dist: [{d_c}]{d:<4}[/] | "
+            f"[{st_c}]{status}[/] | [dim]{time.time()-t_s:.2f}s[/dim]"
         )
 
-    def _build_result(self, size, investment, earnings, hits, coverage):
-        """Alineado con BacktestResultDTO de dtos.py."""
-        return BacktestResultDTO(
-            strategy_name="Quantum Alpha V10.5",
-            total_draws_tested=size,
-            investment=investment,
-            earnings=earnings,
-            net_balance=earnings - investment,
-            hit_distribution=hits,
+    def _print_final_report(self, res, coverage_6):
+        """Reporte sin cuadros negros: Encabezados definidos."""
+        self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
+
+        # Tabla de Resumen Financiero
+        summary = Table(show_header=True, header_style="bold magenta")
+        summary.add_column("Métrica Sniper", style="dim", width=20)
+        summary.add_column("Valor", justify="right", width=15)
+
+        summary.add_row("Sorteos Analizados", str(res.total_draws_tested))
+        summary.add_row(
+            "Balance Neto",
+            f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]",
         )
+        summary.add_row("Jackpots en Universo", f"[bold yellow]{coverage_6}[/]")
+        self.console.print(summary)
+
+        # Tabla de Distribución de Aciertos
+        dist_table = Table(
+            title="Distribución de Aciertos", show_header=True, header_style="bold cyan"
+        )
+        dist_table.add_column("Rango", justify="center")
+        dist_table.add_column("Tickets", justify="right")
+
+        for h in range(7):
+            count = res.hit_distribution.get(h, 0)
+            style = "bold yellow" if h >= 4 else "white"
+            dist_table.add_row(f"{h}/6 aciertos", f"[{style}]{count}[/]")
+
+        self.console.print(dist_table)

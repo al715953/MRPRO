@@ -9,22 +9,31 @@ from src.data_access.config import BEST_SETTINGS
 
 
 class UniverseReductionStrategy:
-    """Coordinador Sniper V14.1: Optimización de Interfaz para Calibración."""
+    """Coordinador Sniper V14.1: Versión Blindada (Handshake Obligatorio)."""
 
     def __init__(self):
         self.xp, self.backend_name = UniverseBackend.get_xp()
         self.filters = VectorizedFilters(self.xp)
 
     def predict(self, history, config, verbose=True) -> PredictionResultDTO:
-        """Punto de entrada universal con soporte para modo silencioso."""
+        """Handshake garantizado: El universo fluye sin pérdidas a la Fase 2."""
         universe = self.reduce(history, config, verbose=verbose)
-        return PredictionResultDTO(
+
+        # Blindaje: Si el universo falla, devolvemos una estructura vacía pero válida
+        if universe is None:
+            universe = self.xp.array([], dtype=self.xp.uint8)
+
+        res = PredictionResultDTO(
             strategy_name=f"Sniper V14.1 ({self.backend_name})",
             tickets=universe.tolist() if hasattr(universe, "tolist") else universe,
         )
 
+        # CONTRATO: Esta metadata es sagrada para el Backtester y la Fase 2
+        res.metadata = {"raw_ndarray": universe, "final_size": len(universe)}
+        return res
+
     def reduce(self, history, config, verbose=True):
-        """Motor de reducción con capas de Entropía y SDR integradas."""
+        """Tu lógica original V14.1 intacta con todos tus logs de telemetría."""
         start_time = time.time()
 
         cfg = getattr(config, "filter_overrides", None)
@@ -81,7 +90,7 @@ class UniverseReductionStrategy:
             if verbose:
                 print(f"   ├─ Complejidad AC: {len(universe):,}")
 
-            # Pulido final
+            # Pulido final original
             stds = self.xp.std(universe.astype(self.xp.float32), axis=1)
             universe = universe[
                 (stds >= cfg.get("std_min", 8.0)) & (stds <= cfg.get("std_max", 12.6))
@@ -91,6 +100,8 @@ class UniverseReductionStrategy:
 
         elapsed = time.time() - start_time
         if verbose:
-            print(f"✅ PUNTO DULCE: {len(universe):,} tickets ({elapsed:.2f}s)")
+            print(
+                f"✅ PUNTO DULCE RESTAURADO: {len(universe):,} tickets ({elapsed:.2f}s)"
+            )
 
         return universe
