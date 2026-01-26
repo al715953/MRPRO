@@ -17,9 +17,12 @@ try:
 except ImportError:
     HAS_CUPY = False
 
-from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO
+from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO, PredictionResultDTO
 from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
+from src.core.forensics import (
+    LotteryForensics,
+)  # Miembro del equipo para el desacoplamiento
 from src.data_access.config import VERSION_TAG
 
 
@@ -88,8 +91,8 @@ class BacktestEngine:
                     # Radar de Cobertura (Jackpot Tracker)
                     if config.raw_universe_ptr is not None:
                         xp = (
-                            cp.get_array_module(config.raw_universe_ptr)
-                            if HAS_CUPY
+                            cp
+                            if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
                             else np
                         )
                         t_xp = xp.asarray(target[:6], dtype=xp.uint8)
@@ -106,21 +109,27 @@ class BacktestEngine:
                             coverage_6 += 1
 
                 # --- FASE 2: ESTRATEGIA (IA & Selección) ---
-                # El entrenamiento ahora es interno: strategy se auto-gestiona
-                prediction = strategy.predict(curr_h, config)
+                # CORRECCIÓN DE HANDSHAKE: Desempaquetado de (PredictionResultDTO, snapshot)
+                prediction, snapshot = strategy.predict(curr_h, config)
 
-                # Auditoría Forense: Rank y Distancia
-                audit = (
-                    strategy.audit_winner(curr_h, config, target)
-                    if hasattr(strategy, "audit_winner")
-                    else {}
+                # Auditoría Forense: Delegada a LotteryForensics
+                xp_audit = (
+                    cp if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get")) else np
                 )
+                audit = LotteryForensics.audit_winner(snapshot, target, xp_audit)
 
                 if audit:
                     audit["draw_id"] = int(t_id)
+                    # Añadimos tamaño del universo para el reporte telemétrico
+                    audit["univ_size"] = (
+                        len(config.raw_universe_ptr)
+                        if config.raw_universe_ptr is not None
+                        else 0
+                    )
                     self.forensic_data.append(audit)
 
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
+                # 'prediction' ahora es el DTO correcto con el atributo .tickets
                 for tkt in prediction.tickets:
                     total_inv += self.rules.ticket_cost
                     h_n, h_a = self.rules.validate_ticket(
@@ -161,11 +170,15 @@ class BacktestEngine:
             audit.get("hits", 0),
         )
         ai_s = audit.get("ai_score", 0.0)
-        geo_s = audit.get("geo_score", 0.0)  # Recuperamos el Geo
+        geo_s = audit.get("geo_score", 0.0)
         u_s = audit.get("univ_size", 0)
 
         st_c = "bold green" if d == 0 else "bold red"
-        h_c = "bold yellow" if h >= 5 else "cyan" if h == 4 else "white"
+        h_c = (
+            "bold green"
+            if h == 6
+            else "bold yellow" if h == 5 else "cyan" if h == 4 else "white"
+        )
         d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
 
         status = "🎯 HIT" if d == 0 else "❌"

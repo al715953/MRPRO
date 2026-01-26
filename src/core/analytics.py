@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import json  # Inyectamos la librería para el JSON
 from datetime import datetime
 
 
@@ -11,12 +12,14 @@ class PerformanceTracker:
     ):
         self.master_file = master_file
         self.detail_file = detail_file
+        # Definimos la ruta del JSON para el visualizador
+        self.json_file = "data/backtest_results.json"
 
     def log_run(self, result, tag="v1.0", audit_history=None):
-        """Registra el resumen de la corrida y el detalle sorteo por sorteo."""
+        """Registra el resumen de la corrida y genera el JSON para el Plot."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        # 1. Registro Maestro (Resumen)
+        # 1. Registro Maestro (CSV) - Se mantiene igual
         roi = (
             (result.net_balance / result.investment) * 100
             if result.investment > 0
@@ -39,8 +42,17 @@ class PerformanceTracker:
             header=not os.path.exists(self.master_file),
         )
 
-        # 2. Registro Detallado (Sorteo por Sorteo)
+        # 2. Registro Detallado (JSON y CSV)
         if audit_history:
+            # --- NUEVO BLOQUE: ESCRITURA DEL JSON PARA EL VISUALIZADOR ---
+            try:
+                with open(self.json_file, "w") as f:
+                    json.dump(audit_history, f, indent=4)
+                print(f"📡 Estación de diagnóstico: {self.json_file} actualizado.")
+            except Exception as e:
+                print(f"⚠️ Error al escribir JSON: {e}")
+
+            # Registro CSV (Se mantiene igual)
             detailed_rows = []
             for entry in audit_history:
                 detailed_rows.append(
@@ -61,7 +73,4 @@ class PerformanceTracker:
                 mode="a",
                 index=False,
                 header=not os.path.exists(self.detail_file),
-            )
-            print(
-                f"📊 Detalle forense registrado: {len(detailed_rows)} sorteos añadidos al log."
             )

@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "SELECTOR V34.0: Mesh Sniper Edition"
+VERSION_TAG = "ENGINE V4.6: Contrast Injection Edition."
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
@@ -62,8 +62,8 @@ BEST_SETTINGS = {
     "max_depth": 9,
     "gamma": 4.0,
     # Malla Híbrida
-    "hybrid_alpha": 0.75,  # Peso para AI_Score
-    "hybrid_beta": 0.25,  # Peso para Geo_Resonance
+    "hybrid_alpha": 0.7,  # Peso para AI_Score
+    "hybrid_beta": 0.30,  # Peso para Geo_Resonance
     "threshold_ai_override": 0.85,  # Elevamos la vara para el Top 20
     "geo_floor_percentile": 50.0,
     # 3. Malla Cuántica (Fase 3: Genetic Selector)
@@ -85,6 +85,15 @@ BEST_SETTINGS = {
         "2-1-1-2",
         "1-2-1-2",
     ],
+    # Estamos agregando una trifecta de asesemblers, 3 IA´s
+    "ensemble_config": {
+        "alpha_ancla": {"depth": 6, "weight": 0.50},  # El protector del 5/6
+        "beta_sniper": {"depth": 9, "weight": 0.30},  # El equilibrio actual
+        "omega_hunter": {"depth": 11, "weight": 0.20},  # El cazador del Jackpot 6/6
+    },
+    "focal_gamma": 4.0,  # Para penalizar errores en el Top de la pirámide
+    "mutant_threshold_omega": 0.92,
+    "consensus_floor": 0.70,
 }
 
 # --- ESTÉTICA DE CONSOLA (ANSI) ---
