@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "ENGINE V5.9.8: Omni-Cloud Diffusion (Elite Mesh)"
+VERSION_TAG = "V6.3 (18:14 - Radar Híbrido)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
@@ -30,7 +30,7 @@ URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQ
 # --- CONFIGURACIÓN DE HARDWARE (UHPC) ---
 # Forzar uso de núcleos CUDA en RTX 4070 Ti
 GPU_ENABLED = True
-NUM_SIMULACIONES = 200000
+NUM_SIMULACIONES = 250000
 NUM_CANDIDATOS_MONTECARLO = 10000000
 
 # --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
@@ -56,21 +56,20 @@ BEST_SETTINGS = {
     "sdr_max": 42,  # Suma de Raíces Digitales máxima
     "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
-    "scale_pos_weight": 3.5,
-    "n_estimators": 2000,
-    "learning_rate": 0.015,
-    "max_depth": 9,
+    "scale_pos_weight": 4,
+    "n_estimators": 2200,
+    "learning_rate": 0.012,
+    "max_depth": 10,
     "gamma": 4.0,
     # Malla Híbrida
-    "hybrid_alpha": 0.7,  # Peso para AI_Score
-    "hybrid_beta": 0.30,  # Peso para Geo_Resonance
+    "hybrid_alpha": 0.5,  # Peso para AI_Score
+    "hybrid_beta": 0.5,  # Peso para Geo_Resonance
     "threshold_ai_override": 0.85,  # Elevamos la vara para el Top 20
     "geo_floor_percentile": 50.0,
     # 3. Malla Cuántica (Fase 3: Genetic Selector)
     # alpha_core_size: Asegura que el Top 5 de la IA sea inamovible
-    "alpha_core_size": 6,
-    # repulsion_strength: Controla el colapso de la malla (8.0 es el punto dulce)
-    "repulsion_strength": 5.0,
+    "alpha_core_size": 3,
+    "repulsion_strength": 2.8,
     "sampling_top": 2,  # Tickets de cobertura aleatoria en el Top 100
     # Umbrales de Calidad
     # General
@@ -87,9 +86,9 @@ BEST_SETTINGS = {
     ],
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     "ensemble_config": {
-        "alpha_ancla": {"depth": 6, "weight": 0.25},  # El protector del 5/6
+        "alpha_ancla": {"depth": 6, "weight": 0.15},  # El protector del 5/6
         "beta_sniper": {"depth": 9, "weight": 0.35},  # El equilibrio actual
-        "omega_hunter": {"depth": 13, "weight": 0.40},  # El cazador del Jackpot 6/6
+        "omega_hunter": {"depth": 14, "weight": 0.50},  # El cazador del Jackpot 6/6
     },
     "focal_gamma": 4.0,  # Para penalizar errores en el Top de la pirámide
     "mutant_threshold_omega": 0.92,

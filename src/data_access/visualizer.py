@@ -1,182 +1,122 @@
+# src/data_access/visualizer.py
+
 import json
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import numpy as np
-from src.data_access.config import DATA_FOLDER
 
 
-def run_forensic_visualization():
+def run_forensic_visualization(json_path="data/backtest_results.json"):
     """
-    VISUALIZER V5.1: Conflict & Dilution Auditor.
-    Evolucionado para detectar por qué los expertos anulan la señal del Jackpot.
-    Resuelve el ValueError de mapeo de tipos en la paleta de Seaborn.
+    VISUALIZER V6.3: Auditor de Resonancia (Fix de Palette & Hue).
+    Optimizado para evitar ValueErrors por tipos de datos.
     """
-    # 1. LOCALIZACIÓN DE TELEMETRÍA
-    log_path = "data/detailed_forensic_log.csv"
-    json_path = "data/backtest_results.json"
+    if not os.path.exists(json_path):
+        print(f"❌ Error: Archivo no encontrado en {json_path}")
+        return
 
-    if os.path.exists(log_path):
-        df = pd.read_csv(log_path)
-        source = "CSV (Detallado)"
-    elif os.path.exists(json_path):
+    try:
         with open(json_path, "r") as f:
             data = json.load(f)
-            df = pd.DataFrame(data)
-        source = "JSON (Resumen)"
-    else:
-        print("❌ Error: No se encontraron archivos de telemetría en la carpeta data.")
+        df = pd.DataFrame(data)
+    except Exception as e:
+        print(f"❌ Error al cargar JSON: {e}")
         return
 
-    # 2. LIMPIEZA Y BLINDAJE DE DATOS
-    df.columns = [c.lower().strip() for c in df.columns]
+    # Aseguramos que 'hits' sea entero para consistencia
+    df["hits"] = df["hits"].astype(int)
 
-    # CRÍTICO: Convertir hits a entero para que coincida con las llaves de la paleta
-    if "hits" in df.columns:
-        df["hits"] = pd.to_numeric(df["hits"], errors="coerce").fillna(0).astype(int)
-    else:
-        print("❌ Error: La columna 'hits' no existe en los logs.")
-        return
-
-    # 3. CONFIGURACIÓN ESTÉTICA (Dark Mode para Ingeniería)
+    # 1. Configuración de Estética Forense
     plt.style.use("dark_background")
-    fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
     fig.suptitle(
-        f"AUDITORÍA MRPRO V5.1 - Diagnóstico de Señal\nFuente: {source} | Foco: Ruptura del Muro de Energía",
-        fontsize=28,
-        color="#00d4ff",
+        "MRPRO V6.3: AUDITORÍA DE RESONANCIA Y SUCCIÓN",
+        fontsize=22,
+        color="#00ffcc",
         fontweight="bold",
     )
 
-    # Paleta técnica con llaves enteras
+    # Diccionario blindado: Llaves en int y str para evitar errores de mapeo
     palette = {
-        0: "#2a2a2a",
-        1: "#3a3a3a",
-        2: "#4a4a4a",
-        3: "#5a5a5a",
+        0: "#1a1a1a",
+        "0": "#1a1a1a",
+        1: "#2a2a2a",
+        "1": "#2a2a2a",
+        2: "#3a3a3a",
+        "2": "#3a3a3a",
+        3: "#0055ff",
+        "3": "#0055ff",
         4: "#ffcc00",
-        5: "#ff3300",
+        "4": "#ffcc00",
+        5: "#ff0055",
+        "5": "#ff0055",
         6: "#00ffff",
+        "6": "#00ffff",
     }
 
-    # --- PANEL 1: MAPA DE CONFLICTO (ALPHA VS OMEGA) ---
-    # Detecta si el modelo ancla está matando la señal del cazador
-    x_col = "score_alpha" if "score_alpha" in df.columns else "ai_score"
-    y_col = "score_omega" if "score_omega" in df.columns else "geo_score"
-
+    # PANEL A: Conflict Map (IA vs Geometría)
     sns.scatterplot(
         data=df,
-        x=x_col,
-        y=y_col,
+        x="ai_score",
+        y="geo_score",
         hue="hits",
         palette=palette,
-        s=150,
-        alpha=0.8,
+        s=100,
+        alpha=0.6,
         ax=axes[0, 0],
     )
-    axes[0, 0].set_title(
-        f"1. Espacio de Conflicto: {x_col} vs {y_col}", fontsize=16, color="cyan"
+    axes[0, 0].set_title("1. Mapa de Conflicto: IA vs Geo Score", color="cyan")
+    axes[0, 0].axhline(
+        df["geo_score"].median(), color="white", linestyle="--", alpha=0.3
     )
-    axes[0, 0].grid(True, alpha=0.1)
 
-    # --- PANEL 2: ESPECTRO DE ENERGÍA (IDENTIFICADOR DE MUROS) ---
-    sns.histplot(
-        data=df,
-        x="ai_score",
-        hue="hits",
-        multiple="stack",
-        bins=40,
+    # PANEL B: Distribución de Hits (Frecuencia)
+    # Corregido: Asignamos x a hue y desactivamos la leyenda
+    counts = df["hits"].value_counts().sort_index()
+    sns.barplot(
+        x=counts.index,
+        y=counts.values,
+        hue=counts.index,
         palette=palette,
         ax=axes[0, 1],
+        legend=False,
     )
-    axes[0, 1].axvline(
-        0.15, color="#00ffff", linestyle="--", label="Bono Mutante (0.15)"
-    )
-    axes[0, 1].axvline(
-        0.1028, color="#ff00ff", linestyle=":", label="Muro de Residuos (0.1028)"
-    )
-    axes[0, 1].set_title(
-        "2. Espectro de Energía: Identificación de Muros", fontsize=16, color="cyan"
-    )
-    axes[0, 1].legend()
+    axes[0, 1].set_title("2. Distribución de Éxitos (108 Sorteos)", color="cyan")
+    for i, v in enumerate(counts.values):
+        axes[0, 1].text(i, v + 0.2, str(v), ha="center", color="white")
 
-    # --- PANEL 3: EFICIENCIA DE RANKING (BOXENPLOT CORREGIDO) ---
-    # Usamos hue='hits' para evitar el Warning de Seaborn v0.13
+    # PANEL C: Succión de Rango (Escala Logarítmica Invertida)
+    # Corregido: Asignamos hue="hits" para cumplir con v0.14.0
     sns.boxenplot(
         data=df,
         x="hits",
         y="rank",
         hue="hits",
         palette=palette,
+        ax=axes[1, 0],
         legend=False,
-        ax=axes[0, 2],
     )
-    axes[0, 2].set_yscale("log")
-    axes[0, 2].invert_yaxis()
-    axes[0, 2].set_title(
-        "3. Profundidad de Captura (Rank Log Scale)", fontsize=16, color="cyan"
+    axes[1, 0].set_yscale("log")
+    axes[1, 0].invert_yaxis()
+    axes[1, 0].set_title("3. Presión de Succión (Rango Invertido)", color="cyan")
+
+    # PANEL D: Proximidad del 'Outlier'
+    sns.stripplot(
+        data=df,
+        x="hits",
+        y="proximity",
+        hue="hits",
+        palette=palette,
+        ax=axes[1, 1],
+        alpha=0.5,
+        legend=False,
     )
-
-    # --- PANEL 4: CRONOLOGÍA DE RESONANCIA ---
-    if "draw_id" in df.columns:
-        sns.lineplot(
-            data=df, x="draw_id", y="ai_score", color="white", alpha=0.2, ax=axes[1, 0]
-        )
-        sns.scatterplot(
-            data=df,
-            x="draw_id",
-            y="ai_score",
-            hue="hits",
-            palette=palette,
-            s=100,
-            ax=axes[1, 0],
-        )
-        axes[1, 0].set_title(
-            "4. Evolución de Energía por Sorteo", fontsize=16, color="cyan"
-        )
-
-    # --- PANEL 5: ENERGÍA VS PROXIMIDAD ---
-    if "proximity" in df.columns:
-        sns.regplot(
-            data=df,
-            x="ai_score",
-            y="proximity",
-            scatter=False,
-            color="#00d4ff",
-            ax=axes[1, 1],
-        )
-        sns.scatterplot(
-            data=df,
-            x="ai_score",
-            y="proximity",
-            hue="hits",
-            palette=palette,
-            s=100,
-            ax=axes[1, 1],
-        )
-        axes[1, 1].set_title(
-            "5. Correlación: Energía vs Proximidad Real", fontsize=16, color="cyan"
-        )
-
-    # --- PANEL 6: HISTOGRAMA DE RENDIMIENTO ---
-    hits_count = df["hits"].value_counts().sort_index()
-    hits_count.plot(kind="bar", color="#00d4ff", ax=axes[1, 2])
-    axes[1, 2].set_title(
-        "6. Distribución Total de Aciertos (Hits)", fontsize=16, color="cyan"
-    )
-    for i, v in enumerate(hits_count):
-        axes[1, 2].text(
-            i, v + 0.1, str(v), ha="center", color="white", fontweight="bold"
-        )
+    axes[1, 1].set_yscale("log")
+    axes[1, 1].invert_yaxis()
+    axes[1, 1].set_title("4. Proximidad al Jackpot", color="cyan")
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    # Guardado de alta fidelidad para el equipo
-    output_img = os.path.join(DATA_FOLDER, "diagnostico_v5_conflict.png")
-    plt.savefig(output_img, dpi=300)
-    print(f"✅ Reporte Visual V5.1 generado con éxito: {output_img}")
-
-
-if __name__ == "__main__":
-    run_forensic_visualization()
+    output_path = "data/forensic_v6_3.png"
+    plt.savefig(output_path, dpi=300)
+    print(f"✅ Visualización generada exitosamente en: {output_path}")
