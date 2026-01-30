@@ -1,10 +1,49 @@
+# src/data_access/report.py
+
+import csv
+import os
+from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
+# Importamos las rutas desde tu config.py
+from src.data_access.config import FILE_APUESTAS, VERSION_TAG
+
 console = Console()
+
+
+def guardar_prediccion(tickets):
+    """
+    PERSISTENCIA V6.4: Guarda las balas de élite en el CSV.
+    Esta es la pieza que faltaba para cerrar el ciclo de producción.
+    """
+    # Asegurar que el directorio existe (vital para compatibilidad Mac/Windows)
+    os.makedirs(os.path.dirname(FILE_APUESTAS), exist_ok=True)
+
+    file_exists = os.path.isfile(FILE_APUESTAS)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        with open(FILE_APUESTAS, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            # Cabecera para archivos nuevos
+            if not file_exists:
+                writer.writerow(
+                    ["Fecha", "Version", "T1", "T2", "T3", "T4", "T5", "T6"]
+                )
+
+            for t in tickets:
+                # Guardamos siempre ordenados para facilitar el análisis forense
+                writer.writerow([timestamp, VERSION_TAG] + sorted(t))
+
+        console.print(
+            f"\n[bold green]✅ ESTATUS:[/bold green] Se han guardado {len(tickets)} tickets en {FILE_APUESTAS}"
+        )
+    except Exception as e:
+        console.print(f"[bold red]❌ ERROR DE PERSISTENCIA:[/bold red] {e}")
 
 
 class SniperReport:
@@ -36,7 +75,7 @@ class SniperReport:
 
     @staticmethod
     def render_draw_summary(metadata: dict, audit_data: dict):
-        """Versión V9.8.6: Colores de Potencial + Estatus de Captura Real."""
+        # ... (Tu lógica de colores de potencial se mantiene intacta)
         hits = audit_data.get("hits", 0)
         prox = audit_data.get("proximity", 0)
         ai_val = audit_data.get("ai_score", 0)
@@ -45,17 +84,15 @@ class SniperReport:
         d_id = audit_data.get("draw_id", "####")
         univ_size = audit_data.get("univ_size", 0)
 
-        # 1. COLOR DEL POTENCIAL (Siempre visible, basado en el universo)
         if hits == 6:
-            potential_color = "bold cyan"  # Azul Diamante
+            potential_color = "bold cyan"
         elif hits == 5:
-            potential_color = "bold green"  # Verde
+            potential_color = "bold green"
         elif hits == 4:
-            potential_color = "bold yellow"  # Amarillito
+            potential_color = "bold yellow"
         else:
-            potential_color = "white"  # 3/6 o menos en blanco
+            potential_color = "white"
 
-        # 2. LÓGICA DE CAPTURA REAL (Estatus)
         is_hit = prox == 0
         if is_hit:
             if hits == 6:
@@ -67,7 +104,6 @@ class SniperReport:
         else:
             status = Text("❌ MISSED", style="bold red")
 
-        # 3. COLOR DE DISTANCIA (Resaltar "escoltas" cercanos)
         prox_color = (
             "bold cyan" if prox == 0 else "bold magenta" if prox < 15 else "dim"
         )
@@ -77,10 +113,7 @@ class SniperReport:
             ("| ", "white"),
             (f"U: {univ_size:7,d} ", "dim cyan"),
             ("| ", "white"),
-            (
-                f" {hits}/6 ",
-                potential_color,
-            ),  # <--- Aquí devolvemos el color al potencial
+            (f" {hits}/6 ", potential_color),
             ("| ", "white"),
             ("AI: ", "dim"),
             (f"{ai_val:.4f} ", "yellow"),
@@ -96,10 +129,7 @@ class SniperReport:
 
     @staticmethod
     def render_final_dashboard(size, invest, earn, funnel, dist):
-        # ... (Se mantiene igual que la versión anterior)
         balance = earn - invest
-        color_bal = "green" if balance >= 0 else "red"
-
         dist_table = Table(
             title="[bold cyan]🎯 DISTRIBUCIÓN DE HITS REALES[/]",
             box=box.SIMPLE,
@@ -116,6 +146,4 @@ class SniperReport:
                 else "bold green" if h == 5 else "bold yellow" if h == 4 else "dim"
             )
             dist_table.add_row(f"{h} hits", f"[{style}]{count}[/]")
-
-        # (Resto de la tabla de eficiencia...)
         console.print(dist_table)

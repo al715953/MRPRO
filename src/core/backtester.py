@@ -1,3 +1,5 @@
+# src/core/backtester.py
+
 import time
 import numpy as np
 from rich.console import Console
@@ -20,9 +22,7 @@ except ImportError:
 from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO, PredictionResultDTO
 from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
-from src.core.forensics import (
-    LotteryForensics,
-)  # Miembro del equipo para el desacoplamiento
+from src.core.forensics import LotteryForensics
 from src.data_access.config import VERSION_TAG
 
 
@@ -109,8 +109,9 @@ class BacktestEngine:
                             coverage_6 += 1
 
                 # --- FASE 2: ESTRATEGIA (IA & Selección) ---
-                # CORRECCIÓN DE HANDSHAKE: Desempaquetado de (PredictionResultDTO, snapshot)
-                prediction, snapshot = strategy.predict(curr_h, config)
+                # INTEGRACIÓN V6.4: Extraemos la telemetría (snapshot) desde la metadata del DTO
+                prediction = strategy.predict(curr_h, config)
+                snapshot = prediction.metadata
 
                 # Auditoría Forense: Delegada a LotteryForensics
                 xp_audit = (
@@ -183,7 +184,6 @@ class BacktestEngine:
 
         status = "🎯 HIT" if d == 0 else "❌"
 
-        # Formato de log extendido con Geo
         self.console.print(
             f"[bold blue]#{t_id}[/] | "
             f"U: {u_s:>6,d} | "
@@ -199,7 +199,6 @@ class BacktestEngine:
         """Reporte sin cuadros negros: Encabezados definidos."""
         self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
 
-        # Tabla de Resumen Financiero
         summary = Table(show_header=True, header_style="bold magenta")
         summary.add_column("Métrica Sniper", style="dim", width=20)
         summary.add_column("Valor", justify="right", width=15)
@@ -212,7 +211,6 @@ class BacktestEngine:
         summary.add_row("Jackpots en Universo", f"[bold yellow]{coverage_6}[/]")
         self.console.print(summary)
 
-        # Tabla de Distribución de Aciertos
         dist_table = Table(
             title="Distribución de Aciertos", show_header=True, header_style="bold cyan"
         )
