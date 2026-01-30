@@ -7,9 +7,8 @@ from src.core.ai_scorer import LotteryAIModel
 
 class ResonanceEngine:
     """
-    Motor V6.3: Resonance Recovery.
-    Utiliza un Radar Híbrido (IA + Geometría) para asegurar que los
-    outliers de 5/6 entren en la fase de selección competitiva.
+    Motor V7.5: Quantum Slot-Mapping & Residue Fusion.
+    Corregido para eliminar KeyErrors e inconsistencias de IDE.
     """
 
     def __init__(self):
@@ -17,31 +16,29 @@ class ResonanceEngine:
         self._matrix_cache = {"cluster_matrix": None}
 
     def calculate_resonance(self, u_xp, history, config, xp):
-        """Ejecuta el flujo de radar híbrido y fusión V6.3."""
+        # 1. Recuperación de historial (Fix winning_numbers)
+        raw_history = history.winning_numbers
+
         if not self.ai_model.is_trained:
-            self.ai_model.train(history.winning_numbers, config.total_balls)
+            self.ai_model.train(raw_history, config.total_balls)
 
-        # --- FASE 1: SCORES BASE Y GEOMETRÍA ---
-        ai_scores, geo_scores = self._compute_base_scores(u_xp, history, config, xp)
+        # --- FASE 1: SCORES BASE ---
+        ai_scores, geo_scores_raw = self._compute_base_scores(u_xp, history, config, xp)
 
-        # Normalización para balanceo de radar
         ai_norm = (ai_scores - ai_scores.min()) / (
             ai_scores.max() - ai_scores.min() + 1e-10
         )
-        geo_norm = (geo_scores - geo_scores.min()) / (
-            geo_scores.max() - geo_scores.min() + 1e-10
+        geo_norm = (geo_scores_raw - geo_scores_raw.min()) / (
+            geo_scores_raw.max() - geo_scores_raw.min() + 1e-10
         )
 
-        # --- FASE 2: RADAR HÍBRIDO (V6.3) ---
-        # Definimos quién entra al radar basado en un balance 40/60
-        # Damos prioridad a la Geometría porque detectó mejor los 5/6 en el log forense.
-        hybrid_radar_score = (ai_norm * 0.4) + (geo_norm * 0.6)
-
-        # Seleccionamos los mejores 30,000 del universo recuperado (112-128)
+        # --- FASE 2: RADAR HÍBRIDO ---
+        hybrid_radar_score = (ai_norm * 0.35) + (geo_norm * 0.65)
         radar_indices = xp.argsort(hybrid_radar_score)[-30000:][::-1]
         u_reduced = u_xp[radar_indices]
 
-        # --- FASE 3: OMEGA POWER SQUEEZE ---
+        # --- FASE 3: EXTRACCIÓN DE SEÑALES V7.5 ---
+        # 3.1 Señal Omega (Fix omega_boosted visibility)
         omega_scores, breakdown = self.ai_model.score_tickets(
             u_reduced, return_breakdown=True
         )
@@ -49,17 +46,31 @@ class ResonanceEngine:
         omega_norm = (omega_signal - omega_signal.min()) / (
             omega_signal.max() - omega_signal.min() + 1e-10
         )
+        omega_boosted = xp.power(omega_norm, 4.5)
 
-        # Recuperación de parámetros desde el DTO
-        alpha_val = getattr(config, "hybrid_alpha", 0.50)
-        beta_val = 1.0 - alpha_val
+        # 3.2 Slot-Mapping (Frecuencia por Posición)
+        hist_arr = xp.asarray(raw_history)
+        slot_bonus = xp.zeros(len(u_reduced))
+        for pos in range(6):
+            counts = xp.bincount(hist_arr[:, pos], minlength=40)
+            freqs = counts / (len(hist_arr) + 1e-10)
+            slot_bonus += freqs[u_reduced[:, pos]]
 
-        # Boost No-Lineal Suavizado para mantener la consistencia en 5/6
-        omega_boosted = xp.power(omega_norm, 1.8)
+        slot_norm = (slot_bonus - slot_bonus.min()) / (
+            slot_bonus.max() - slot_bonus.min() + 1e-10
+        )
 
-        # Fusión Final (En el radar reducido)
-        final_scores_reduced = (ai_norm[radar_indices] * alpha_val) + (
-            omega_boosted * beta_val
+        # 3.3 Bias Posicional (Dispersión std)
+        u_std = xp.std(u_reduced, axis=1)
+        std_bias = xp.exp(-xp.power(u_std - 10.5, 2) / (2 * xp.power(1.2, 2)))
+
+        # --- FASE 4: FUSIÓN FINAL ---
+        final_scores_reduced = (
+            (ai_norm[radar_indices] * 0.10)
+            + (omega_boosted * 0.50)
+            + (geo_norm[radar_indices] * 0.25)
+            + (std_bias * 0.05)
+            + (slot_norm * 0.10)
         )
 
         return {
@@ -67,7 +78,7 @@ class ResonanceEngine:
             "final_scores_reduced": final_scores_reduced,
             "radar_indices": radar_indices,
             "ai_norm": ai_norm,
-            "geo_scores": geo_scores,
+            "geo_scores": geo_norm,  # <--- FIX: Nombre clave para genetic_selector.py
             "geo_matrix_xp": xp.asarray(self._matrix_cache["cluster_matrix"]),
         }
 

@@ -33,12 +33,12 @@ class LotteryAIModel:
         base_params = {
             "n_estimators": self.config.get("n_estimators", 2200),
             "learning_rate": 0.03,
-            "subsample": 0.9,
+            "subsample": 0.85,
             "colsample_bytree": 0.9,
             "objective": "reg:pseudohubererror",
             "device": "cuda" if HAS_GPU else "cpu",
             "tree_method": "hist" if HAS_GPU else "auto",
-            "gamma": 1.5,  # Reducción táctica para evitar rigidez
+            "gamma": 0.8,  # Reducción táctica para evitar rigidez
         }
 
         ensemble_cfg = self.config.get("ensemble_config", {})

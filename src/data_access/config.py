@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V6.3 (18:14 - Radar Híbrido)"
+VERSION_TAG = "V7.4 (Slot-Mapping - Speed-Fix)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
