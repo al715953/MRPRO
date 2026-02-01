@@ -15,11 +15,6 @@ except ImportError:
 
 
 class GeneticSelectorStrategy:
-    """
-    SELECTOR V6.4: Trinity Split Architecture.
-    Corregido: Inclusión de 'universe' en metadata para auditoría forense.
-    """
-
     def __init__(self):
         self.resonance_engine = ResonanceEngine()
         self.cloud_generator = CloudGenerator()
@@ -28,37 +23,77 @@ class GeneticSelectorStrategy:
     def predict(self, history, config) -> PredictionResultDTO:
         univ = config.raw_universe_ptr
         if univ is None or len(univ) == 0:
-            return PredictionResultDTO("Empty", [])
+            return PredictionResultDTO("Empty_Input", [])
 
         xp = cp if (HAS_CUPY and hasattr(univ, "get")) else np
         u_xp = xp.asarray(univ)
 
-        # 1. MOTOR DE RESONANCIA: Calcula scores y matriz geo
+        # 1. RESONANCIA
         res = self.resonance_engine.calculate_resonance(u_xp, history, config, xp)
+        if res is None:
+            return PredictionResultDTO("Resonance_Collapse", [])
 
-        # 2. MOTOR DE MALLA: Selección competitiva con Salto Armónico
+        # 2. MALLA COMPETITIVA
         final_tickets = self.competitive_mesh.apply_mesh(
             res["u_reduced"],
             res["final_scores_reduced"],
             config.num_tickets,
             res["geo_matrix_xp"],
             xp,
+            thermal_numbers=res.get("thermal_numbers"),  # <--- Inyección térmica
         )
 
-        # 3. MAPEO DE TELEMETRÍA (Handshake Forense)
-        # Creamos un mapa de scores que coincida exactamente con los índices de 'univ'
-        full_hybrid_map = xp.zeros(u_xp.shape[0])
-        full_hybrid_map[res["radar_indices"]] = res["final_scores_reduced"]
+        # 3. FIX DE DISTANCIA Y RANK (Sincronización CPU/GPU)
+        # Bajamos datos a CPU para que el motor forense pueda leerlos
+        u_cpu = univ.get() if hasattr(univ, "get") else univ
 
-        # IMPORTANTE: Metadata completa para evitar 'Rank #0' en backtester
+        # Reconstruimos el mapa de scores en CPU para auditoría
+        full_hybrid_map = np.zeros(u_cpu.shape[0], dtype=np.float32)
+        scores_cpu = (
+            res["final_scores_reduced"].get()
+            if hasattr(res["final_scores_reduced"], "get")
+            else res["final_scores_reduced"]
+        )
+        idx_cpu = (
+            res["radar_indices"].get()
+            if hasattr(res["radar_indices"], "get")
+            else res["radar_indices"]
+        )
+        full_hybrid_map[idx_cpu] = scores_cpu
+
+        # --- CÁLCULO DE SELECTED RANKS (Para quitar el 999) ---
+        # Identificamos qué posición (Rank) ocupa cada ticket que elegimos
+        selected_ranks = []
+        # Ordenamos los scores globales para saber la jerarquía
+        sorted_global_scores = np.sort(full_hybrid_map)[::-1]
+
+        for ticket in final_tickets:
+            # Buscamos el score de este ticket en el pool original
+            # Nota: Esto asume que el ticket está en el radar_indices
+            ticket_arr = np.array(ticket)
+            match_idx = np.where((u_cpu == ticket_arr).all(axis=1))[0]
+            if len(match_idx) > 0:
+                t_score = full_hybrid_map[match_idx[0]]
+                t_rank = np.searchsorted(-sorted_global_scores, -t_score) + 1
+                selected_ranks.append(int(t_rank))
+
         return PredictionResultDTO(
-            strategy_name="ENGINE V6.4: Trinity Split (Harmonic Leap)",
+            strategy_name=f"MRPRO {config.filter_overrides.get('VERSION_TAG', 'V7.x2')}",
             tickets=final_tickets,
             metadata={
-                "universe": univ,  # <--- OBLIGATORIO: El mapa físico de búsqueda
-                "ai_scores": res["ai_norm"],  # Puntaje de IA base
-                "hybrid_scores": full_hybrid_map,  # Puntaje final fusionado
-                "geo_scores": res["geo_scores"],  # Puntaje geométrico
-                "selected_ranks": list(range(1, len(final_tickets) + 1)),
+                "universe": u_cpu,
+                "ai_scores": (
+                    res.get("ai_norm").get()
+                    if hasattr(res.get("ai_norm"), "get")
+                    else res.get("ai_norm")
+                ),
+                "geo_scores": (
+                    res.get("geo_scores").get()
+                    if hasattr(res.get("geo_scores"), "get")
+                    else res.get("geo_scores")
+                ),
+                "hybrid_scores": full_hybrid_map,
+                "selected_ranks": selected_ranks,  # <--- EL FIX PARA DIST
+                "radar_indices": idx_cpu,
             },
         )

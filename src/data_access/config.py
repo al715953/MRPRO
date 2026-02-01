@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V7.4 (Slot-Mapping - Speed-Fix)"
+VERSION_TAG = "V7.16 (Boundary-Flex & Elite-Liberation)"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
@@ -57,8 +57,10 @@ BEST_SETTINGS = {
     "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     "scale_pos_weight": 4,
-    "n_estimators": 2200,
+    "n_estimators": 3200,
     "learning_rate": 0.012,
+    "subsample": 0.85,
+    "colsample_bytree": 0.82,
     "max_depth": 10,
     "gamma": 4.0,
     # Malla Híbrida
@@ -85,14 +87,20 @@ BEST_SETTINGS = {
         "1-2-1-2",
     ],
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
+    # ESTRUCTURA CRÍTICA: Cada experto requiere su propio objetivo de entrenamiento
     "ensemble_config": {
-        "alpha_ancla": {"depth": 6, "weight": 0.15},  # El protector del 5/6
-        "beta_sniper": {"depth": 9, "weight": 0.35},  # El equilibrio actual
-        "omega_hunter": {"depth": 14, "weight": 0.50},  # El cazador del Jackpot 6/6
+        "alpha_ancla": {
+            "depth": 6,
+            "weight": 0.01,  # ANULACIÓN CASI TOTAL: Evita que tickets conservadores bloqueen el podio
+            "objective": "reg:pseudohubererror",
+        },
+        "beta_sniper": {"depth": 12, "weight": 0.15, "objective": "reg:absoluteerror"},
+        "omega_hunter": {
+            "depth": 20,
+            "weight": 0.84,  # PODER ABSOLUTO: El modelo de profundidad 16 ahora tiene el control total
+            "objective": "reg:squaredlogerror",
+        },
     },
-    "focal_gamma": 4.0,  # Para penalizar errores en el Top de la pirámide
-    "mutant_threshold_omega": 0.92,
-    "consensus_floor": 0.70,
 }
 
 # --- ESTÉTICA DE CONSOLA (ANSI) ---
