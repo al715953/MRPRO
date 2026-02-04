@@ -29,7 +29,7 @@ URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQ
 
 # --- CONFIGURACIÓN DE HARDWARE (UHPC) ---
 # Forzar uso de núcleos CUDA en RTX 4070 Ti
-GPU_ENABLED = True
+GPU_ENABLED = False
 NUM_SIMULACIONES = 250000
 NUM_CANDIDATOS_MONTECARLO = 10000000
 
