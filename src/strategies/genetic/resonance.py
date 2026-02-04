@@ -7,9 +7,10 @@ from src.data_access.config import BEST_SETTINGS
 
 class ResonanceEngine:
     """
-    Motor de Resonancia V7.21 (Adaptive Fusion).
-    - Corte Top 50% (Mantenemos limpieza de ruido).
-    - Pesos DINÁMICOS: Si Geo es bajo, la IA toma el control para evitar 'Anclaje'.
+    Motor de Resonancia V7.21 (Gold Master - Adaptive Fusion).
+    - Corte Top 50% (Equilibrio perfecto).
+    - Fusión Adaptativa: La IA toma el control si el Geo-Score es débil.
+    - Sin ruido térmico.
     """
 
     def __init__(self):
@@ -37,6 +38,7 @@ class ResonanceEngine:
 
         if self.bst is None: self._train_jit_model(raw_history, n_balls)
 
+        # Cálculo estructural para el Selector
         recent_draws = raw_history[-5:]
         flat_recent = set([num for draw in recent_draws for num in draw[:6]])
         thermal_numbers = sorted(list(set(range(1, n_balls + 1)) - flat_recent))
@@ -54,9 +56,10 @@ class ResonanceEngine:
 
         # 4. Normalización
         ai_min, ai_max = ai_scores.min(), ai_scores.max()
-        ai_norm = (ai_scores - ai_min) / ((ai_max - ai_min) if (ai_max - ai_min) > 0 else 1.0)
+        div = (ai_max - ai_min) if (ai_max - ai_min) > 0 else 1.0
+        ai_norm = (ai_scores - ai_min) / div
 
-        # --- ESTRATEGIA V7.21: CORTE ---
+        # --- ESTRATEGIA: CORTE EQUILIBRADO (Top 50%) ---
         cutoff = xp.percentile(ai_norm, 50) 
         radar_indices = xp.where(ai_norm >= cutoff)[0]
         
@@ -66,16 +69,12 @@ class ResonanceEngine:
         ai_subset = ai_norm[radar_indices]
         geo_subset = geo_scores[radar_indices]
 
-        # --- ESTRATEGIA V7.21: FUSIÓN ADAPTATIVA (La Joya) ---
-        # Si Geo es robusto (>0.4), le damos el volante (60%).
-        # Si Geo es débil (<=0.4), le quitamos el poder (20%) para que no hunda a la IA.
-        
-        # Máscara de decisión
+        # --- ESTRATEGIA: FUSIÓN ADAPTATIVA (Gold Standard) ---
+        # Si Geo > 0.4, peso 60% Geo. Si no, peso 20% Geo.
         is_geo_strong = (geo_subset > 0.4)
         
-        # Pesos vectorizados
-        w_ai = xp.where(is_geo_strong, 0.40, 0.80)  # Si Geo es fuerte, AI baja. Si Geo es debil, AI sube.
-        w_geo = xp.where(is_geo_strong, 0.60, 0.20) # Si Geo es fuerte, Geo sube. Si Geo es debil, Geo baja.
+        w_ai = xp.where(is_geo_strong, 0.40, 0.80)
+        w_geo = xp.where(is_geo_strong, 0.60, 0.20)
         
         final_scores_reduced = (ai_subset * w_ai) + (geo_subset * w_geo)
 
@@ -90,7 +89,6 @@ class ResonanceEngine:
         }
 
     def _train_jit_model(self, history, n_balls):
-        # Configuración JIT Equilibrada
         X_pos = np.array([d[:6] for d in history], dtype=np.uint8)
         n_neg = len(X_pos)
         X_neg = np.random.randint(1, n_balls + 1, size=(n_neg, 6)).astype(np.uint8)
