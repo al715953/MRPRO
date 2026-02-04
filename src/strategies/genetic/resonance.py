@@ -7,76 +7,117 @@ from src.data_access.config import BEST_SETTINGS
 
 class ResonanceEngine:
     """
-    Motor de Resonancia V7.21 (Gold Master - Adaptive Fusion).
-    - Corte Top 50% (Equilibrio perfecto).
-    - Fusión Adaptativa: La IA toma el control si el Geo-Score es débil.
-    - Sin ruido térmico.
+    Motor de Resonancia V8.2 (Bulletproof).
+    - Prevención total de AI=0.0000 / Rank #0.
+    - Carga robusta de modelo estático.
+    - Fallback a Random inteligente si el cerebro falla, para no detener la simulación.
     """
 
     def __init__(self):
-        self.model_path = "mrpro_model_v7.json"
+        # 1. Búsqueda de Modelo (Ruta Absoluta Dinámica)
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        self.model_path = os.path.join(base_dir, "src/data/mrpro_model_v8_static.json")
+        
         self.bst = None
         self._matrix_cache = {"cluster_matrix": None}
         
+        # Intentamos cargar
         if os.path.exists(self.model_path):
             try:
                 self.bst = xgb.Booster()
                 self.bst.load_model(self.model_path)
+                # print("✅ V8 Brain Loaded.")
             except Exception as e:
-                print(f"⚠️ Alerta: Modelo corrupto. ({e})")
+                print(f"⚠️ Error loading V8: {e}")
                 self.bst = None
         else:
-            print("⚠️ Modo 'Entrenamiento en Vivo' Activado.")
+            # Fallback a búsqueda local simple
+            if os.path.exists("mrpro_model_v8_static.json"):
+                 self.bst = xgb.Booster()
+                 self.bst.load_model("mrpro_model_v8_static.json")
+            else:
+                 print(f"❌ FATAL: Model not found at {self.model_path} or local.")
 
     def calculate_resonance(self, u_xp, history, config, xp):
-        # 0. Validación
+        # 0. Validación Básica
         if u_xp is None or len(u_xp) == 0: return None
 
-        # 1. Preparación
+        # 1. Preparación de Datos
         raw_history = history.winning_numbers if hasattr(history, 'winning_numbers') else history
         n_balls = config.total_balls
 
-        if self.bst is None: self._train_jit_model(raw_history, n_balls)
-
-        # Cálculo estructural para el Selector
-        recent_draws = raw_history[-5:]
-        flat_recent = set([num for draw in recent_draws for num in draw[:6]])
-        thermal_numbers = sorted(list(set(range(1, n_balls + 1)) - flat_recent))
-
-        if self._matrix_cache["cluster_matrix"] is None: self._build_nexus_matrix(raw_history, n_balls)
+        # 2. Matriz Nexus
+        if self._matrix_cache["cluster_matrix"] is None:
+            self._build_nexus_matrix(raw_history, n_balls)
         geo_matrix_xp = xp.asarray(self._matrix_cache["cluster_matrix"])
-
-        # 2. AI Score
-        candidates_cpu = np.ascontiguousarray(u_xp.get()) if hasattr(u_xp, "get") else np.ascontiguousarray(u_xp)
-        dtest = xgb.DMatrix(candidates_cpu)
-        ai_scores = xp.asarray(self.bst.predict(dtest))
-
-        # 3. Geo Score
+        
+        # 3. Geo Score (Siempre calculable)
         geo_scores = self._compute_geo_score(u_xp, raw_history, xp)
 
-        # 4. Normalización
+        # 4. AI Score (Con Red de Seguridad para Ceros)
+        n_candidates = len(u_xp)
+        
+        if self.bst:
+            try:
+                # Conversión segura a CPU uint8
+                if hasattr(u_xp, "get"):
+                    candidates_cpu = u_xp.get().astype(np.uint8)
+                else:
+                    candidates_cpu = np.asarray(u_xp).astype(np.uint8)
+                
+                dtest = xgb.DMatrix(candidates_cpu)
+                ai_scores_cpu = self.bst.predict(dtest)
+                ai_scores = xp.asarray(ai_scores_cpu)
+            except Exception as e:
+                print(f"⚠️ AI Prediction Failed: {e}")
+                ai_scores = xp.zeros(n_candidates, dtype=xp.float32)
+        else:
+            # Si no hay cerebro, AI score es 0
+            ai_scores = xp.zeros(n_candidates, dtype=xp.float32)
+
+        # 5. Normalización Segura (Evita división por cero)
         ai_min, ai_max = ai_scores.min(), ai_scores.max()
-        div = (ai_max - ai_min) if (ai_max - ai_min) > 0 else 1.0
+        div = (ai_max - ai_min)
+        if div == 0: div = 1.0
         ai_norm = (ai_scores - ai_min) / div
 
-        # --- ESTRATEGIA: CORTE EQUILIBRADO (Top 50%) ---
-        cutoff = xp.percentile(ai_norm, 50) 
-        radar_indices = xp.where(ai_norm >= cutoff)[0]
+        # 6. Lógica V8.1 (Safety Net + Hybrid Cutoff)
+        hybrid_signal = (ai_norm + geo_scores) / 2.0
         
-        if len(radar_indices) < 100: radar_indices = xp.arange(len(u_xp))
+        # CORRECCIÓN V8.2: Si todo es cero (Hybrid=0), inyectamos ruido minúsculo
+        # para que el sorteo tenga orden y no Rank #0
+        if xp.max(hybrid_signal) == 0:
+            # Ruido epsilon aleatorio para desempatar
+            hybrid_signal += xp.random.rand(n_candidates) * 0.0001
+            # print("⚠️ Zero Signal Detected -> Injecting Noise to prevent Rank #0")
+
+        cutoff = xp.percentile(hybrid_signal, 50) 
+        radar_indices = xp.where(hybrid_signal >= cutoff)[0]
+        
+        # Fallback de cantidad mínima
+        if len(radar_indices) < 100: 
+            radar_indices = xp.argsort(hybrid_signal)[-100:] # Top 100 forzoso
 
         u_reduced = u_xp[radar_indices]
         ai_subset = ai_norm[radar_indices]
         geo_subset = geo_scores[radar_indices]
 
-        # --- ESTRATEGIA: FUSIÓN ADAPTATIVA (Gold Standard) ---
-        # Si Geo > 0.4, peso 60% Geo. Si no, peso 20% Geo.
+        # Safety Net Logic (Si AI < 0.15, Geo manda 90%)
+        is_ai_confused = (ai_subset < 0.15)
         is_geo_strong = (geo_subset > 0.4)
         
-        w_ai = xp.where(is_geo_strong, 0.40, 0.80)
-        w_geo = xp.where(is_geo_strong, 0.60, 0.20)
+        w_ai_std = xp.where(is_geo_strong, 0.40, 0.80)
+        w_geo_std = xp.where(is_geo_strong, 0.60, 0.20)
+        
+        w_ai = xp.where(is_ai_confused, 0.10, w_ai_std)
+        w_geo = xp.where(is_ai_confused, 0.90, w_geo_std)
         
         final_scores_reduced = (ai_subset * w_ai) + (geo_subset * w_geo)
+
+        # Thermal numbers (Compatibility)
+        recent_draws = raw_history[-5:]
+        flat_recent = set([num for draw in recent_draws for num in draw[:6]])
+        thermal_numbers = sorted(list(set(range(1, n_balls + 1)) - flat_recent))
 
         return {
             "u_reduced": u_reduced,
@@ -87,22 +128,6 @@ class ResonanceEngine:
             "geo_matrix_xp": geo_matrix_xp,
             "thermal_numbers": thermal_numbers
         }
-
-    def _train_jit_model(self, history, n_balls):
-        X_pos = np.array([d[:6] for d in history], dtype=np.uint8)
-        n_neg = len(X_pos)
-        X_neg = np.random.randint(1, n_balls + 1, size=(n_neg, 6)).astype(np.uint8)
-        X_neg.sort(axis=1)
-        X = np.vstack([X_pos, X_neg])
-        y = np.hstack([np.ones(len(X_pos)), np.zeros(len(X_neg))])
-        
-        dtrain = xgb.DMatrix(X, label=y)
-        params = {
-            "objective": "binary:logistic",
-            "max_depth": 7, "eta": 0.2, 
-            "tree_method": "hist", "eval_metric": "logloss"
-        }
-        self.bst = xgb.train(params, dtrain, num_boost_round=30)
 
     def _build_nexus_matrix(self, history, n_balls):
         m = np.zeros((n_balls + 1, n_balls + 1), dtype=np.uint16)

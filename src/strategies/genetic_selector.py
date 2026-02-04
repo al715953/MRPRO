@@ -1,11 +1,8 @@
 # src/strategies/genetic_selector.py
 
 import numpy as np
-from collections import Counter
 from src.domain.dtos import PredictionResultDTO
 from src.strategies.genetic.resonance import ResonanceEngine
-from src.strategies.genetic.diffusion import CloudGenerator
-from src.strategies.genetic.mesh import CompetitiveMesh
 from src.data_access.config import GPU_ENABLED, BEST_SETTINGS
 
 # Sincronización de hardware con la configuración global (Mac/PC)
@@ -16,56 +13,89 @@ if HAS_CUPY:
     except ImportError:
         HAS_CUPY = False
 
-
 class GeneticSelectorStrategy:
     """
-    Estrategia V7.17: Selector Genético con Concentración Nexus.
-    Evita la dispersión de aciertos agrupando los números con mayor resonancia.
+    Estrategia V7.22 OMEGA: Selector de Enjambre Diverso (Diversity Swarm).
+    
+    Filosofía:
+    En lugar de concentrar la apuesta en un solo patrón (Nexus), desplegamos 
+    un enjambre de tickets de ALTA CALIDAD que mantienen una distancia geométrica 
+    mínima entre sí.
+    
+    Objetivo:
+    Mitigar la varianza del modelo JIT. Si el Top 1 falla, el Top 2 (que es 
+    estructuralmente diferente) puede capturar el premio.
     """
     def __init__(self):
         self.resonance_engine = ResonanceEngine()
-        self.cloud_generator = CloudGenerator()
-        self.competitive_mesh = CompetitiveMesh(self.cloud_generator)
 
-    def apply_anchor_nexus(self, final_tickets, u_reduced, config):
+    def apply_diversity_swarm(self, u_pool, scores_pool, n_tickets, xp):
         """
-        Lógica V7.17: Anclaje Nexus.
-        Identifica los números con mayor 'anclaje' en el Top 100 de la IA
-        y los inyecta en la mayoría de los tickets finales.
+        Algoritmo OMEGA:
+        1. Ordena candidatos por Score Descendente.
+        2. Selecciona el mejor absoluto (Alpha).
+        3. Rellena el resto buscando candidatos de alto score que NO se parezcan
+           demasiado a los que ya seleccionamos (Diversidad > 1 número).
         """
-        n_anclas = config.filter_overrides.get("anchor_nexus_size", 3)
-        density = config.filter_overrides.get("nexus_density", 0.8)
-        n_tickets = len(final_tickets)
+        if len(u_pool) == 0: return []
         
-        if n_tickets == 0: return final_tickets
-
-        # 1. Identificar las anclas del Top 100 (Candidatos con mayor AI_Score)
-        # u_reduced viene ordenado por score del ResonanceEngine
-        top_pool = u_reduced[:100]
-        if hasattr(top_pool, "get"): top_pool = top_pool.get() # Sincronización CPU
+        # 1. Ordenamiento Jerárquico (Los mejores arriba)
+        # Usamos argsort en reversa
+        sort_idx = xp.argsort(scores_pool)[::-1]
         
-        flat_nums = [n for ticket in top_pool for n in ticket]
-        anclas = [num for num, count in Counter(flat_nums).most_common(n_anclas)]
+        # Zona de Caza: Top 2000 (Suficiente para encontrar 20 diversos)
+        search_depth = min(len(u_pool), 2000) 
+        pool_idx = sort_idx[:search_depth]
         
-        # 2. Re-estructuración de tickets
-        nexus_tickets = []
-        limit = int(n_tickets * density)
+        # Traemos la data a CPU para iterar rápido (Python loops en GPU son lentos)
+        pool_candidates = u_pool[pool_idx]
+        if hasattr(pool_candidates, "get"): pool_candidates = pool_candidates.get()
         
-        for i, ticket in enumerate(final_tickets):
-            if i < limit:
-                # Ticket de Concentración: Forzamos las anclas
-                new_tkt = set(anclas)
-                source_nums = list(ticket)
-                # Rellenamos hasta completar 6 números únicos
-                for n in source_nums:
-                    if len(new_tkt) >= 6: break
-                    new_tkt.add(n)
-                nexus_tickets.append(sorted(list(new_tkt)))
-            else:
-                # Ticket de Exploración: Mantenemos la diversidad original
-                nexus_tickets.append(ticket)
+        selected_tickets = []
+        
+        # 2. Selección Greedy con Filtro de Diversidad
+        # Max Overlap 4 significa: Aceptamos tickets que compartan hasta 4 números.
+        # Rechazamos si comparten 5 o 6 (son clones o casi clones).
+        max_overlap = 4 
+        
+        for candidate in pool_candidates:
+            if len(selected_tickets) >= n_tickets:
+                break
                 
-        return nexus_tickets
+            cand_list = candidate.tolist()
+            
+            if len(selected_tickets) == 0:
+                # El Alpha entra siempre
+                selected_tickets.append(cand_list)
+                continue
+                
+            # Chequeo de Diversidad (Hamming Soft)
+            is_diverse = True
+            cand_set = set(cand_list)
+            
+            for existing in selected_tickets:
+                # Calculamos intersección
+                overlap = len(cand_set.intersection(existing))
+                if overlap > max_overlap:
+                    is_diverse = False
+                    break
+            
+            if is_diverse:
+                selected_tickets.append(cand_list)
+                
+        # 3. Fallback (Relleno de Emergencia)
+        # Si fuimos muy estrictos y nos faltan tickets, rellenamos con los mejores
+        # disponibles aunque se parezcan, para no entregar menos de 20.
+        if len(selected_tickets) < n_tickets:
+            # print(f"⚠️ Alerta Swarm: Rellenando {n_tickets - len(selected_tickets)} cupos sin filtro.")
+            for candidate in pool_candidates:
+                cand_list = candidate.tolist()
+                if cand_list not in selected_tickets:
+                    selected_tickets.append(cand_list)
+                    if len(selected_tickets) >= n_tickets:
+                        break
+                        
+        return selected_tickets
 
     def predict(self, history, config) -> PredictionResultDTO:
         univ = config.raw_universe_ptr
@@ -75,49 +105,47 @@ class GeneticSelectorStrategy:
         xp = cp if (HAS_CUPY and hasattr(univ, "get")) else np
         u_xp = xp.asarray(univ)
 
-        # 1. RESONANCIA (IA Scorer + Geo Resonance)
+        # 1. RESONANCIA (Motor V7.21 Gold Master)
+        # Calculamos los scores híbridos (AI + Geo Adaptativo)
         res = self.resonance_engine.calculate_resonance(u_xp, history, config, xp)
         if res is None:
             return PredictionResultDTO("Resonance_Collapse", [])
 
-        # 2. MALLA COMPETITIVA (Evolución Genética)
-        # Retorna los tickets optimizados pero dispersos
-        raw_tickets = self.competitive_mesh.apply_mesh(
-            res["u_reduced"],
-            res["final_scores_reduced"],
-            config.num_tickets,
-            res["geo_matrix_xp"],
-            xp,
-            thermal_numbers=res.get("thermal_numbers"),
+        # 2. SELECCIÓN OMEGA (Diversity Swarm)
+        # Operamos sobre el universo reducido (Top 50%) que ya viene limpio de basura
+        final_tickets = self.apply_diversity_swarm(
+            res["u_reduced"], 
+            res["final_scores_reduced"], 
+            config.num_tickets, 
+            xp
         )
 
-        # 3. APLICACIÓN DE CONCENTRACIÓN NEXUS (Novedad V7.17)
-        # Evita que los 6 aciertos queden repartidos en 20 tickets
-        final_tickets = self.apply_anchor_nexus(raw_tickets, res["u_reduced"], config)
-
-        # 4. SINCRONIZACIÓN Y TELEMETRÍA PARA BACKTESTER
+        # 3. TELEMETRÍA (Auditoría de Ranks)
+        # Queremos saber en qué Rank real quedaron los tickets que elegimos
         u_cpu = univ.get() if hasattr(univ, "get") else univ
         
-        # Reconstrucción del mapa de scores para auditoría forense
+        # Reconstruimos el mapa de scores global para calcular el ranking real
         full_hybrid_map = np.zeros(u_cpu.shape[0], dtype=np.float32)
         scores_cpu = res["final_scores_reduced"].get() if hasattr(res["final_scores_reduced"], "get") else res["final_scores_reduced"]
         idx_cpu = res["radar_indices"].get() if hasattr(res["radar_indices"], "get") else res["radar_indices"]
         full_hybrid_map[idx_cpu] = scores_cpu
 
-        # Fix de Distancia y Rank para el reporte de Opción 6
-        selected_ranks = []
+        # Ordenamos todos los scores del universo para saber el Rank # exacto
         sorted_global_scores = np.sort(full_hybrid_map)[::-1]
+        selected_ranks = []
 
         for ticket in final_tickets:
             ticket_arr = np.array(ticket)
+            # Buscamos el ticket en el universo original para ver su score
             match_idx = np.where((u_cpu == ticket_arr).all(axis=1))[0]
             if len(match_idx) > 0:
                 t_score = full_hybrid_map[match_idx[0]]
+                # Binary search para encontrar el Rank
                 t_rank = np.searchsorted(-sorted_global_scores, -t_score) + 1
                 selected_ranks.append(int(t_rank))
 
         return PredictionResultDTO(
-            strategy_name=f"MRPRO V7.17 (Nexus Density: {config.filter_overrides.get('nexus_density', 0.8)})",
+            strategy_name="MRPRO V7.22 OMEGA (Diversity Swarm)",
             tickets=final_tickets,
             metadata={
                 "universe": u_cpu,
