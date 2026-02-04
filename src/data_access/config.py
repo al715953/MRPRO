@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V7.17-ULTIMATE-E2-MAGNETO-S2"
+VERSION_TAG = "V7.17-ULTIMATE-E2-MAGNETO-S2 report mejorado"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
