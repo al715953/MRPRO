@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V7.16 (Boundary-Flex & Elite-Liberation)"
+VERSION_TAG = "V7.17-ULTIMATE-E2-MAGNETO-S2"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
@@ -36,9 +36,14 @@ NUM_CANDIDATOS_MONTECARLO = 10000000
 # --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
+    "dynamic_exclude_count": 2,      # Números a eliminar por inercia térmica
+    "anchor_nexus_size": 3,         # Cuántos números 'ancla' compartirán los tickets
+    "nexus_density": 0.90,          # 80% de los tickets tendrán las anclas
+    "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
+
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 112,
-    "sum_max": 128,
+    "sum_min": 100,   #112
+    "sum_max": 140,   #128
     "f1_max": 9,
     "f6_min": 31,
     "ac_min": 8,
@@ -48,7 +53,7 @@ BEST_SETTINGS = {
     "prime_min": 1,
     "prime_max": 3,
     "max_delta": 15,  # Saltos más cortos (más realista)
-    "std_min": 8.2,  # Dispersión más controlada
+    "std_min": 8,  # Dispersión más controlada
     "std_max": 12.4,
     "entropy_min": 2.15,  # Punto dulce detectado en V13
     "entropy_max": 2.45,  # Filtra el ruido estético excesivo

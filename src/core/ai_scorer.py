@@ -1,16 +1,54 @@
 # src/core/ai_scorer.py
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
-from src.data_access.config import BEST_SETTINGS
+# Importamos la configuración de hardware centralizada
+from src.data_access.config import BEST_SETTINGS, GPU_ENABLED
 
-# En macOS (Apple Silicon), forzamos HAS_GPU a False para evitar conflictos con CUDA
-HAS_GPU = False 
+# La señal de GPU ahora es gobernada exclusivamente por config.py
+HAS_GPU = GPU_ENABLED 
+
+class ShadowModel:
+    """
+    V7.17 Shadow-Model: Aprende patrones de 'Falsos Positivos' para evitar 
+    tickets que parecen ganadores pero históricamente fallan.
+    """
+    def __init__(self):
+        self.model = XGBRegressor(
+            n_estimators=1000, 
+            max_depth=6, 
+            # Adaptación dinámica de hardware
+            device="cuda" if HAS_GPU else "cpu",
+            tree_method="hist" if HAS_GPU else "auto",
+            n_jobs=-1,
+            random_state=42
+        )
+        self.is_trained = False
+
+    def train_from_forensics(self, forensic_history):
+        """Entrena el modelo usando los datos de detailed_forensic_log.csv."""
+        if len(forensic_history) < 20: 
+            return 
+        
+        df = pd.DataFrame(forensic_history)
+        X = df[['ai_score', 'geo_score', 'proximity']].values
+        y = (df['hits'] < 3).astype(float) 
+        
+        self.model.fit(X, y)
+        self.is_trained = True
+
+    def get_risk_score(self, ai_score, geo_score, proximity):
+        if not self.is_trained: 
+            return 0.0
+        X_input = np.array([[ai_score, geo_score, proximity]])
+        return float(self.model.predict(X_input)[0])
+
 
 class LotteryAIModel:
     """
-    Motor V7.16: Neural-Precision & Deep-Ensemble (Mac Optimized).
-    Ajustado para procesar en CPU aprovechando la arquitectura del chip Apple.
+    Motor V7.17: Neural-Precision & Deep-Ensemble.
+    Arquitectura híbrida compatible con CUDA (Windows) y CPU (Mac).
     """
 
     def __init__(self):
@@ -21,13 +59,10 @@ class LotteryAIModel:
         self._build_ensemble()
 
     def _build_ensemble(self):
-        """
-        Construye el ensamble con parámetros de Neural-Precision.
-        """
+        """Construye el ensamble basado en la disponibilidad de hardware."""
         fine_learning_rate = 0.008  
         deep_estimators = 4500  
 
-        # Configuración de los expertos desde BEST_SETTINGS
         cfg = self.config.get(
             "ensemble_config",
             {
@@ -53,27 +88,22 @@ class LotteryAIModel:
                     objective=params.get("objective", "reg:squarederror"),
                     reg_alpha=0.1,
                     reg_lambda=1.5,
-                    # Forzamos CPU para compatibilidad con MacBook Air
-                    device="cpu",
-                    tree_method="auto",
-                    n_jobs=-1,  # Usa todos los núcleos (M1/M2/M3)
+                    # Configuración dinámica:
+                    device="cuda" if HAS_GPU else "cpu",
+                    tree_method="hist" if HAS_GPU else "auto",
+                    n_jobs=-1,
                     random_state=42,
                 ),
                 "weight": params.get("weight", 0.5),
             }
 
     def train(self, winning_numbers, total_balls):
-        """
-        Entrenamiento del ensamble usando muestras reales y ruido sintético.
-        """
         if not winning_numbers:
             return
 
-        # Preparación de muestras positivas
         X_pos = np.array([sorted(draw[:6]) for draw in winning_numbers])
         y_pos = np.ones(len(X_pos), dtype=np.float32)
 
-        # Generar set negativo (ruido)
         raw_noise = np.random.randint(1, total_balls + 1, (len(X_pos) * 2, 6))
         X_neg = np.sort(raw_noise, axis=1)
         y_neg = np.zeros(len(X_neg), dtype=np.float32)
@@ -81,7 +111,6 @@ class LotteryAIModel:
         X_train = np.vstack((X_pos, X_neg))
         y_train = np.concatenate((y_pos, y_neg))
 
-        # Ajuste del escalador (vital para la sensibilidad)
         X_scaled = self.scaler.fit_transform(X_train)
 
         for name, expert in self.experts.items():
@@ -90,17 +119,13 @@ class LotteryAIModel:
         self.is_trained = True
 
     def score_tickets(self, candidates, return_breakdown=False):
-        """
-        Evalúa candidatos asignando un puntaje de confianza IA.
-        """
         if not self.is_trained or candidates is None or len(candidates) == 0:
             return np.array([], dtype=np.float32)
 
-        # Sincronización para procesamiento en CPU
+        # Sincronización automática de punteros (CPU/GPU)
         cand_cpu = candidates.get() if hasattr(candidates, "get") else candidates
         X_scaled = self.scaler.transform(cand_cpu)
 
-        # Cálculo de scores por experto
         scores_pool = []
         for name, expert in self.experts.items():
             pred = expert["model"].predict(X_scaled)

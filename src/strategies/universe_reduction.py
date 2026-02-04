@@ -1,25 +1,21 @@
+# src/strategies/universe_reduction.py
 import time
 import numpy as np
 from src.domain.dtos import PredictionResultDTO
 from .universe.backend import UniverseBackend
 from .universe.filters import VectorizedFilters
-
-# IMPORTANTE: Vinculación con configuración global
 from src.data_access.config import BEST_SETTINGS
 
-
 class UniverseReductionStrategy:
-    """Coordinador Sniper V14.1: Versión Blindada (Handshake Obligatorio)."""
+    """Coordinador Sniper V14.1 + V7.17 (Poda Dinámica Activa)."""
 
     def __init__(self):
         self.xp, self.backend_name = UniverseBackend.get_xp()
         self.filters = VectorizedFilters(self.xp)
 
     def predict(self, history, config, verbose=True) -> PredictionResultDTO:
-        """Handshake garantizado: El universo fluye sin pérdidas a la Fase 2."""
         universe = self.reduce(history, config, verbose=verbose)
 
-        # Blindaje: Si el universo falla, devolvemos una estructura vacía pero válida
         if universe is None:
             universe = self.xp.array([], dtype=self.xp.uint8)
 
@@ -27,81 +23,56 @@ class UniverseReductionStrategy:
             strategy_name=f"Sniper V14.1 ({self.backend_name})",
             tickets=universe.tolist() if hasattr(universe, "tolist") else universe,
         )
-
-        # CONTRATO: Esta metadata es sagrada para el Backtester y la Fase 2
         res.metadata = {"raw_ndarray": universe, "final_size": len(universe)}
         return res
 
     def reduce(self, history, config, verbose=True):
-        """Tu lógica original V14.1 intacta con todos tus logs de telemetría."""
+        """Lógica V7.17: Integra la exclusión dinámica antes de la generación."""
         start_time = time.time()
 
-        cfg = getattr(config, "filter_overrides", None)
-        if not cfg:
-            cfg = BEST_SETTINGS
+        cfg = getattr(config, "filter_overrides", None) or BEST_SETTINGS
 
         if verbose:
-            print(f"🚀 Sniper V14.1 [Hardware: {self.backend_name}]")
+            print(f"🚀 Sniper V7.17 [Mac Mode: {self.backend_name}]")
 
-        # --- ETAPA 1: ORIGEN ---
-        universe = self.filters.generate_universe()
+        # --- NUEVA ETAPA V7.17: INFERENCIA DE EXCLUSIÓN ---
+        # 1. Identificamos los números a eliminar basados en el historial
+        n_exclude = cfg.get("dynamic_exclude_count", 3)
+        excluded_pool = self.filters.get_dynamic_exclusion_pool(history, n_exclude)
+        
         if verbose:
-            print(f"   ├─ Universo Base: {len(universe):,}")
+            print(f"   ✂️ Poda de Raíz: Excluyendo {excluded_pool} por inercia térmica.")
 
-        # --- ETAPA 2: FRONTERAS ---
+        # --- ETAPA 1: ORIGEN (Pool Reducido) ---
+        # 2. Pasamos la lista de excluidos al generador
+        universe = self.filters.generate_universe(excluded_pool=excluded_pool)
+        
+        if verbose:
+            print(f"   ├─ Universo Base (Podado): {len(universe):,}")
+
+        # --- ETAPA 2 EN ADELANTE: FILTROS SNIPER ---
+        # (El resto del proceso de filtrado se mantiene igual)
         universe = self.filters.apply_positional_limits(universe, cfg)
-        if verbose:
-            print(f"   ├─ Frontera Posicional: {len(universe):,}")
-
-        # --- ETAPA 3: MASA MATEMÁTICA ---
         universe = self.filters.apply_aggregation(universe, cfg)
-        if verbose:
-            print(f"   ├─ Agregación (Suma/Raíz): {len(universe):,}")
-
         universe = self.filters.apply_structure(universe, cfg)
-        if verbose:
-            print(f"   ├─ Estructura (Par/Prim/Cont): {len(universe):,}")
-
-        # --- ETAPA 4: PODAS TÁCTICAS ---
-        universe, _ = self.filters.apply_terminal_poda(universe, cfg)
-        if verbose:
-            print(f"   ├─ Poda Terminales: {len(universe):,}")
-
+        
+        universe, mask_p = self.filters.apply_terminal_poda(universe, cfg)
         universe, d_vecs = self.filters.apply_spatial(universe, cfg)
-        if verbose:
-            print(f"   ├─ Espacial (Décadas): {len(universe):,}")
 
         if len(universe) > 0:
             universe = self.filters.apply_profile_poda(universe, d_vecs, cfg)
-            if verbose:
-                print(f"   ├─ Poda Perfiles: {len(universe):,}")
-
-            # --- NUEVA ETAPA: DISSECCIÓN QUIRÚRGICA ---
             universe = self.filters.apply_entropy_shannon(universe, cfg)
-            if verbose:
-                print(f"   ├─ Entropía Shannon: {len(universe):,}")
-
             universe = self.filters.apply_digital_root_sum(universe, cfg)
-            if verbose:
-                print(f"   ├─ Raíz Digital (SDR): {len(universe):,}")
-
-            # --- ETAPA 5: COMPLEXITY ---
             universe = self.filters.apply_ac_complexity(universe, cfg)
-            if verbose:
-                print(f"   ├─ Complejidad AC: {len(universe):,}")
 
-            # Pulido final original
+            # Pulido Final (Std)
             stds = self.xp.std(universe.astype(self.xp.float32), axis=1)
             universe = universe[
-                (stds >= cfg.get("std_min", 8.0)) & (stds <= cfg.get("std_max", 12.6))
+                (stds >= cfg.get("std_min", 8.2)) & (stds <= cfg.get("std_max", 12.4))
             ]
-            if verbose:
-                print(f"   ├─ Pulido Final (Std): {len(universe):,}")
 
         elapsed = time.time() - start_time
         if verbose:
-            print(
-                f"✅ PUNTO DULCE RESTAURADO: {len(universe):,} tickets ({elapsed:.2f}s)"
-            )
+            print(f"✅ UNIVERSO DINÁMICO: {len(universe):,} tickets ({elapsed:.2f}s)")
 
         return universe
