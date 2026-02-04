@@ -5,24 +5,20 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-# Importamos la ruta centralizada para asegurar compatibilidad en Mac
 from src.data_access.config import DATA_FOLDER
 
 def run_forensic_visualization(json_path=None):
     """
-    VISUALIZER V6.3: Auditor de Resonancia (Mac Optimized).
-    Sincronizado con PerformanceTracker para localizar los datos de backtest.
+    VISUALIZER V7.21: Tablero Táctico Magneto (Clean UI).
+    Versión optimizada para Mac (sin emojis en títulos para evitar Glyph Warnings).
     """
-    # Si no se provee ruta, usamos la ubicación centralizada en la carpeta data
     if json_path is None:
         json_path = os.path.join(DATA_FOLDER, "backtest_results.json")
 
-    print(f"\n[bold cyan]📊 INICIANDO ESTACIÓN DE VISUALIZACIÓN[/bold cyan]")
+    print(f"\n📊 GENERANDO TABLERO TACTICO (V7.21)")
 
     if not os.path.exists(json_path):
-        print(f"❌ Error: Archivo de resultados no encontrado.")
-        print(f"   Se buscó en: {json_path}")
-        print("   Asegúrate de ejecutar un Backtest (Opción 6) primero para generar los datos.")
+        print(f"❌ Error: No se encontró {json_path}")
         return
 
     try:
@@ -30,82 +26,70 @@ def run_forensic_visualization(json_path=None):
             data = json.load(f)
         df = pd.DataFrame(data)
     except Exception as e:
-        print(f"❌ Error al cargar JSON en Mac: {e}")
+        print(f"❌ Error leyendo JSON: {e}")
         return
 
     if df.empty:
-        print("⚠️ El archivo de resultados está vacío.")
+        print("⚠️ El JSON de resultados está vacío.")
         return
 
-    # Aseguramos que 'hits' sea entero para consistencia en el mapeo de colores
-    df["hits"] = df["hits"].astype(int)
+    # --- LIMPIEZA DE DATOS ---
+    numeric_cols = ['ai_score', 'geo_score', 'rank', 'hits', 'univ_size']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            df[col] = 0 
 
-    # 1. Configuración de Estética Forense (Modo Oscuro)
-    plt.style.use("dark_background")
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    fig.suptitle(
-        "MRPRO V6.3: AUDITORÍA DE RESONANCIA Y SUCCIÓN",
-        fontsize=22,
-        color="#00ffcc",
-        fontweight="bold",
-    )
+    # --- CONFIGURACIÓN DEL LIENZO ---
+    sns.set_theme(style="darkgrid")
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    run_tag = df['tag'].iloc[0] if 'tag' in df.columns else "Unknown Mission"
+    fig.suptitle(f'Tablero Tactico MRPRO - Mision: {run_tag}', fontsize=14, color='#1f77b4', weight='bold')
 
-    # Diccionario de colores blindado para los niveles de aciertos (0 a 6)
-    palette = {
-        0: "#1a1a1a", 1: "#2a2a2a", 2: "#3a3a3a",
-        3: "#0055ff", 4: "#ffcc00", 5: "#ff0055", 6: "#00ffff"
-    }
-
-    # PANEL A: Conflict Map (IA Score vs Geometría)
+    # --- PANEL 1: RADAR DE CAZA (AI vs GEO) ---
     sns.scatterplot(
-        data=df, x="ai_score", y="geo_score", hue="hits",
-        palette=palette, s=100, alpha=0.6, ax=axes[0, 0]
+        data=df, 
+        x='ai_score', 
+        y='geo_score', 
+        hue='hits', 
+        palette="viridis",
+        size='hits',
+        sizes=(20, 200),
+        style='hits',
+        ax=axes[0]
     )
-    axes[0, 0].set_title("1. Mapa de Conflicto: IA vs Geo Score", color="cyan")
-    axes[0, 0].axhline(df["geo_score"].median(), color="white", linestyle="--", alpha=0.3)
+    # Títulos limpios (Sin emojis para evitar Warnings)
+    axes[0].set_title('Radar de Impacto: AI vs Geo', color='navy')
+    axes[0].set_xlabel('Inteligencia Artificial (0-1)')
+    axes[0].set_ylabel('Resonancia Geometrica (0-1)')
+    axes[0].axhline(0.5, color='red', linestyle='--', alpha=0.3)
+    axes[0].axvline(0.5, color='red', linestyle='--', alpha=0.3)
 
-    # PANEL B: Distribución de Hits (Frecuencia de aciertos)
-    counts = df["hits"].value_counts().sort_index()
-    sns.barplot(
-        x=counts.index, y=counts.values, hue=counts.index,
-        palette=palette, ax=axes[0, 1], legend=False
-    )
-    axes[0, 1].set_title(f"2. Distribución de Éxitos ({len(df)} Sorteos)", color="cyan")
-    for i, v in enumerate(counts.values):
-        axes[0, 1].text(i, v + 0.2, str(v), ha="center", color="white")
+    # --- PANEL 2: DINÁMICA DEL UNIVERSO ---
+    if 'univ_size' in df.columns and df['univ_size'].sum() > 0:
+        sns.lineplot(data=df, x='draw_id', y='univ_size', color='green', marker='o', ax=axes[1])
+        axes[1].set_title('Dinamica del Universo (Sniper)', color='green')
+        axes[1].set_ylabel('Tickets en Juego')
+    else:
+        axes[1].text(0.5, 0.5, "Datos de Universo no disponibles", ha='center')
 
-    # PANEL C: Succión de Rango (Escala Logarítmica Invertida)
-    # Analiza qué tan cerca del Top 1 estuvieron los ganadores reales
-    sns.boxenplot(
-        data=df, x="hits", y="rank", hue="hits",
-        palette=palette, ax=axes[1, 0], legend=False
-    )
-    axes[1, 0].set_yscale("log")
-    axes[1, 0].invert_yaxis()
-    axes[1, 0].set_title("3. Presión de Succión (Rango Invertido)", color="cyan")
+    # --- PANEL 3: PROFUNDIDAD DEL RANKING ---
+    sns.barplot(data=df, x='draw_id', y='rank', hue='hits', dodge=False, palette="magma", ax=axes[2])
+    axes[2].set_yscale('log') 
+    axes[2].set_title('Profundidad del Ganador (Rank Log)', color='purple')
+    axes[2].set_ylabel('Ranking (Escala Log)')
+    axes[2].axhline(5000, color='red', linestyle='--', label='Limite de Compra (5k)')
+    axes[2].legend(loc='upper right', bbox_to_anchor=(1, 1))
 
-    # PANEL D: Proximidad al Jackpot
-    sns.stripplot(
-        data=df, x="hits", y="proximity", hue="hits",
-        palette=palette, ax=axes[1, 1], alpha=0.5, legend=False
-    )
-    axes[1, 1].set_yscale("log")
-    axes[1, 1].invert_yaxis()
-    axes[1, 1].set_title("4. Proximidad al Jackpot", color="cyan")
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout()
     
-    # Guardamos el resultado en la carpeta data centralizada
-    output_path = os.path.join(DATA_FOLDER, "forensic_analysis.png")
-    plt.savefig(output_path, dpi=300)
-    
-    print(f"✅ Visualización generada exitosamente en: {output_path}")
-    
-    # Intentar abrir la imagen automáticamente en Mac
-    try:
-        os.system(f"open {output_path}")
-    except:
-        pass
+    output_filename = "tactical_dashboard_v7.png"
+    output_path = os.path.join(DATA_FOLDER, output_filename)
+    plt.savefig(output_path, dpi=150)
+    print(f"🖼️  Tablero generado: {output_path}")
+    plt.close()
 
 if __name__ == "__main__":
     run_forensic_visualization()

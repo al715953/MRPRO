@@ -14,20 +14,18 @@ from rich.progress import (
 
 try:
     import cupy as cp
-
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
 
-from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO, PredictionResultDTO
+from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
 from src.core.forensics import LotteryForensics
 from src.data_access.config import VERSION_TAG
 
-
 class BacktestEngine:
-    """Motor Sniper V14.9: Integración de Telemetría y Gestión de Memoria."""
+    """Motor Sniper V14.10: Full Data Capture (Visual + CSV)."""
 
     def __init__(self):
         self.rules, self.console = MelateRetroRules(), Console()
@@ -41,14 +39,9 @@ class BacktestEngine:
         verbose=True,
         pre_process_strategy=None,
     ):
-        """
-        Ejecuta la misión de backtest con arquitectura desacoplada.
-        Delegación total de IA a la estrategia y validación financiera estricta.
-        """
         total_inv, total_earn, coverage_6 = 0.0, 0.0, 0
-        hits_dist = {i: 0 for i in range(7)}  # Registro de impacto 0/6 a 6/6
+        hits_dist = {i: 0 for i in range(7)}
 
-        # Preparación del historial cronológico
         full_h = sorted(
             zip(history.dates, history.winning_numbers, history.concursos),
             key=lambda x: x[2],
@@ -73,22 +66,21 @@ class BacktestEngine:
 
             for i in range(start_idx, len(full_h)):
                 t_start = time.time()
-                _, target, t_id = full_h[i]  # Sorteo real a batir
+                _, target, t_id = full_h[i]
 
-                # Ventana de datos históricos hasta el sorteo actual
                 past = full_h[:i]
                 d_past, n_past, ids_past = zip(*past)
                 curr_h = DrawHistoryDTO(list(d_past), list(n_past), list(ids_past))
 
-                # --- FASE 1: REDUCCIÓN (Handshake V14.1) ---
+                # --- FASE 1: REDUCCIÓN ---
+                sniper_msg = ""
                 if pre_process_strategy:
                     res_univ = pre_process_strategy.predict(
                         curr_h, config, verbose=False
                     )
-                    # Sincronización del puntero físico para la Fase 2
                     config.raw_universe_ptr = res_univ.metadata.get("raw_ndarray")
+                    sniper_msg = res_univ.metadata.get("sniper_log", "")
 
-                    # Radar de Cobertura (Jackpot Tracker)
                     if config.raw_universe_ptr is not None:
                         xp = (
                             cp
@@ -96,24 +88,15 @@ class BacktestEngine:
                             else np
                         )
                         t_xp = xp.asarray(target[:6], dtype=xp.uint8)
-                        if (
-                            int(
-                                xp.max(
-                                    xp.sum(
-                                        xp.isin(config.raw_universe_ptr, t_xp), axis=1
-                                    )
-                                )
-                            )
-                            == 6
-                        ):
+                        matches = xp.sum(xp.isin(config.raw_universe_ptr, t_xp), axis=1)
+                        if int(xp.max(matches)) == 6:
                             coverage_6 += 1
 
-                # --- FASE 2: ESTRATEGIA (IA & Selección) ---
-                # INTEGRACIÓN V6.4: Extraemos la telemetría (snapshot) desde la metadata del DTO
+                # --- FASE 2: ESTRATEGIA ---
                 prediction = strategy.predict(curr_h, config)
                 snapshot = prediction.metadata
 
-                # Auditoría Forense: Delegada a LotteryForensics
+                # Auditoría Forense
                 xp_audit = (
                     cp if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get")) else np
                 )
@@ -121,35 +104,35 @@ class BacktestEngine:
 
                 if audit:
                     audit["draw_id"] = int(t_id)
-                    # Añadimos tamaño del universo para el reporte telemétrico
+                    
+                    # 1. Guardamos el Tamaño del Universo
                     audit["univ_size"] = (
                         len(config.raw_universe_ptr)
                         if config.raw_universe_ptr is not None
                         else 0
                     )
+                    
+                    # 2. Guardamos el Log del Sniper (¡LA PIEZA FALTANTE!)
+                    audit["sniper_log"] = sniper_msg
+                    
                     self.forensic_data.append(audit)
 
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
-                # 'prediction' ahora es el DTO correcto con el atributo .tickets
                 for tkt in prediction.tickets:
                     total_inv += self.rules.ticket_cost
-                    h_n, h_a = self.rules.validate_ticket(
-                        tkt, target
-                    )  # Conteo de hits reales
+                    h_n, h_a = self.rules.validate_ticket(tkt, target)
                     total_earn += self.rules.calculate_prize(h_n, h_a)
                     hits_dist[h_n] += 1
 
-                # Telemetría en tiempo real
                 if verbose and audit:
-                    self._render_telemetry(audit, t_id, t_start)
+                    self._render_telemetry(audit, t_id, t_start, sniper_msg)
 
-                # Gestión de memoria GPU (RTX 4070 Ti)
                 if HAS_CUPY:
                     cp.get_default_memory_pool().free_all_blocks()
 
                 progress.advance(task)
 
-        # Empaquetado de resultados finales
+        # Reporte Final
         res = BacktestResultDTO(
             f"Sniper Global (Dynamic Hybrid)",
             test_size,
@@ -158,13 +141,11 @@ class BacktestEngine:
             total_earn - total_inv,
             hits_dist,
         )
-
         self._print_final_report(res, coverage_6)
         self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
         return res
 
-    def _render_telemetry(self, audit, t_id, t_s):
-        """Renderizado con Geo-Score integrado y paleta Sniper."""
+    def _render_telemetry(self, audit, t_id, t_s, sniper_msg=""):
         d, r, h = (
             audit.get("proximity", 999),
             audit.get("rank", 0),
@@ -176,15 +157,14 @@ class BacktestEngine:
 
         st_c = "bold green" if d == 0 else "bold red"
         h_c = (
-            "bold green"
-            if h == 6
-            else "bold yellow" if h == 5 else "cyan" if h == 4 else "white"
+            "bold green" if h == 6 else 
+            "bold yellow" if h == 5 else 
+            "cyan" if h == 4 else "white"
         )
         d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
-
         status = "🎯 HIT" if d == 0 else "❌"
-
-        self.console.print(
+        
+        line = (
             f"[bold blue]#{t_id}[/] | "
             f"U: {u_s:>6,d} | "
             f"[{h_c}]{h}/6[/] | "
@@ -194,32 +174,27 @@ class BacktestEngine:
             f"Dist: [{d_c}]{d:<4}[/] | "
             f"[{st_c}]{status}[/] | [dim]{time.time()-t_s:.2f}s[/dim]"
         )
+        
+        if sniper_msg:
+            line += f" | [cyan]{sniper_msg}[/]"
+
+        self.console.print(line)
 
     def _print_final_report(self, res, coverage_6):
-        """Reporte sin cuadros negros: Encabezados definidos."""
         self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
-
         summary = Table(show_header=True, header_style="bold magenta")
         summary.add_column("Métrica Sniper", style="dim", width=20)
         summary.add_column("Valor", justify="right", width=15)
-
         summary.add_row("Sorteos Analizados", str(res.total_draws_tested))
-        summary.add_row(
-            "Balance Neto",
-            f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]",
-        )
+        summary.add_row("Balance Neto", f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]")
         summary.add_row("Jackpots en Universo", f"[bold yellow]{coverage_6}[/]")
         self.console.print(summary)
-
-        dist_table = Table(
-            title="Distribución de Aciertos", show_header=True, header_style="bold cyan"
-        )
+        
+        dist_table = Table(title="Distribución de Aciertos", show_header=True, header_style="bold cyan")
         dist_table.add_column("Rango", justify="center")
         dist_table.add_column("Tickets", justify="right")
-
         for h in range(7):
             count = res.hit_distribution.get(h, 0)
             style = "bold yellow" if h >= 4 else "white"
             dist_table.add_row(f"{h}/6 aciertos", f"[{style}]{count}[/]")
-
         self.console.print(dist_table)

@@ -108,11 +108,11 @@ class MissionController:
         print("1. 🛡️  Cobertura Fase 1 (Universo) | 2. 🥊 Duelo | 3. 🧠 Solo AI")
         sub_op = input("   👉 Selecciona modo (3): ") or "3"
         try:
-            n_test, n_tickets = int(input("¿Sorteos? (40): ") or 40), int(
-                input("¿Tickets? (15): ") or 15
+            n_test, n_tickets = int(input("¿Sorteos? (108): ") or 108), int(
+                input("¿Tickets? (20): ") or 20
             )
         except:
-            n_test, n_tickets = 40, 15
+            n_test, n_tickets = 108, 20
 
         config = PredictionConfigDTO(
             TOTAL_BALLS, TICKET_SIZE, n_tickets, n_test, BEST_SETTINGS
