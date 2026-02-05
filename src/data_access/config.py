@@ -20,7 +20,7 @@ MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V8.1_GEO_SAFETY_NET"
+VERSION_TAG = "V15_OMEGA_STRIDE"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39

@@ -1,62 +1,70 @@
 import pandas as pd
 import numpy as np
-from itertools import product
 
-def run_sniper_calibration(csv_path='src/data/Melate-Retro.csv'):
-    df = pd.read_csv(csv_path).sort_values('CONCURSO', ascending=True)
-    winning_cols = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6']
-    history = df[winning_cols].values
-    
-    test_window = 1000
-    start_idx = len(history) - test_window
-    
-    # Pesos de alta fidelidad detectados previamente
-    w_gap, w_term, w_freq = 0.25, 0.10, 0.60
-    # Umbral de Sniper (Ajustable para buscar el 95%+)
-    thresholds = [0.80, 0.85, 0.90, 0.95]
-    
-    print(f"🎯 Calibrando Sniper sobre {test_window} sorteos...")
-    
-    for tau in thresholds:
-        kills = 0
-        draws_active = 0
+def run_forensics():
+    print("--- INICIANDO AUTOPSIA FORENSE V9 ---")
+    try:
+        # Carga del log
+        df = pd.read_csv('src/data/detailed_forensic_log.csv')
         
-        for i in range(start_idx, len(history)):
-            past = history[:i]
-            actual = set(history[i])
-            
-            # Cálculo de Señales
-            gaps = np.full(40, i)
-            for g_v, draw in enumerate(reversed(past)):
-                for n in draw:
-                    if gaps[int(n)] == i: gaps[int(n)] = g_v
-            max_g = np.max(gaps[1:])
-            
-            last_10 = past[-10:].flatten()
-            t_counts = np.bincount(last_10.astype(int) % 10, minlength=10)
-            
-            last_50 = past[-50:].flatten()
-            f_counts = np.bincount(last_50.astype(int), minlength=41)
-            
-            # Scoring
-            scores = []
-            for n in range(1, 40):
-                s = (gaps[n]/max_g)*w_gap + (1.0 if t_counts[n%10]>3 else 0)*w_term + (1.0 if f_counts[n]>8 else 0)*w_freq
-                scores.append(s)
-            
-            max_val = max(scores)
-            voted_num = np.argmax(scores) + 1
-            
-            # --- LÓGICA SNIPER ---
-            if max_val >= tau:
-                draws_active += 1
-                if voted_num in actual:
-                    kills += 1
+        # 1. Auditoría del Ranking Engine (¿El premio está realmente ahí?)
+        print("\n[1] CALIDAD DEL MOTOR DE RANKING (Resonance Engine)")
+        mean_rank = df['Rank_Winner'].mean()
+        median_rank = df['Rank_Winner'].median()
+        top_100_hits = (df['Rank_Winner'] <= 100).sum()
+        top_500_hits = (df['Rank_Winner'] <= 500).sum()
+        total_draws = len(df)
         
-        acc = (draws_active - kills) / draws_active * 100 if draws_active > 0 else 0
-        covertura = (draws_active / test_window) * 100
+        print(f"   Total Sorteos Analizados: {total_draws}")
+        print(f"   Rank Promedio del Ganador: #{mean_rank:.2f}")
+        print(f"   Rank Mediano del Ganador:  #{median_rank:.0f}")
+        print(f"   Ganadores en Top 100:      {top_100_hits} ({top_100_hits/total_draws:.1%})")
+        print(f"   Ganadores en Top 500:      {top_500_hits} ({top_500_hits/total_draws:.1%})")
         
-        print(f"Umbral {tau:.2f} -> Precisión: {acc:.2f}% | Se activa en: {covertura:.1f}% de sorteos")
+        if median_rank > 500:
+            print("   >>> CONCLUSIÓN: EL MOTOR FALLA. El premio no está en el Top 500. El Selector es inocente.")
+        else:
+            print("   >>> CONCLUSIÓN: EL MOTOR FUNCIONA. El premio está ahí. El Selector V9 es el culpable.")
+
+        # 2. Auditoría del Selector (¿Por qué no lo atrapamos?)
+        # Asumimos que 'Selected_Ranks' es una cadena o lista. Si es cadena, la parseamos.
+        # Calcularemos la distancia mínima entre lo que jugamos y el ganador real.
+        
+        print("\n[2] PRECISIÓN DEL SELECTOR (Holo-Cover)")
+        # Filtramos solo los casos donde el Ranking Engine hizo su trabajo (Premio en Top 500)
+        valid_cases = df[df['Rank_Winner'] <= 500].copy()
+        
+        if len(valid_cases) == 0:
+            print("   No hay casos válidos en Top 500 para analizar el selector.")
+            return
+
+        # Función para encontrar el Rank jugado más cercano al Rank Ganador
+        def get_min_dist(row):
+            winner = row['Rank_Winner']
+            # Limpieza básica de la cadena de lista si es necesario
+            try:
+                selected = eval(str(row['Selected_Ranks'])) if isinstance(row['Selected_Ranks'], str) else row['Selected_Ranks']
+                if not isinstance(selected, list): return 9999
+                # Distancia absoluta mínima
+                dists = [abs(s - winner) for s in selected if s > 0]
+                return min(dists) if dists else 9999
+            except:
+                return 9999
+
+        valid_cases['Min_Dist'] = valid_cases.apply(get_min_dist, axis=1)
+        avg_dist = valid_cases['Min_Dist'].mean()
+        
+        print(f"   En los casos donde el premio estaba en Top 500:")
+        print(f"   Distancia Promedio (Rank Jugado vs Rank Ganador): {avg_dist:.2f} puestos")
+        
+        if avg_dist < 20:
+            print("   >>> FALLO DE PRECISIÓN FINA: Estamos cerca, pero no exactos (Falta 'Jitter').")
+        else:
+            print("   >>> FALLO ESTRUCTURAL: Estamos buscando en el vecindario equivocado del Top 500.")
+
+    except Exception as e:
+        print(f"ERROR CRÍTICO: {e}")
+        print("Asegúrate de que 'detailed_forensic_log.csv' está en la carpeta data.")
 
 if __name__ == "__main__":
-    run_sniper_calibration()
+    run_forensics()
