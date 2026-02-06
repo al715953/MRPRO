@@ -14,6 +14,7 @@ from src.data_access.config import VERSION_TAG
 
 console = Console()
 
+
 class ConsoleUI:
     """
     Interface de Misión Crítica MRPRO V15.
@@ -30,24 +31,34 @@ class ConsoleUI:
         """HUD (Heads-Up Display) Refinado."""
         ultimo_id = max(history.concursos)
         proximo_id = ultimo_id + 1
-        status_ledg = "[white on red] 🔒 BLOQUEADO [/]" if tiene_apuestas else "[black on green] 🔓 LIBRE [/]"
-        
+        status_ledg = (
+            "[white on red] 🔒 BLOQUEADO [/]"
+            if tiene_apuestas
+            else "[black on green] 🔓 LIBRE [/]"
+        )
+
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
         grid.add_column(justify="center", ratio=2)
         grid.add_column(justify="right", ratio=1)
-        
+
         grid.add_row(
             f"[bold blue]📦 BASE:[/] {ultimo_id}",
             f"[bold cyan]🎯 TARGET:[/] {proximo_id}  {status_ledg}",
-            f"[dim]{VERSION_TAG}[/]"
+            f"[dim]{VERSION_TAG}[/]",
         )
-        
+
         self.console.print(Panel(grid, style="dim white", box=box.HORIZONTALS))
 
     def show_welcome(self):
         self.clear_screen()
-        self.console.print(Text(" MRPRO TERMINAL :: SISTEMA DE PREDICCIÓN ESTRATÉGICA ", style="bold cyan"), justify="left")
+        self.console.print(
+            Text(
+                " MRPRO TERMINAL :: SISTEMA DE PREDICCIÓN ESTRATÉGICA ",
+                style="bold cyan",
+            ),
+            justify="left",
+        )
 
     def show_main_menu(self) -> str:
         """Menú de Dos Columnas con todas las misiones restauradas."""
@@ -58,15 +69,22 @@ class ConsoleUI:
         menu_table.add_column("Acción ", style="white")
 
         # Capa 1: Inteligencia
-        menu_table.add_row("[dim]--[/]", "[dim]INTELIGENCIA[/]", "[dim]--[/]", "[dim]DATA PREP[/]")
+        menu_table.add_row(
+            "[dim]--[/]", "[dim]INTELIGENCIA[/]", "[dim]--[/]", "[dim]DATA PREP[/]"
+        )
         menu_table.add_row("1", "Ver Historial", "5", "Generar Universo (Fase 1)")
         menu_table.add_row("2", "Análisis Frecuencia", "8", "Sincronizar Scraper")
-        menu_table.add_row("3", "Simulación Monte Carlo", "P", "Reporte Plot (Forense)")
+        # menu_table.add_row("3", "Simulación Monte Carlo", "P", "Reporte Plot (Forense)")
         menu_table.add_row("4", "Optimizador (Lab)", "", "")
-        
+
         # Capa 2: Operaciones
         menu_table.add_row("", "", "", "")
-        menu_table.add_row("[dim]--[/]", "[bold green]OPERACIONES V15[/]", "[dim]--[/]", "[dim]SISTEMA[/]")
+        menu_table.add_row(
+            "[dim]--[/]",
+            "[bold green]OPERACIONES V15[/]",
+            "[dim]--[/]",
+            "[dim]SISTEMA[/]",
+        )
         menu_table.add_row("6", "Lab Backtest (Simulación)", "0", "Finalizar Sesión")
         menu_table.add_row("7", "[bold green]EJECUTAR OMEGA STRIDE[/]", "", "")
         menu_table.add_row("9", "[bold yellow]LIQUIDAR CARTERA & ROI[/]", "", "")
@@ -76,7 +94,9 @@ class ConsoleUI:
 
     def show_history(self, history: DrawHistoryDTO):
         """Visualización compacta del historial (Opción 1)."""
-        table = Table(title="HISTORIAL RECIENTE", box=box.SIMPLE, header_style="bold blue")
+        table = Table(
+            title="HISTORIAL RECIENTE", box=box.SIMPLE, header_style="bold blue"
+        )
         table.add_column("Concurso", justify="center")
         table.add_column("Fecha", justify="center")
         table.add_column("Combinación Ganadora", justify="center")
@@ -85,26 +105,29 @@ class ConsoleUI:
         data = sorted(
             zip(history.concursos, history.dates, history.winning_numbers),
             key=lambda x: x[0],
-            reverse=True
-        )[:15] # Mostramos los últimos 15
+            reverse=True,
+        )[
+            :15
+        ]  # Mostramos los últimos 15
 
         for conc, date, nums in data:
             nums_str = "-".join(f"{n:02d}" for n in nums[:6])
             if len(nums) > 6:
                 nums_str += f" [bold yellow]({nums[6]:02d})[/]"
             table.add_row(str(conc), str(date), nums_str)
-        
+
         self.console.print(table)
 
     def show_frequency_analysis(self, history: DrawHistoryDTO):
         """Dashboard de frecuencias Hot/Cold (Opción 2)."""
         all_nums = [n for draw in history.winning_numbers for n in draw[:6]]
         counts = Counter(all_nums)
-        
+
         # Asegurar que todos los números (1-39) existan en el conteo
         for n in range(1, 40):
-            if n not in counts: counts[n] = 0
-            
+            if n not in counts:
+                counts[n] = 0
+
         hot_table = Table(title="🔥 HOT (Frecuentes)", box=box.SIMPLE)
         hot_table.add_column("Num", style="bold yellow")
         hot_table.add_column("Hits", justify="right")
@@ -124,14 +147,18 @@ class ConsoleUI:
 
     def show_prediction_results(self, result: PredictionResultDTO):
         """Visualización de tickets generados (Opción 7)."""
-        self.console.print(f"\n[bold green]🎫 SELECCIÓN ESTRATÉGICA: {result.strategy_name}[/bold green]")
-        
+        self.console.print(
+            f"\n[bold green]🎫 SELECCIÓN ESTRATÉGICA: {result.strategy_name}[/bold green]"
+        )
+
         if not result.tickets:
-            self.console.print(Panel("❌ [bold red]FALLO DE GENERACIÓN[/]", border_style="red"))
+            self.console.print(
+                Panel("❌ [bold red]FALLO DE GENERACIÓN[/]", border_style="red")
+            )
             return
 
         ranks = result.metadata.get("selected_ranks", [])
-        
+
         table = Table(box=box.ROUNDED, header_style="bold magenta")
         table.add_column("#", justify="right", style="dim")
         table.add_column("Combinación Sugerida", justify="center")
@@ -139,8 +166,10 @@ class ConsoleUI:
         table.add_column("Rank", justify="right")
 
         for i, ticket in enumerate(result.tickets):
-            t_str = " ".join([f"[bold black on white] {n:02d} [/]" for n in sorted(ticket)])
-            
+            t_str = " ".join(
+                [f"[bold black on white] {n:02d} [/]" for n in sorted(ticket)]
+            )
+
             # Lógica de Zona (Nucleus vs Stride)
             current_rank = ranks[i] if i < len(ranks) else "?"
             if isinstance(current_rank, int) and current_rank <= 10:
@@ -148,6 +177,11 @@ class ConsoleUI:
             else:
                 zona, style = "STRIDE", "blue"
 
-            table.add_row(f"{(i+1):02d}", t_str, f"[{style}]{zona}[/]", f"[{style}]#{current_rank}[/]")
+            table.add_row(
+                f"{(i+1):02d}",
+                t_str,
+                f"[{style}]{zona}[/]",
+                f"[{style}]#{current_rank}[/]",
+            )
 
         self.console.print(table)

@@ -31,19 +31,18 @@ URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQ
 # Forzar uso de núcleos CUDA en RTX 4070 Ti
 GPU_ENABLED = False
 NUM_SIMULACIONES = 250000
-NUM_CANDIDATOS_MONTECARLO = 10000000
+
 
 # --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
-    "dynamic_exclude_count": 2,      # Números a eliminar por inercia térmica
-    "anchor_nexus_size": 3,         # Cuántos números 'ancla' compartirán los tickets
-    "nexus_density": 0.90,          # 80% de los tickets tendrán las anclas
+    "dynamic_exclude_count": 2,  # Números a eliminar por inercia térmica
+    "anchor_nexus_size": 3,  # Cuántos números 'ancla' compartirán los tickets
+    "nexus_density": 0.90,  # 80% de los tickets tendrán las anclas
     "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
-
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 110,   #112
-    "sum_max": 132,   #128
+    "sum_min": 110,  # 112
+    "sum_max": 132,  # 128
     "f1_max": 11,
     "f6_min": 29,
     "ac_min": 7,
