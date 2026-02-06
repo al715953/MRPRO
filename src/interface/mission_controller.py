@@ -1,12 +1,15 @@
+# src/core/mission_controller.py
+
 import src.data_access.report as report
 import src.data_access.scraper as scraper
 from colorama import Fore, Style
+from rich.panel import Panel
 from src.domain.dtos import PredictionConfigDTO
 from src.data_access.config import (
     BEST_SETTINGS,
     TOTAL_BALLS,
     TICKET_SIZE,
-    CSV_FILE_PATH,
+    VERSION_TAG
 )
 from src.strategies.monte_carlo import MonteCarloStrategy
 from src.strategies.universe_reduction import UniverseReductionStrategy
@@ -16,20 +19,13 @@ from src.core.optimizer import StrategyOptimizer
 from src.core.coverage_tester import CoverageTester
 from src.data_access.visualizer import run_forensic_visualization
 
-# Importación segura para la estrategia Heurística
-try:
-    from src.strategies.heuristic_selector import HeuristicSelectorStrategy
-except ImportError:
-    HeuristicSelectorStrategy = None
-
-
 class MissionController:
     def __init__(self, ui, history):
         self.ui = ui
         self.history = history
 
     def run_mission(self, option):
-        """Despachador de misiones (Opciones 1-8)."""
+        option = option.upper()
         if option == "1":
             self._view_history()
         elif option == "2":
@@ -45,127 +41,117 @@ class MissionController:
         elif option == "7":
             self._run_production()
         elif option == "8":
-            run_forensic_visualization()
-        else:
-            print(f"{Fore.RED}⚠ Opción no reconocida.{Style.RESET_ALL}")
+            self._update_history()
+        elif option == "9":
+            self._validate_bets()
+        elif option == "P":
+            self._run_forensic_plot()
 
     def _view_history(self):
         self.ui.show_history(self.history)
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _analyze_frequency(self):
-        self.ui.analyze_frequency(self.history, TOTAL_BALLS)
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+        self.ui.show_frequency_analysis(self.history)
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _run_monte_carlo(self):
-        print(f"\n{Fore.CYAN}🎲 MÓDULO MONTE CARLO{Style.RESET_ALL}")
-        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, num_tickets=10)
-        config.filter_overrides = BEST_SETTINGS
+        try:
+            n_tkt = int(input(f"\n   ¿Cuántos tickets generar? (10): ") or 10)
+        except: n_tkt = 10
+        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, n_tkt)
         pred = MonteCarloStrategy().predict(self.history, config)
         self.ui.show_prediction_results(pred)
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _run_optimizer(self):
-        sub_opt, n_draws = self.ui.show_optimizer_menu()
-        opt = StrategyOptimizer()
-        try:
-            base_dummy = BEST_SETTINGS.copy()
-            base_dummy["verbose"] = False
-            if sub_opt == "1":
-                best_cfg = opt.optimize_filters(self.history, n_draws)
-            elif sub_opt == "2":
-                best_cfg = opt.optimize_heuristics(self.history, base_dummy, n_draws)
-            elif sub_opt == "3":
-                best_cfg = opt.optimize_quotas(self.history, base_dummy, n_draws)
-            elif sub_opt == "4":
-                best_cfg = opt.optimize_full_stack(self.history, n_draws)
-
-            print(
-                f"\n{Fore.GREEN}🏆 CONFIGURACIÓN OPTIMIZADA ({n_draws} Sorteos):{Style.RESET_ALL}"
-            )
-            for k, v in best_cfg.items():
-                print(f"   • {k:<15}: {Fore.CYAN}{v}{Style.RESET_ALL}")
-            print(
-                f"\n{Fore.GREEN}💾 Actualiza 'BEST_SETTINGS' en config.py.{Style.RESET_ALL}"
-            )
-        except Exception as e:
-            print(f"{Fore.RED}⚠ Error: {e}{Style.RESET_ALL}")
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+        optimizer = StrategyOptimizer(self.history)
+        optimizer.optimize()
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _generate_universe(self):
-        print(f"\n{Fore.CYAN}🌌 GENERANDO UNIVERSO (P88 DENSITY)...{Style.RESET_ALL}")
-        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, num_tickets=0)
-        config.filter_overrides = BEST_SETTINGS.copy()
-        config.filter_overrides["verbose"] = True
-        UniverseReductionStrategy().predict(self.history, config)
-        print(f"{Fore.GREEN}✅ Universo generado correctamente.{Style.RESET_ALL}")
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+        tester = CoverageTester(self.history)
+        tester.test_reduction()
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _run_backtest_lab(self):
-        print(
-            f"\n{Fore.CYAN}📡 LABORATORIO V32.1 (STOCHASTIC SNIPER P8){Style.RESET_ALL}"
-        )
-        print("1. 🛡️  Cobertura Fase 1 (Universo) | 2. 🥊 Duelo | 3. 🧠 Solo AI")
-        sub_op = input("   👉 Selecciona modo (3): ") or "3"
+        """Restaurada la funcionalidad de personalización de Backtest."""
+        self.ui.clear_screen()
+        print(f"\n{Fore.MAGENTA}🧪 LABORATORIO DE PRUEBAS (V15 OMEGA STRIDE){Style.RESET_ALL}")
+        print("1. Sniper Mode (Solo Reducción)")
+        print("2. Hybrid Mode (Resonancia + Genético)")
+        print("3. Full Omega Stride (Producción Sim)")
+        
+        sub_op = input(f"\n{Fore.CYAN}Selecciona modo: {Style.RESET_ALL}")
+        
+        # RESTAURACIÓN DE INPUTS FUNCIONALES
         try:
-            n_test, n_tickets = int(input("¿Sorteos? (108): ") or 108), int(
-                input("¿Tickets? (20): ") or 20
-            )
+            b_size = int(input(f"   ¿Cuántos sorteos hacia atrás probar? (50): ") or 50)
+            n_tkt = int(input(f"   ¿Cuántos tickets por sorteo? (20): ") or 20)
         except:
-            n_test, n_tickets = 108, 20
+            b_size, n_tkt = 50, 20
 
-        config = PredictionConfigDTO(
-            TOTAL_BALLS, TICKET_SIZE, n_tickets, n_test, BEST_SETTINGS
-        )
         engine = BacktestEngine()
+        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, n_tkt, backtest_size=b_size)
+
         if sub_op == "1":
-            CoverageTester().run(UniverseReductionStrategy(), self.history, config)
-        elif sub_op == "2" and HeuristicSelectorStrategy:
-            engine.run(
-                HeuristicSelectorStrategy(),
-                self.history,
-                config,
-                True,
-                UniverseReductionStrategy(),
-            )
-            engine.run(
-                GeneticSelectorStrategy(),
-                self.history,
-                config,
-                True,
-                UniverseReductionStrategy(),
-            )
-        elif sub_op == "3":
-            engine.run(
-                GeneticSelectorStrategy(),
-                self.history,
-                config,
-                True,
-                UniverseReductionStrategy(),
-            )
+            engine.run(UniverseReductionStrategy(), self.history, config)
+        elif sub_op in ["2", "3"]:
+            engine.run(GeneticSelectorStrategy(), self.history, config, True, UniverseReductionStrategy())
+            
         input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
     def _run_production(self):
-        """Misión de Élite: Asegura reducción antes de selección."""
-        try:
-            n_prod = int(input(f"\n   ¿Tickets para hoy? (15): ") or 15)
-        except:
-            n_prod = 15
+        """Producción V15: Con inputs funcionales y Ledger Lock."""
+        ultimo_id = max(self.history.concursos)
+        proximo_id = ultimo_id + 1
+        
+        if report.tiene_apuestas_pendientes(proximo_id):
+            self.ui.console.print(Panel(
+                f"[bold red]🚫 BLOQUEO DE SEGURIDAD[/]\n\nYa existen apuestas para el sorteo [bold cyan]#{proximo_id}[/].",
+                border_style="red"
+            ))
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+            return
 
-        config = PredictionConfigDTO(
-            TOTAL_BALLS, TICKET_SIZE, n_prod, filter_overrides=BEST_SETTINGS
-        )
-        print(f"   {Fore.YELLOW}⏳ Paso 1: Reduciendo Universo...{Style.RESET_ALL}")
+        # RESTAURACIÓN DE INPUT FUNCIONAL
+        try:
+            n_prod = int(input(f"\n   ¿Cuántos tickets generar para el sorteo #{proximo_id}? (20): ") or 20)
+        except:
+            n_prod = 20
+
+        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, n_prod, filter_overrides=BEST_SETTINGS)
+        
+        print(f"   {Fore.YELLOW}⏳ Paso 1: Filtrado Titanium...{Style.RESET_ALL}")
         univ_res = UniverseReductionStrategy().predict(self.history, config)
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
-        print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Mesh Genético...{Style.RESET_ALL}")
+        print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
         pred = GeneticSelectorStrategy().predict(self.history, config)
 
         if pred.tickets:
-            report.guardar_prediccion(pred.tickets)
+            report.guardar_prediccion(pred.tickets, proximo_id)
+            report.generar_ticket_limpio(pred.tickets, proximo_id)
             self.ui.show_prediction_results(pred)
-            print(f"\n{Fore.GREEN}🍀 ¡Predicción lista y guardada!{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.RED}❌ Error en generación.{Style.RESET_ALL}")
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+            print(f"\n{Fore.GREEN}🍀 Tickets bloqueados y listos en archivo .txt{Style.RESET_ALL}")
+        
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+    def _update_history(self):
+        print(f"\n{Fore.YELLOW}🌐 Sincronizando datos...{Style.RESET_ALL}")
+        if scraper.actualizar_csv():
+            print(f"{Fore.GREEN}✅ Historial actualizado.{Style.RESET_ALL}")
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+    def _validate_bets(self):
+        self.ui.clear_screen()
+        print(f"\n{Fore.CYAN}💰 LIQUIDACIÓN DE CARTERA (ROI REAL){Style.RESET_ALL}")
+        totales = report.liquidar_cartera(self.history)
+        if totales:
+            report.mostrar_resumen_roi(totales)
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+    def _run_forensic_plot(self):
+        print(f"\n{Fore.CYAN}📊 Generando visualización forense...{Style.RESET_ALL}")
+        run_forensic_visualization()
+        input(f"\n{Fore.YELLOW}>> Reporte generado. Presiona ENTER...{Style.RESET_ALL}")

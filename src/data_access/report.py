@@ -9,143 +9,150 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-# Importación de rutas y etiquetas desde la configuración global
-from src.data_access.config import FILE_APUESTAS, VERSION_TAG, MASTER_LOG_PATH
+from src.data_access.config import FILE_APUESTAS, VERSION_TAG
+from src.core.rules import MelateRetroRules
 
 console = Console()
 
-def guardar_prediccion(tickets):
+def tiene_apuestas_pendientes(concurso_id: int) -> bool:
     """
-    Guarda las combinaciones finales generadas en el archivo de apuestas.
+    Regla de Oro: Evita la sobre-escritura de apuestas aceptadas.
+    Verifica si el concurso ya tiene registros en el Ledger.
+    """
+    if not os.path.exists(FILE_APUESTAS):
+        return False
+    
+    try:
+        with open(FILE_APUESTAS, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("Concurso") == str(concurso_id):
+                    return True
+    except Exception:
+        return False
+    return False
+
+def guardar_prediccion(tickets, concurso_id: int):
+    """
+    Persiste las apuestas en el Ledger oficial con el ID del concurso.
     """
     os.makedirs(os.path.dirname(FILE_APUESTAS), exist_ok=True)
     file_exists = os.path.isfile(FILE_APUESTAS)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-        with open(FILE_APUESTAS, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(["Fecha", "Version", "T1", "T2", "T3", "T4", "T5", "T6"])
-            for t in tickets:
-                writer.writerow([timestamp, VERSION_TAG] + sorted(t))
-        console.print(f"\n[bold green]✅ ESTATUS:[/bold green] {len(tickets)} tickets guardados en {FILE_APUESTAS}")
-    except Exception as e:
-        console.print(f"[bold red]❌ ERROR al guardar tickets:[/bold red] {e}")
-
-def guardar_forensic_csv(forensic_data_list):
-    """
-    Persistencia V7.17: Guarda el log detallado incluyendo el tamaño del universo (univ_size).
-    """
-    os.makedirs(os.path.dirname(MASTER_LOG_PATH), exist_ok=True)
-    file_exists = os.path.isfile(MASTER_LOG_PATH)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     try:
-        with open(MASTER_LOG_PATH, mode="a", newline="") as f:
-            # Columnas alineadas para análisis de datos posterior
-            fieldnames = ['timestamp', 'tag', 'draw_id', 'hits', 'rank', 'proximity', 'ai_score', 'geo_score', 'univ_size']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            
+        with open(FILE_APUESTAS, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
             if not file_exists:
-                writer.writeheader()
+                # El header ahora incluye el Concurso y el Premio para la liquidación futura
+                writer.writerow(["Fecha", "Concurso", "Version", "T1", "T2", "T3", "T4", "T5", "T6", "Status", "Premio"])
             
-            for data in forensic_data_list:
-                # Aseguramos que los metadatos de sesión estén presentes
-                data_to_write = {
-                    'timestamp': timestamp,
-                    'tag': VERSION_TAG,
-                    'draw_id': data.get('draw_id'),
-                    'hits': data.get('hits'),
-                    'rank': data.get('rank'),
-                    'proximity': data.get('proximity'),
-                    'ai_score': data.get('ai_score'),
-                    'geo_score': data.get('geo_score'),
-                    'univ_size': data.get('univ_size')
-                }
-                writer.writerow(data_to_write)
+            for t in tickets:
+                # Inicializamos como 'Pendiente' con Premio 0.0
+                writer.writerow([timestamp, concurso_id, VERSION_TAG] + sorted(t) + ["Pendiente", 0.0])
+                
+        console.print(f"\n[bold green]✅ LEDGER ACTUALIZADO:[/bold green] {len(tickets)} tickets bloqueados para Sorteo #{concurso_id}")
     except Exception as e:
-        console.print(f"[bold red]❌ ERROR al guardar log forense:[/bold red] {e}")
+        console.print(f"[bold red]❌ ERROR CRÍTICO al acceder al Ledger:[/bold red] {e}")
 
-def render_forensic_line(d_id, hits, ai_val, geo_val, audit_data):
+def generar_ticket_limpio(tickets, concurso_id: int):
     """
-    LOG SNIPER V7.17: Telemetría meritocrática en consola.
-    Diferencia entre aciertos reales (Top 20) vs Fantasmas (Rank alto).
+    Genera el archivo minimalista para el punto de venta (UX de Producción).
     """
-    univ_size = audit_data.get('univ_size', 0)
-    rank = audit_data.get('rank', 99999)
-    prox = audit_data.get('proximity', 999)
+    path_txt = os.path.join(os.path.dirname(FILE_APUESTAS), f"tickets_sorteo_{concurso_id}.txt")
     
-    # --- DETERMINACIÓN DEL STATUS MERITOCRÁTICO ---
-    if prox == 0:
-        if rank <= 20:
-            status = Text("🎯 JACKPOT", style="bold green")
-        elif rank <= 100:
-            status = Text("🔥 TOP 100", style="bold yellow")
-        else:
-            status = Text("👻 GHOST", style="dim white") # Estaba en el pajar, pero muy hondo
-    else:
-        status = Text("❌ MISS", style="dim red")
+    try:
+        with open(path_txt, "w", encoding="utf-8") as f:
+            f.write(f"--- MRPRO V15: OMEGA STRIDE ---\n")
+            f.write(f"SORTEO: #{concurso_id}\n")
+            f.write(f"ESTRATEGIA: {VERSION_TAG}\n")
+            f.write("-" * 30 + "\n")
+            for i, t in enumerate(tickets, 1):
+                t_str = " ".join(f"{n:02d}" for n in sorted(t))
+                f.write(f"({i:02d})  {t_str}\n")
+            f.write("-" * 30 + "\n")
+            f.write(f"Total: {len(tickets)} tickets | Inversión: ${len(tickets)*10:.2f}\n")
+            f.write(f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+        
+        console.print(Panel(f"📋 [bold cyan]ARCHIVO DE COMPRA LISTO:[/]\n{path_txt}", border_style="cyan"))
+    except Exception as e:
+        console.print(f"[red]Error al generar TXT de salida: {e}[/red]")
 
-    # Colores dinámicos para hits y proximidad
-    potential_color = "bold green" if hits >= 4 else "bold yellow" if hits == 3 else "dim"
-    prox_color = "bold cyan" if prox == 0 else "bold magenta" if prox < 15 else "dim"
-
-    # Ensamblado de la línea (Respetando tu estética original)
-    line = Text.assemble(
-        (f"#{d_id:4d} ", "bold white"),
-        ("| ", "white"),
-        (f"U: {univ_size:7,d} ", "dim cyan"),
-        ("| ", "white"),
-        (f" {hits}/6 ", potential_color),
-        ("| ", "white"),
-        ("AI: ", "dim"),
-        (f"{ai_val:.4f} ", "yellow"),
-        ("| Geo: ", "dim"),
-        (f"{geo_val:.4f}", "yellow"),
-        (f" | Rank: #{rank:,}", "cyan"),
-        (f" | Dist: {prox:,} ", prox_color),
-        ("| ", "white"),
-        status,
-    )
-    console.print(line)
-
-def render_final_dashboard(size, invest, earn, funnel, dist):
+def liquidar_cartera(history):
     """
-    DASHBOARD V7.17: Resumen financiero y análisis de Jackpots capturados.
-    funnel: Diccionario con la distribución de mejores hits en el universo total.
-    dist: Diccionario con la distribución de hits en el Top 20 (compra real).
+    Motor Forense de Liquidación: Cruza el Ledger contra el Historial Real.
+    Calcula el ROI real basado en lo que realmente se jugó.
     """
-    balance = earn - invest
-    
-    # 1. Tabla de Hits Reales (Lo que cayó en el Top 20 de compra)
-    dist_table = Table(title="[bold cyan]🎯 DISTRIBUCIÓN DE HITS REALES (ZONA DE COMPRA)[/]", box=box.SIMPLE, expand=True)
-    dist_table.add_column("Categoría"), dist_table.add_column("Tickets", justify="right")
-    
-    for h in range(6, -1, -1):
-        count = dist.get(h, 0)
-        color = "green" if h >= 4 else "yellow" if h == 3 else "white"
-        dist_table.add_row(f"{h}/6 Aciertos", f"[{color}]{count}[/]")
+    if not os.path.exists(FILE_APUESTAS):
+        return None
 
-    # 2. Tabla de Potencial (Lo que los filtros lograron meter al pajar)
-    pot_table = Table(title="[bold yellow]🏆 RESUMEN DE POTENCIAL (JACKPOTS EN UNIVERSO)[/]", box=box.ROUNDED, expand=True)
-    pot_table.add_column("Premio", style="cyan")
-    pot_table.add_column("Detectados en Pajar", justify="right", style="bold white")
+    rules = MelateRetroRules()
     
-    for h in range(6, 1, -1):
-        count = funnel.get(h, 0)
-        color = "bold green" if h >= 4 else "yellow"
-        pot_table.add_row(f"{h}/6 Aciertos", f"[{color}]{count}[/]")
+    # Mapeo de resultados reales: {concurso_id: [n1, n2, n3, n4, n5, n6, ad]}
+    dict_resultados = {str(c): n for c, n in zip(history.concursos, history.winning_numbers)}
+    
+    rows_actualizadas = []
+    totales = {"inversion": 0.0, "ganancia": 0.0, "hits": 0, "concursos": set()}
 
-    # 3. Panel Financiero
-    summary_text = Text.assemble(
-        ("\n💰 BALANCE DE MISIÓN\n", "bold white"),
-        (f"Sorteos Testeados: {size}\n", "dim"),
-        (f"Inversión Total:  ${invest:,.2f}\n", "white"),
-        (f"Ganancia Total:   ${earn:,.2f}\n", "green" if earn > invest else "white"),
-        (f"Resultado Neto:   ${balance:,.2f}\n", "bold green" if balance >= 0 else "bold red")
-    )
+    try:
+        with open(FILE_APUESTAS, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                c_id = row["Concurso"]
+                totales["inversion"] += rules.ticket_cost
+                totales["concursos"].add(c_id)
 
-    console.print(Panel(summary_text, box=box.DOUBLE, title="[bold white]MRPRO V7.17 - DASHBOARD FINAL[/]"))
-    console.print(dist_table)
-    console.print(pot_table)
+                if c_id in dict_resultados:
+                    # Extraer ticket del CSV
+                    ticket = [int(row[f"T{i}"]) for i in range(1, 7)]
+                    target = dict_resultados[c_id]
+                    
+                    # Validar contra reglas oficiales
+                    h_n, h_a = rules.validate_ticket(ticket, target)
+                    premio = rules.calculate_prize(h_n, h_a)
+                    
+                    row["Status"] = "Validado" if h_n < 3 else "🏆 GANADOR"
+                    row["Premio"] = premio
+                    totales["ganancia"] += premio
+                    if premio > 0: totales["hits"] += 1
+                
+                rows_actualizadas.append(row)
+
+        # Actualizamos el Ledger con los resultados validados
+        with open(FILE_APUESTAS, mode="w", newline="", encoding="utf-8") as f:
+            if rows_actualizadas:
+                writer = csv.DictWriter(f, fieldnames=rows_actualizadas[0].keys())
+                writer.writeheader()
+                writer.writerows(rows_actualizadas)
+        
+        return totales
+
+    except Exception as e:
+        console.print(f"[red]Error en la liquidación de cartera: {e}[/red]")
+        return None
+
+def mostrar_resumen_roi(totales):
+    """
+    UI Dashboard para el CLI.
+    """
+    if not totales:
+        console.print("[yellow]No hay apuestas registradas para liquidar.[/]")
+        return
+
+    neto = totales["ganancia"] - totales["inversion"]
+    roi = (neto / totales["inversion"]) * 100 if totales["inversion"] > 0 else 0
+    color_roi = "green" if neto >= 0 else "red"
+
+    table = Table(title="📊 DASHBOARD DE RENDIMIENTO REAL (MRPRO)", box=box.DOUBLE_EDGE)
+    table.add_column("Métrica", style="cyan")
+    table.add_column("Valor", justify="right")
+
+    table.add_row("Sorteos Participados", str(len(totales["concursos"])))
+    table.add_row("Tickets Comprados", str(int(totales["inversion"]/10)))
+    table.add_row("Inversión Total", f"${totales['inversion']:,.2f}")
+    table.add_row("Ganancia Bruta", f"${totales['ganancia']:,.2f}")
+    table.add_row("Balance Neto", f"[{color_roi}]${neto:,.2f}[/]")
+    table.add_row("ROI Real", f"[{color_roi}]{roi:.2f}%[/]")
+    table.add_row("Tickets Premiados", f"[bold yellow]{totales['hits']}[/]")
+
+    console.print(table)
