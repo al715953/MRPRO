@@ -48,43 +48,78 @@ class StrategyOptimizer:
         )
         sys.stdout.flush()
 
-    def optimize_voter_weights(self, history: DrawHistoryDTO, n_draws: int = 500):
-        """
-        Optimizador de Pesos E1-Sniper V15.
-        Busca el equilibrio perfecto entre Gap, Terminal y Frecuencia.
-        """
-        print(f"\n{CYAN}⚖️  CALIBRANDO PESOS DE VOTANTES (Protocolo Sniper E1){RESET}")
-        start_time = time.time()
+    # Ubicación: src/core/optimizer.py
 
-        # Generamos rejilla de pesos (G + T + F = 1.0)
+    def optimize_voter_weights(self, history: DrawHistoryDTO, n_draws: int = 200):
+        print(f"\n{CYAN}⚖️  CALIBRANDO PESOS DE VOTANTES (Protocolo Sniper E1){RESET}")
+        global_start = time.time()
+
+        # 1. Generar Rejilla (G + T + F = 1.0)
         resolution = 0.05
         weights_grid = []
-        for g in np.arange(0, 1.01, resolution):
-            for t in np.arange(0, 1.01 - g, resolution):
+        for g in np.arange(0.1, 0.8, resolution):
+            for t in np.arange(0.05, 0.5, resolution):
                 f = 1.0 - g - t
-                weights_grid.append((round(g, 2), round(t, 2), round(f, 2)))
+                if f > 0.1:
+                    weights_grid.append((round(g, 2), round(t, 2), round(f, 2)))
 
         total_comb = len(weights_grid)
-        best_score = -1
-        best_weights = (0.25, 0.10, 0.60)  # Default de filters.py
+        best_score = -float("inf")
+        best_weights = (0.25, 0.10, 0.60)
 
-        # Preparamos datos históricos para testeo rápido
-        draws = history.winning_numbers[-n_draws:]
+        # 2. Preparar sub-historiales para backtesting rápido
+        # Probamos los últimos 'n_draws' sorteos
+        total_available = len(history.winning_numbers)
+        start_idx = max(50, total_available - n_draws)
 
-        for i, (wg, wt, wf) in enumerate(weights_grid):
-            # Simulamos el Sniper con estos pesos
-            # (Aquí iría la lógica vectorial de exclusión del Sniper E1)
-            # El objetivo es maximizar exclusiones sin 'matar' sorteos ganadores
+        for i, w_tuple in enumerate(weights_grid):
+            errors = 0
+            success_exclusions = 0
 
-            # NOTA: Usamos una puntuación de eficiencia: Exclusiones_Correctas / Fallos
-            # Para esta corrida de escritorio, simulamos el progreso:
-            if i % 50 == 0:
-                self._print_progress(i, total_comb, 0, 0, start_time, label="Weights")
+            for idx in range(start_idx, total_available):
+                # Creamos un "falso presente" para el Sniper
+                past_history = DrawHistoryDTO(
+                    dates=history.dates[:idx],
+                    winning_numbers=history.winning_numbers[:idx],
+                    concursos=history.concursos[:idx],
+                )
+                real_winner = set(history.winning_numbers[idx][:6])
 
-        # Supongamos que encontramos una mejora sobre el 0.25, 0.10, 0.60 actual
-        # Estos valores se extraen de la mejor combinación encontrada en la rejilla
+                # Ejecutamos Sniper con los pesos de la iteración actual
+                excluded, _ = self.reducer.filters.get_sniper_exclusion(
+                    past_history, weights=w_tuple
+                )
+
+                if excluded:
+                    if excluded[0] in real_winner:
+                        errors += 1  # ¡Fatal! Excluimos un número que iba a ganar
+                    else:
+                        success_exclusions += 1
+
+            # Puntuación: Queremos muchas exclusiones pero PENALIZAMOS fuerte los errores
+            # Un error (matar el Jackpot) resta mucho más que un acierto
+            current_score = success_exclusions - (errors * 50)
+
+            if current_score > best_score:
+                best_score = current_score
+                best_weights = w_tuple
+
+            if i % 10 == 0 or i == total_comb - 1:
+                self._print_progress(
+                    i, total_comb, 0, errors, global_start, label="Weights"
+                )
+
         print(f"\n\n{GREEN}✅ OPTIMIZACIÓN DE PESOS FINALIZADA{RESET}")
-        return {"w_gap": 0.30, "w_term": 0.15, "w_freq": 0.55}  # Ejemplo de retorno
+        print(
+            f"{WHITE}Copia estos valores en 'BEST_SETTINGS' dentro de config.py:{RESET}"
+        )
+
+        return {
+            "w_gap": best_weights[0],
+            "w_term": best_weights[1],
+            "w_freq": best_weights[2],
+            "score": best_score,
+        }
 
     def optimize_filters(
         self,

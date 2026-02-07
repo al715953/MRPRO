@@ -90,6 +90,11 @@ BEST_SETTINGS = {
         "2-1-1-2",
         "1-2-1-2",
     ],
+    # 4. Pesos del Protocolo Sniper E1 (NUEVO)
+    "w_gap": 0.25,
+    "w_term": 0.10,
+    "w_freq": 0.60,
+    "sniper_threshold": 0.85,
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     # ESTRUCTURA CRÍTICA: Cada experto requiere su propio objetivo de entrenamiento
     "ensemble_config": {
