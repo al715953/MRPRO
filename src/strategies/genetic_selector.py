@@ -6,37 +6,40 @@ from src.strategies.genetic.resonance import ResonanceEngine
 from src.data_access.config import GPU_ENABLED
 
 # Sincronización de hardware
-HAS_CUPY = GPU_ENABLED
-if HAS_CUPY:
-    try:
-        import cupy as cp
-    except ImportError:
-        HAS_CUPY = False
+try:
+    import cupy as cp
+
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
+
 
 class GeneticSelectorStrategy:
     """
     Estrategia V15: OMEGA STRIDE (Cobertura Extendida Determinista).
-    
+
     Diagnóstico:
     El premio cae consistentemente en Top 30 (ej. Rank #27).
     Con 20 tickets fijos (1-20) perdemos el #27.
     Con aleatoriedad (V14) perdemos el #27 por mala suerte.
-    
+
     Solución:
     Expandimos el radio de acción a 30 usando "Stride" (Pasos).
-    Seleccionamos tickets estratégicamente espaciados en el Top 30 
+    Seleccionamos tickets estratégicamente espaciados en el Top 30
     para maximizar la probabilidad de captura por "vecindad".
-    
+
     Patrón de Selección (20 Tickets):
     - Top 10: FIJOS (1, 2, 3... 10). Asegura premios obvios.
     - Next 10: STRIDE 2 (12, 14, 16... 30). Cubre hasta el Rank 30.
     """
+
     def __init__(self):
         self.resonance_engine = ResonanceEngine()
 
     def apply_omega_stride(self, u_pool, scores_pool, n_tickets, xp):
-        if len(u_pool) == 0: return []
-        
+        if len(u_pool) == 0:
+            return []
+
         # Transferencia a CPU
         if hasattr(u_pool, "get"):
             pool_cpu = u_pool.get()
@@ -44,17 +47,17 @@ class GeneticSelectorStrategy:
         else:
             pool_cpu = u_pool
             scores_cpu = scores_pool
-            
+
         n_candidates = len(pool_cpu)
         if n_candidates <= n_tickets:
             return pool_cpu.tolist()
 
         final_selection = []
         selected_indices = set()
-        
+
         # Ordenamos por score descendente (El Ranking es sagrado)
         sorted_indices = np.argsort(scores_cpu)[::-1]
-        
+
         # FASE 1: NUCLEO DURO (Top 10)
         # Nadie perdona al Rank 1, 2, 3...
         n_core = 10
@@ -62,25 +65,25 @@ class GeneticSelectorStrategy:
             idx = sorted_indices[i]
             final_selection.append(pool_cpu[idx].tolist())
             selected_indices.add(idx)
-            
+
         # FASE 2: EXTENSIÓN (Stride 2 hasta llenar)
         # Saltamos de 2 en 2 para llegar más lejos (hasta Rank 30 aprox)
-        current_rank_ptr = n_core # Empezamos en el 10 (que es el 11vo)
-        
+        current_rank_ptr = n_core  # Empezamos en el 10 (que es el 11vo)
+
         while len(final_selection) < n_tickets and current_rank_ptr < n_candidates:
             # Tomamos el siguiente disponible
             idx = sorted_indices[current_rank_ptr]
-            
+
             if idx not in selected_indices:
                 final_selection.append(pool_cpu[idx].tolist())
                 selected_indices.add(idx)
-            
+
             # SALTO ESTRATÉGICO
             # Saltamos 1 candidato (Stride 2).
             # Si jugamos el 11, saltamos el 12, jugamos el 13.
             # Esto nos permite cubrir hasta el Rank 30 con los 10 tickets restantes.
-            current_rank_ptr += 2 
-            
+            current_rank_ptr += 2
+
         return final_selection
 
     def predict(self, history, config) -> PredictionResultDTO:
@@ -88,7 +91,13 @@ class GeneticSelectorStrategy:
         if univ is None or len(univ) == 0:
             return PredictionResultDTO("Empty_Input", [])
 
-        xp = cp if (HAS_CUPY and hasattr(univ, "get")) else np
+        if HAS_CUPY:
+            xp = cp.get_array_module(univ)
+        else:
+            xp = np
+
+        #        xp = cp if (HAS_CUPY and hasattr(univ, "get")) else np
+        # Aseguramos que univ sea del tipo correcto para el backend detectado
         u_xp = xp.asarray(univ)
 
         # 1. RESONANCIA (Motor V11)
@@ -98,21 +107,26 @@ class GeneticSelectorStrategy:
 
         # 2. SELECCIÓN V15 (Omega Stride)
         final_tickets = self.apply_omega_stride(
-            res["u_reduced"], 
-            res["final_scores_reduced"], 
-            config.num_tickets, 
-            xp
+            res["u_reduced"], res["final_scores_reduced"], config.num_tickets, xp
         )
 
         # 3. TELEMETRÍA
         u_cpu = univ.get() if hasattr(univ, "get") else univ
-        scores_cpu = res["final_scores_reduced"].get() if hasattr(res["final_scores_reduced"], "get") else res["final_scores_reduced"]
-        idx_cpu = res["radar_indices"].get() if hasattr(res["radar_indices"], "get") else res["radar_indices"]
-        
+        scores_cpu = (
+            res["final_scores_reduced"].get()
+            if hasattr(res["final_scores_reduced"], "get")
+            else res["final_scores_reduced"]
+        )
+        idx_cpu = (
+            res["radar_indices"].get()
+            if hasattr(res["radar_indices"], "get")
+            else res["radar_indices"]
+        )
+
         full_hybrid_map = np.zeros(u_cpu.shape[0], dtype=np.float32)
         full_hybrid_map[idx_cpu] = scores_cpu
         sorted_global_scores = np.sort(full_hybrid_map)[::-1]
-        
+
         selected_ranks = []
         for ticket in final_tickets:
             ticket_arr = np.array(ticket)
@@ -123,7 +137,7 @@ class GeneticSelectorStrategy:
                 t_rank = np.searchsorted(-sorted_global_scores, -t_score) + 1
                 selected_ranks.append(int(t_rank))
             else:
-                selected_ranks.append(-1) 
+                selected_ranks.append(-1)
 
         ai_raw = res.get("ai_norm")
         geo_raw = res.get("geo_scores")
@@ -132,12 +146,12 @@ class GeneticSelectorStrategy:
             strategy_name="MRPRO V15 (Omega Stride)",
             tickets=final_tickets,
             metadata={
-                "universe": u_cpu, 
+                "universe": u_cpu,
                 "selected_ranks": selected_ranks,
                 "radar_indices": idx_cpu,
                 "ai_scores": ai_raw.get() if hasattr(ai_raw, "get") else ai_raw,
                 "geo_scores": geo_raw.get() if hasattr(geo_raw, "get") else geo_raw,
                 "hybrid_scores": full_hybrid_map,
-                "tickets": final_tickets 
+                "tickets": final_tickets,
             },
         )

@@ -29,7 +29,18 @@ URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQ
 
 # --- CONFIGURACIÓN DE HARDWARE (UHPC) ---
 # Forzar uso de núcleos CUDA en RTX 4070 Ti
+
 GPU_ENABLED = False
+try:
+    import cupy as cp
+
+    # Intentamos una operación pequeña para confirmar que CUDA es funcional
+    cp.zeros(1)
+    GPU_ENABLED = True
+except Exception:
+    GPU_ENABLED = False
+
+
 NUM_SIMULACIONES = 250000
 
 
