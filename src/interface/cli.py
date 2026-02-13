@@ -11,6 +11,7 @@ from rich import box
 
 from src.domain.dtos import PredictionResultDTO, DrawHistoryDTO
 from src.data_access.config import VERSION_TAG
+from src.core.health import get_model_status
 
 console = Console()
 
@@ -61,7 +62,10 @@ class ConsoleUI:
         )
 
     def show_main_menu(self) -> str:
-        """Menú de Dos Columnas con todas las misiones restauradas."""
+
+        dias, color = get_model_status()
+        status_brain = f"[{color}]({dias})[/]"
+
         menu_table = Table(box=None, show_header=False, padding=(0, 2))
         menu_table.add_column("ID", style="bold cyan", width=4)
         menu_table.add_column("Acción", style="white")
@@ -72,10 +76,13 @@ class ConsoleUI:
         menu_table.add_row(
             "[dim]--[/]", "[dim]INTELIGENCIA[/]", "[dim]--[/]", "[dim]DATA PREP[/]"
         )
-        menu_table.add_row("1", "Ver Historial", "5", "Generar Universo (Fase 1)")
-        menu_table.add_row("2", "Análisis Frecuencia", "8", "Sincronizar Scraper")
-        # menu_table.add_row("3", "Simulación Monte Carlo", "P", "Reporte Plot (Forense)")
-        menu_table.add_row("4", "Optimizador (Lab)", "", "")
+
+        menu_table.add_row(
+            "1", "Ver Historial", "4", f"Reentrenar Cerebro {status_brain}"
+        )
+        menu_table.add_row("2", "Análisis Frecuencia", "5", "Sincronizar Scraper")
+        menu_table.add_row("3", "Optimizador (Lab)", "", "")
+        menu_table.add_row("P", "Reporte Plot (Forense)", "", "")
 
         # Capa 2: Operaciones
         menu_table.add_row("", "", "", "")
@@ -87,7 +94,7 @@ class ConsoleUI:
         )
         menu_table.add_row("6", "Lab Backtest (Simulación)", "0", "Finalizar Sesión")
         menu_table.add_row("7", "[bold green]EJECUTAR OMEGA STRIDE[/]", "", "")
-        menu_table.add_row("9", "[bold yellow]LIQUIDAR CARTERA & ROI[/]", "", "")
+        menu_table.add_row("8", "[bold yellow]LIQUIDAR CARTERA & ROI[/]", "", "")
 
         self.console.print(menu_table)
         return self.console.input(f"\n[bold cyan]MRPRO[/] > ")

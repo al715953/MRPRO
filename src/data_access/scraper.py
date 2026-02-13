@@ -1,38 +1,71 @@
-import requests
+# src/data_access/scraper.py
 import os
-import urllib3
-import time
-from datetime import datetime
-from src.data_access.config import URL_MELATE
+import requests
+import pandas as pd
+import io
+import warnings
+from urllib3.exceptions import InsecureRequestWarning
+from rich.console import Console
+from src.data_access.config import URL_MELATE, CSV_FILE_PATH
 
-# Desactivar advertencias de SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Desactivar advertencias de seguridad al usar verify=False para mantener el log profesional
+warnings.simplefilter("ignore", InsecureRequestWarning)
+console = Console()
 
 
-def descargar_datos(filepath):
-    """
-    Descarga el CSV oficial y devuelve un estado y un mensaje descriptivo.
-    Retorna: (bool, str) -> (Éxito/Fallo, Mensaje para el usuario)
-    """
+def actualizar_csv():
+    """EntryPoint V15: Sincronización de datos con bypass de SSL."""
+    console.print(f"\n[bold blue]📡 INICIANDO RECOLECCIÓN DE INTELIGENCIA[/bold blue]")
 
-    # 1. Verificar si el archivo ya existe y fue modificado hoy
-    if os.path.exists(filepath):
-        timestamp = os.path.getmtime(filepath)
-        fecha_archivo = datetime.fromtimestamp(timestamp).date()
-        fecha_hoy = datetime.today().date()
-
-        if fecha_archivo == fecha_hoy:
-            return False, "⚡ Archivo local actualizado hoy. Descarga Omitida."
-
-    print("📡 Conectando con servidor de Lotería Nacional...")
     try:
-        response = requests.get(URL_MELATE, timeout=20, stream=True, verify=False)
-        response.raise_for_status()
+        raw_content = _download_historical_data()
+        if not raw_content:
+            console.print(
+                "[bold red]❌ ERROR: No se recibió contenido del servidor.[/bold red]"
+            )
+            return False
 
-        with open(filepath, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True, "✅ Base de datos actualizada exitosamente."
+        # Usamos io.StringIO para mayor compatibilidad con versiones modernas de pandas
+        df = pd.read_csv(io.StringIO(raw_content))
+
+        if df.empty:
+            console.print(
+                "[bold yellow]⚠️ ADVERTENCIA: El historial descargado está vacío.[/bold yellow]"
+            )
+            return False
+
+        # Persistencia en la ruta configurada
+        os.makedirs(os.path.dirname(CSV_FILE_PATH), exist_ok=True)
+        df.to_csv(CSV_FILE_PATH, index=False, encoding="utf-8")
+
+        console.print(
+            f"[bold green]✅ DATOS SINCRONIZADOS:[/bold green] {len(df)} sorteos listos."
+        )
+        return True
+
     except Exception as e:
-        print(f"⚠️ No se pudo descargar (Usando versión Offline si existe): {e}")
-        return False, f"Error crítico: No existe base local y falló la descarga: {e}"
+        console.print(f"[bold red]⚠️ FALLO CRÍTICO EN SCRAPER:[/bold red] {str(e)}")
+        return False
+
+
+def _download_historical_data():
+    """Descarga con reintento automático y bypass de certificado."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    try:
+        # Intento 1: Con verificación (Seguridad estándar)
+        response = requests.get(URL_MELATE, headers=headers, timeout=15, verify=True)
+        response.raise_for_status()
+        return response.text
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+        # Intento 2: Bypass de SSL (Misión Crítica: Los datos son prioridad)
+        console.print(
+            "[bold yellow]⚠️ Alerta de SSL detectada. Activando protocolo de bypass...[/bold yellow]"
+        )
+        response = requests.get(URL_MELATE, headers=headers, timeout=15, verify=False)
+        if response.status_code == 200:
+            return response.text
+
+    return None

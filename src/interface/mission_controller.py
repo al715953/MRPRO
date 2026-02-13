@@ -2,6 +2,7 @@
 
 import src.data_access.report as report
 import src.data_access.scraper as scraper
+import subprocess
 from colorama import Fore, Style
 from rich.panel import Panel
 from src.domain.dtos import PredictionConfigDTO
@@ -26,17 +27,17 @@ class MissionController:
         elif option == "2":
             self._analyze_frequency()
 
-        elif option == "4":
+        elif option == "3":
             self._run_optimizer()
+        elif option == "4":
+            self._retrain_model()
         elif option == "5":
-            self._generate_universe()
+            self._update_history()
         elif option == "6":
             self._run_backtest_lab()
         elif option == "7":
             self._run_production()
         elif option == "8":
-            self._update_history()
-        elif option == "9":
             self._validate_bets()
         elif option == "P":
             self._run_forensic_plot()
@@ -187,3 +188,29 @@ class MissionController:
         print(f"\n{Fore.CYAN}📊 Generando visualización forense...{Style.RESET_ALL}")
         run_forensic_visualization()
         input(f"\n{Fore.YELLOW}>> Reporte generado. Presiona ENTER...{Style.RESET_ALL}")
+
+    def _retrain_model(self):
+        """Módulo de Calibración de Neuronas V15."""
+        self.ui.clear_screen()
+        # Corregido: Fore para color, Style para efectos (DIM)
+        print(
+            f"\n{Fore.MAGENTA}☢️  PROTOCOLO DE RECALIBRACIÓN CEREBRAL V8{Style.RESET_ALL}"
+        )
+        print(
+            f"{Style.DIM}Iniciando XGBoost Engine sobre hardware detectado...{Style.RESET_ALL}\n"
+        )
+
+        try:
+            # Ejecutamos el script de entrenamiento como proceso independiente
+            import subprocess
+
+            subprocess.run(["python", "src/core/train_static_model.py"], check=True)
+            print(
+                f"\n{Fore.GREEN}✅ MODELO ACTUALIZADO: Los pesos han sido sincronizados.{Style.RESET_ALL}"
+            )
+        except Exception as e:
+            print(
+                f"\n{Fore.RED}❌ ERROR CRÍTICO EN ENTRENAMIENTO: {e}{Style.RESET_ALL}"
+            )
+
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
