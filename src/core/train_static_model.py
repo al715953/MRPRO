@@ -3,12 +3,13 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 import os
-from src.data_access.config import MODEL_FILE_PATH
+from src.data_access.config import MODEL_FILE_PATH, CSV_FILE_PATH
 
 # Rutas Relativas (Asumiendo ejecución desde la raíz del proyecto)
 # El script se ejecuta como módulo o desde raíz, pero ajustamos para robustez.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_FILE = os.path.join(BASE_DIR, "src", "data", "Melate-Retro.csv")
+# DATA_FILE = os.path.join(BASE_DIR, "src", "data", "Melate-Retro.csv")
+DATA_FILE = CSV_FILE_PATH
 MODEL_OUTPUT = MODEL_FILE_PATH
 TOTAL_BALLS = 39
 
@@ -20,7 +21,8 @@ def train_master_brain():
     if not os.path.exists(DATA_FILE):
         print(f"❌ Error: No encuentro el archivo de datos.")
         # Intento de fallback
-        fallback = "Melate-Retro.csv"
+        #       fallback = "Melate-Retro.csv"
+        fallback = os.path.join(BASE_DIR, "Melate-Retro.csv")
         if os.path.exists(fallback):
             print(f"   ⚠️ Encontrado en raíz, usándolo.")
             df = pd.read_csv(fallback)

@@ -27,7 +27,7 @@ def initialize_data_layer(ui):
     # Intento de carga inicial
     try:
         history = loader.load_data()
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError):
         ui.console.print(
             "[yellow]⚠️ Base de datos no encontrada. Iniciando descarga...[/]"
         )
@@ -59,7 +59,7 @@ def initialize_data_layer(ui):
             )
             if scraper.actualizar_csv():
                 history = loader.load_data()
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         ui.console.print(
             f"[dim red]Aviso: No se pudo verificar caducidad de datos ({e})[/]"
         )

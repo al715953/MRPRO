@@ -31,6 +31,13 @@ class StrategyOptimizer:
         self.reducer = UniverseReductionStrategy()
         self.xp = self.reducer.xp
 
+    @staticmethod
+    def _extract_universe(reduction_result):
+        """Normaliza la salida de reduce() para soportar ndarray o tupla (universe, meta)."""
+        if isinstance(reduction_result, tuple):
+            return reduction_result[0]
+        return reduction_result
+
     def _print_progress(
         self, current, total, hits_5_6, hits_4_6, start_time, label="Iter", u_size=0
     ):
@@ -177,7 +184,9 @@ class StrategyOptimizer:
                 filter_overrides=params,
             )
 
-            universe = self.reducer.reduce(history, config_dto, verbose=False)
+            universe = self._extract_universe(
+                self.reducer.reduce(history, config_dto, verbose=False)
+            )
             u_size = len(universe)
 
             if u_size > 120000 or u_size < 15000:
@@ -238,8 +247,11 @@ class StrategyOptimizer:
             # El log ya viene con colores, lo imprimimos directamente
             print(f" 🎯 {log}")
         print("=" * 80)
+        hits_5_6_found = best_params.get("hits_5_6_found", 0)
+        u_size_avg = best_params.get("u_size_avg", 0)
         print(
-            f"📊 Resumen Sniper: {best_params['hits_5_6_found']}/{draws_to_test} aciertos 5/6 en {best_params['u_size_avg']:,} tickets."
+            # f"📊 Resumen Sniper: {best_params['hits_5_6_found']}/{draws_to_test} aciertos 5/6 en {best_params['u_size_avg']:,} tickets."
+            f"📊 Resumen Sniper: {hits_5_6_found}/{draws_to_test} aciertos 5/6 en {u_size_avg:,} tickets."
         )
 
         return best_params

@@ -5,10 +5,13 @@ import pandas as pd
 import io
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
+from requests.adapters import HTTPAdapter
 from rich.console import Console
+from urllib3.exceptions import InsecureRequestWarning
+from urllib3.util.retry import Retry
 from src.data_access.config import URL_MELATE, CSV_FILE_PATH
 
-# Desactivar advertencias de seguridad al usar verify=False para mantener el log profesional
+# Solo suprimimos warning cuando el bypass está explícitamente habilitado.al
 warnings.simplefilter("ignore", InsecureRequestWarning)
 console = Console()
 
