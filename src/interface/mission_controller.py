@@ -91,8 +91,7 @@ class MissionController:
             f"\n{Fore.MAGENTA}🧪 LABORATORIO DE PRUEBAS (V15 OMEGA STRIDE){Style.RESET_ALL}"
         )
         print("1. Sniper Mode (Solo Reducción)")
-        print("2. Hybrid Mode (Resonancia + Genético)")
-        print("3. Full Omega Stride (Producción Sim)")
+        print("2. Full Omega Stride (Producción Sim)")
 
         sub_op = input(f"\n{Fore.CYAN}Selecciona modo: {Style.RESET_ALL}")
 
@@ -112,7 +111,7 @@ class MissionController:
 
         if sub_op == "1":
             engine.run(UniverseReductionStrategy(), self.history, config)
-        elif sub_op in ["2", "3"]:
+        elif sub_op == "2":
             engine.run(
                 GeneticSelectorStrategy(),
                 self.history,

@@ -88,7 +88,7 @@ class ConsoleUI:
         menu_table.add_row("", "", "", "")
         menu_table.add_row(
             "[dim]--[/]",
-            "[bold green]OPERACIONES V15[/]",
+            "[bold green]OPERACIONES [/]",
             "[dim]--[/]",
             "[dim]SISTEMA[/]",
         )
