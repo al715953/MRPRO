@@ -31,8 +31,10 @@ def initialize_data_layer(ui):
         ui.console.print(
             "[yellow]⚠️ Base de datos no encontrada. Iniciando descarga...[/]"
         )
-        scraper.descargar_datos(CSV_FILE_PATH)
-        history = loader.load_data()
+        if scraper.actualizar_csv():
+            history = loader.load_data()
+        else:
+            return None
 
     if not history or not history.dates:
         return None
@@ -115,7 +117,7 @@ def main():
             controller.run_mission(opcion)
 
             # UX: Si hubo sincronización o liquidación, refrescamos la memoria del sistema
-            if opcion.upper() in ["8", "9"]:
+            if opcion.upper() in ["5", "8"]:
                 history = loader.load_data()
                 controller.history = history
 

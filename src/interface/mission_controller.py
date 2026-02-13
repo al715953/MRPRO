@@ -80,8 +80,9 @@ class MissionController:
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _generate_universe(self):
-        tester = CoverageTester(self.history)
-        tester.test_reduction()
+        tester = CoverageTester()
+        config = PredictionConfigDTO(TOTAL_BALLS, TICKET_SIZE, num_tickets=20)
+        tester.run(UniverseReductionStrategy(), self.history, config)
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _run_backtest_lab(self):

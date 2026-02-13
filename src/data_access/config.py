@@ -17,6 +17,7 @@ if not os.path.exists(DATA_FOLDER):
 CSV_FILE_PATH = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
 FILE_APUESTAS = os.path.join(DATA_FOLDER, "Mis_Apuestas.csv")
 MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
+MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos

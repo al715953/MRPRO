@@ -1,7 +1,9 @@
 # src/core/health.py
 import os
 from datetime import datetime
-from src.data_access.config import DATA_FOLDER
+
+# from src.data_access.config import DATA_FOLDER
+from src.data_access.config import MODEL_FILE_PATH
 
 
 def get_model_status():
@@ -9,8 +11,8 @@ def get_model_status():
     Calcula la antigüedad del modelo basándose en la carpeta de datos centralizada.
     """
     # Usamos la ruta oficial definida en config.py
-    model_path = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
-
+    #    model_path = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
+    model_path = MODEL_FILE_PATH
     # Diagnóstico de ruta (Opcional: puedes descomentar la siguiente línea para ver dónde busca)
     # print(f"DEBUG: Buscando modelo en {model_path}")
 
