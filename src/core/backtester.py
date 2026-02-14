@@ -41,6 +41,12 @@ class BacktestEngine:
     ):
         total_inv, total_earn, coverage_6 = 0.0, 0.0, 0
         hits_dist = {i: 0 for i in range(7)}
+        reduced_sizes = []
+        max_hits_by_draw = {4: 0, 5: 0, 6: 0}
+        is_reduction_only = (
+            pre_process_strategy is None
+            and strategy.__class__.__name__ == "UniverseReductionStrategy"
+        )
 
         full_h = sorted(
             zip(history.dates, history.winning_numbers, history.concursos),
@@ -60,7 +66,7 @@ class BacktestEngine:
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=self.console,
-            disable=not verbose,
+            disable=(not verbose) or is_reduction_only,
         ) as progress:
             task = progress.add_task("Misión", total=test_size)
 
@@ -93,14 +99,26 @@ class BacktestEngine:
                             coverage_6 += 1
 
                 # --- FASE 2: ESTRATEGIA ---
-                prediction = strategy.predict(curr_h, config)
+                if is_reduction_only:
+                    prediction = strategy.predict(curr_h, config, verbose=False)
+                else:
+                    prediction = strategy.predict(curr_h, config)
                 snapshot = prediction.metadata
+                if is_reduction_only:
+                    reduced_sizes.append(
+                        int(snapshot.get("final_size", len(prediction.tickets)))
+                    )
 
                 # Auditoría Forense
-                xp_audit = (
-                    cp if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get")) else np
-                )
-                audit = LotteryForensics.audit_winner(snapshot, target, xp_audit)
+                if is_reduction_only:
+                    audit = None
+                else:
+                    xp_audit = (
+                        cp
+                        if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
+                        else np
+                    )
+                    audit = LotteryForensics.audit_winner(snapshot, target, xp_audit)
 
                 if audit:
                     audit["draw_id"] = int(t_id)
@@ -118,13 +136,31 @@ class BacktestEngine:
                     self.forensic_data.append(audit)
 
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
+                max_hit_this_draw = 0
+                high_hits_this_draw = {4: 0, 5: 0, 6: 0}
                 for tkt in prediction.tickets:
                     total_inv += self.rules.ticket_cost
                     h_n, h_a = self.rules.validate_ticket(tkt, target)
                     total_earn += self.rules.calculate_prize(h_n, h_a)
                     hits_dist[h_n] += 1
+                    if h_n > max_hit_this_draw:
+                        max_hit_this_draw = h_n
+                    if h_n in high_hits_this_draw:
+                        high_hits_this_draw[h_n] += 1
 
-                if verbose and audit:
+                if is_reduction_only and max_hit_this_draw in max_hits_by_draw:
+                    max_hits_by_draw[max_hit_this_draw] += 1
+
+                if verbose and is_reduction_only:
+                    self._render_reduction_telemetry(
+                        t_id=t_id,
+                        univ_size=reduced_sizes[-1] if reduced_sizes else 0,
+                        max_hit=max_hit_this_draw,
+                        high_hits=high_hits_this_draw,
+                        elapsed=time.time() - t_start,
+                    )
+
+                if verbose and audit and not is_reduction_only:
                     self._render_telemetry(audit, t_id, t_start, sniper_msg)
 
                 if HAS_CUPY:
@@ -141,7 +177,10 @@ class BacktestEngine:
             total_earn - total_inv,
             hits_dist,
         )
-        self._print_final_report(res, coverage_6)
+        if is_reduction_only:
+            self._print_reduction_summary(res, reduced_sizes, max_hits_by_draw)
+        else:
+            self._print_final_report(res, coverage_6)
         self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
         return res
 
@@ -198,3 +237,30 @@ class BacktestEngine:
             style = "bold yellow" if h >= 4 else "white"
             dist_table.add_row(f"{h}/6 aciertos", f"[{style}]{count}[/]")
         self.console.print(dist_table)
+
+    def _print_reduction_summary(self, res, reduced_sizes, max_hits_by_draw):
+        final_universe = int(reduced_sizes[-1]) if reduced_sizes else 0
+        hits_4 = int(max_hits_by_draw.get(4, 0))
+        hits_5 = int(max_hits_by_draw.get(5, 0))
+        hits_6 = int(max_hits_by_draw.get(6, 0))
+
+        self.console.print("\n[bold green]📊 RESUMEN REDUCCIÓN DE UNIVERSO[/bold green]")
+        summary = Table(show_header=True, header_style="bold magenta")
+        summary.add_column("Métrica", style="dim", width=30)
+        summary.add_column("Valor", justify="right", width=15)
+        summary.add_row("Universo final reducido", f"[bold cyan]{final_universe:,}[/]")
+        summary.add_row("Hits 4/6", f"[bold yellow]{hits_4}[/]")
+        summary.add_row("Hits 5/6", f"[bold yellow]{hits_5}[/]")
+        summary.add_row("Hits 6/6", f"[bold yellow]{hits_6}[/]")
+        self.console.print(summary)
+
+    def _render_reduction_telemetry(self, t_id, univ_size, max_hit, high_hits, elapsed):
+        self.console.print(
+            f"[bold blue]#{t_id}[/] | "
+            f"U_final: [bold cyan]{int(univ_size):,}[/] | "
+            f"Hits -> 4/6: [yellow]{high_hits.get(4, 0)}[/] "
+            f"5/6: [yellow]{high_hits.get(5, 0)}[/] "
+            f"6/6: [yellow]{high_hits.get(6, 0)}[/] | "
+            f"Max: [bold]{int(max_hit)}/6[/] | "
+            f"[dim]{elapsed:.2f}s[/dim]"
+        )

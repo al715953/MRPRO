@@ -74,7 +74,7 @@ class MissionController:
             for k, v in best_cfg.items():
                 print(f"   • {k:<10}: {Fore.CYAN}{v}{Style.RESET_ALL}")
             print(
-                f"\n{Fore.YELLOW}ℹ️  Actualiza estos valores en src/strategies/universe/filters.py{Style.RESET_ALL}"
+                f"\n{Fore.YELLOW}ℹ️  Actualiza estos valores en src/data_access/config.py{Style.RESET_ALL}"
             )
 
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
@@ -111,7 +111,7 @@ class MissionController:
         )
 
         if sub_op == "1":
-            engine.run(UniverseReductionStrategy(), self.history, config)
+            engine.run(UniverseReductionStrategy(), self.history, config, verbose=True)
         elif sub_op == "2":
             engine.run(
                 GeneticSelectorStrategy(),

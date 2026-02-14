@@ -102,13 +102,17 @@ class VectorizedFilters:
             dtype=self.xp.int32,
         )
 
-    def get_sniper_exclusion(self, history, threshold=0.85, weights=None):
+    def get_sniper_exclusion(
+        self, history, threshold=0.85, weights=None, n_exclude=1
+    ):
         """
         PROTOCOLO E1-SNIPER (Opción B): Exclusión Quirúrgica.
         weights: Tupla (w_gap, w_term, w_freq).
         AHORA RETORNA TUPLA: (lista_excluidos, mensaje_log)
         """
         if not history or not hasattr(history, "winning_numbers"):
+            return [], ""
+        if n_exclude <= 0:
             return [], ""
 
         draws = history.winning_numbers
@@ -141,14 +145,20 @@ class VectorizedFilters:
 
         sorted_candidates = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
+        excluded = []
+        labels = []
         for num, score in sorted_candidates:
-            if num not in last_draw:
-                if score >= threshold:
-                    # CORRECCIÓN: Retornamos la tupla (lista, mensaje)
-                    msg = f"Sniper:-{num}({score:.2f})"
-                    return [num], msg
-                else:
-                    break
+            if num in last_draw:
+                continue
+            if score < threshold:
+                break
+            excluded.append(num)
+            labels.append(f"-{num}({score:.2f})")
+            if len(excluded) >= n_exclude:
+                break
+
+        if excluded:
+            return excluded, f"Sniper:{','.join(labels)}"
 
         # CORRECCIÓN: Retornamos tupla vacía compatible
         return [], ""
@@ -254,12 +264,13 @@ class VectorizedFilters:
         evens = self.xp.sum(universe % 2 == 0, axis=1)
         primes = self.xp.sum(self.is_prime[universe], axis=1)
         deltas = self.xp.diff(universe, axis=1)
+        max_contig = cfg.get("max_contig", cfg.get("max_delta", 1))
         mask = (
             (evens >= cfg.get("even_min", 2))
             & (evens <= cfg.get("even_max", 4))
             & (primes >= cfg.get("prime_min", 1))
             & (primes <= cfg.get("prime_max", 4))
-            & (self.xp.sum(deltas == 1, axis=1) <= cfg.get("max_contig", 1))
+            & (self.xp.sum(deltas == 1, axis=1) <= max_contig)
         )
         return universe[mask]
 

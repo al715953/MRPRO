@@ -64,6 +64,7 @@ BEST_SETTINGS = {
     "prime_min": 1,
     "prime_max": 3,
     "max_delta": 15,  # Saltos más cortos (más realista)
+    "max_contig": 1,  # Alias operativo para filtro de consecutivos
     "std_min": 8,  # Dispersión más controlada
     "std_max": 12,
     "entropy_min": 2.15,  # Punto dulce detectado en V13
@@ -107,6 +108,10 @@ BEST_SETTINGS = {
     "w_term": 0.10,
     "w_freq": 0.60,
     "sniper_threshold": 0.85,
+    "sniper_conservative": False,  # Activa modo conservador (menos exclusiones).
+    "sniper_threshold_boost": 0.08,  # Incremento de umbral en modo conservador.
+    "auto_std_compensation": False,  # Ajusta std para sostener tamaño objetivo.
+    "target_universe_size": 0,  # Si >0, objetivo de tamaño para compensación std.
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     # ESTRUCTURA CRÍTICA: Cada experto requiere su propio objetivo de entrenamiento
     "ensemble_config": {

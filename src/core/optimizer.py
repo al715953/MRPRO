@@ -38,6 +38,21 @@ class StrategyOptimizer:
             return reduction_result[0]
         return reduction_result
 
+    @staticmethod
+    def _as_chronological(history: DrawHistoryDTO) -> DrawHistoryDTO:
+        """
+        Retorna una vista cronológica (concurso ascendente) para evitar
+        validaciones con fuga temporal en optimización.
+        """
+        ordered = sorted(
+            zip(history.concursos, history.dates, history.winning_numbers),
+            key=lambda x: int(x[0]),
+        )
+        concursos = [int(c) for c, _, _ in ordered]
+        dates = [d for _, d, _ in ordered]
+        winners = [w for _, _, w in ordered]
+        return DrawHistoryDTO(dates=dates, winning_numbers=winners, concursos=concursos)
+
     def _print_progress(
         self, current, total, hits_5_6, hits_4_6, start_time, label="Iter", u_size=0
     ):
@@ -60,6 +75,7 @@ class StrategyOptimizer:
     def optimize_voter_weights(self, history: DrawHistoryDTO, n_draws: int = 200):
         print(f"\n{CYAN}⚖️  CALIBRANDO PESOS DE VOTANTES (Protocolo Sniper E1){RESET}")
         global_start = time.time()
+        h = self._as_chronological(history)
 
         # 1. Generar Rejilla (G + T + F = 1.0)
         resolution = 0.05
@@ -76,7 +92,7 @@ class StrategyOptimizer:
 
         # 2. Preparar sub-historiales para backtesting rápido
         # Probamos los últimos 'n_draws' sorteos
-        total_available = len(history.winning_numbers)
+        total_available = len(h.winning_numbers)
         start_idx = max(50, total_available - n_draws)
 
         for i, w_tuple in enumerate(weights_grid):
@@ -86,11 +102,11 @@ class StrategyOptimizer:
             for idx in range(start_idx, total_available):
                 # Creamos un "falso presente" para el Sniper
                 past_history = DrawHistoryDTO(
-                    dates=history.dates[:idx],
-                    winning_numbers=history.winning_numbers[:idx],
-                    concursos=history.concursos[:idx],
+                    dates=h.dates[:idx],
+                    winning_numbers=h.winning_numbers[:idx],
+                    concursos=h.concursos[:idx],
                 )
-                real_winner = set(history.winning_numbers[idx][:6])
+                real_winner = set(h.winning_numbers[idx][:6])
 
                 # Ejecutamos Sniper con los pesos de la iteración actual
                 excluded, _ = self.reducer.filters.get_sniper_exclusion(
@@ -133,6 +149,7 @@ class StrategyOptimizer:
         history: DrawHistoryDTO,
         draws_to_test: int = 50,
         custom_grid: Dict[str, List] = None,
+        target_universe_size: int = None,
     ) -> Dict[str, Any]:
         print(
             f"\n{CYAN}🔬 FASE 1: Calibración Forense con Verificación de Números (Hardware: {self.reducer.backend_name}){RESET}"
@@ -146,14 +163,41 @@ class StrategyOptimizer:
 
         best_score = -float("inf")
         best_params = BEST_SETTINGS.copy()
+        h = self._as_chronological(history)
+        total_available = len(h.winning_numbers)
+        eval_start_idx = max(50, total_available - draws_to_test)
 
-        # Datos para auditoría
-        winners_to_check = np.array(
-            history.winning_numbers[-draws_to_test:], dtype=np.uint8
+        train_history = DrawHistoryDTO(
+            dates=h.dates[:eval_start_idx],
+            winning_numbers=h.winning_numbers[:eval_start_idx],
+            concursos=h.concursos[:eval_start_idx],
         )
-        concursos = history.concursos[-draws_to_test:]
-        fechas = history.dates[-draws_to_test:]
+        winners_to_check = np.array(
+            [w[:6] for w in h.winning_numbers[eval_start_idx:]], dtype=np.uint8
+        )
+        concursos = h.concursos[eval_start_idx:]
+        fechas = h.dates[eval_start_idx:]
         best_audit_log = []
+
+        # Universo objetivo para no crecer tamaño: si no se provee, usamos baseline actual.
+        if target_universe_size is None:
+            baseline_cfg = BEST_SETTINGS.copy()
+            baseline_dto = PredictionConfigDTO(
+                total_balls=TOTAL_BALLS,
+                ticket_size=TICKET_SIZE,
+                num_tickets=20,
+                filter_overrides=baseline_cfg,
+            )
+            baseline_universe = self._extract_universe(
+                self.reducer.reduce(train_history, baseline_dto, verbose=False)
+            )
+            target_u_size = int(len(baseline_universe))
+        else:
+            target_u_size = int(max(1, target_universe_size))
+
+        print(
+            f"{YELLOW}🎯 Objetivo de universo fijo: {target_u_size:,} tickets (sin crecimiento).{RESET}"
+        )
 
         for i, values in enumerate(combinations):
             c = dict(zip(keys, values))
@@ -174,6 +218,14 @@ class StrategyOptimizer:
                     "ac_min": c["ac"],
                     "std_min": c["std_min"],
                     "std_max": c["std_max"],
+                    # Sniper conservador + compensación de std para sostener tamaño final.
+                    "sniper_conservative": True,
+                    "sniper_threshold_boost": 0.08,
+                    "dynamic_exclude_count": min(
+                        int(BEST_SETTINGS.get("dynamic_exclude_count", 1)), 1
+                    ),
+                    "auto_std_compensation": True,
+                    "target_universe_size": target_u_size,
                 }
             )
 
@@ -185,18 +237,18 @@ class StrategyOptimizer:
             )
 
             universe = self._extract_universe(
-                self.reducer.reduce(history, config_dto, verbose=False)
+                self.reducer.reduce(train_history, config_dto, verbose=False)
             )
             u_size = len(universe)
 
-            if u_size > 120000 or u_size < 15000:
+            if u_size == 0 or u_size > 200000:
                 self._print_progress(
                     i, total_comb, 0, 0, global_start, "Skip", u_size=u_size
                 )
                 continue
 
-            u_data = self.xp.asarray(universe, dtype=self.xp.uint8)
-            current_hits_5, current_hits_4 = 0, 0
+            u_data = self.xp.asarray(universe[:, :6], dtype=self.xp.uint8)
+            current_hits_6, current_hits_5, current_hits_4 = 0, 0, 0
             temp_log = []
 
             for idx, winner in enumerate(winners_to_check):
@@ -207,7 +259,12 @@ class StrategyOptimizer:
                 max_h = int(self.xp.max(matches))
                 winner_str = str(list(winner))  # Convertimos a string para el log
 
-                if max_h >= 5:
+                if max_h == 6:
+                    current_hits_6 += 1
+                    temp_log.append(
+                        f"Concurso {concursos[idx]} ({fechas[idx]}): {GREEN}Hit 6/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
+                    )
+                elif max_h == 5:
                     current_hits_5 += 1
                     temp_log.append(
                         f"Concurso {concursos[idx]} ({fechas[idx]}): {GREEN}Hit 5/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
@@ -218,13 +275,24 @@ class StrategyOptimizer:
                         f"Concurso {concursos[idx]} ({fechas[idx]}): {CYAN}Hit 4/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
                     )
 
+            size_delta = u_size - target_u_size
+            oversize_penalty = (
+                (max(0, size_delta) / max(1, target_u_size)) * 2500.0
+            )
+            undersize_penalty = (
+                (max(0, -size_delta) / max(1, target_u_size)) * 300.0
+            )
             density_score = (
-                (current_hits_5 * 1000) + (current_hits_4 * 100)
-            ) / np.sqrt(u_size)
+                (current_hits_6 * 6000)
+                + (current_hits_5 * 1000)
+                + (current_hits_4 * 120)
+                - oversize_penalty
+                - undersize_penalty
+            )
             self._print_progress(
                 i,
                 total_comb,
-                current_hits_5,
+                current_hits_5 + current_hits_6,
                 current_hits_4,
                 global_start,
                 "Search",
@@ -235,7 +303,10 @@ class StrategyOptimizer:
                 best_score = density_score
                 best_params = params.copy()
                 best_params["u_size_avg"] = u_size
+                best_params["hits_6_6_found"] = current_hits_6
                 best_params["hits_5_6_found"] = current_hits_5
+                best_params["hits_4_6_found"] = current_hits_4
+                best_params["target_universe_size"] = target_u_size
                 best_audit_log = temp_log
 
         # --- REPORTE DE EVIDENCIA FINAL ---
@@ -247,11 +318,13 @@ class StrategyOptimizer:
             # El log ya viene con colores, lo imprimimos directamente
             print(f" 🎯 {log}")
         print("=" * 80)
+        hits_6_6_found = best_params.get("hits_6_6_found", 0)
         hits_5_6_found = best_params.get("hits_5_6_found", 0)
+        hits_4_6_found = best_params.get("hits_4_6_found", 0)
         u_size_avg = best_params.get("u_size_avg", 0)
         print(
-            # f"📊 Resumen Sniper: {best_params['hits_5_6_found']}/{draws_to_test} aciertos 5/6 en {best_params['u_size_avg']:,} tickets."
-            f"📊 Resumen Sniper: {hits_5_6_found}/{draws_to_test} aciertos 5/6 en {u_size_avg:,} tickets."
+            f"📊 Resumen Sniper: 6/6={hits_6_6_found} | 5/6={hits_5_6_found} | 4/6={hits_4_6_found} "
+            f"en {u_size_avg:,} tickets (objetivo {target_u_size:,})."
         )
 
         return best_params
