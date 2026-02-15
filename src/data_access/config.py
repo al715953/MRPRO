@@ -48,13 +48,13 @@ NUM_SIMULACIONES = 250000
 # --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
-    "dynamic_exclude_count": 2,  # Números a eliminar por inercia térmica
+    "dynamic_exclude_count": 1,  # Números a eliminar por inercia térmica
     "anchor_nexus_size": 3,  # Cuántos números 'ancla' compartirán los tickets
     "nexus_density": 0.90,  # 80% de los tickets tendrán las anclas
     "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 110,  # 112
-    "sum_max": 132,  # 128
+    "sum_min": 95,  # 112
+    "sum_max": 115,  # 128
     "f1_max": 11,
     "f6_min": 29,
     "ac_min": 7,
@@ -65,13 +65,13 @@ BEST_SETTINGS = {
     "prime_max": 3,
     "max_delta": 15,  # Saltos más cortos (más realista)
     "max_contig": 1,  # Alias operativo para filtro de consecutivos
-    "std_min": 8,  # Dispersión más controlada
-    "std_max": 12,
+    "std_min": 7.5,  # Dispersión más controlada
+    "std_max": 13.2,
     "entropy_min": 2.15,  # Punto dulce detectado en V13
     "entropy_max": 2.45,  # Filtra el ruido estético excesivo
     "sdr_min": 22,  # Suma de Raíces Digitales mínima
     "sdr_max": 38,  # Suma de Raíces Digitales máxima
-    "max_same_last_digit": 2,  # Solo máximo 2 números con misma terminación
+    "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     "scale_pos_weight": 4,
     "n_estimators": 3200,
@@ -107,7 +107,7 @@ BEST_SETTINGS = {
     "w_gap": 0.25,
     "w_term": 0.10,
     "w_freq": 0.60,
-    "sniper_threshold": 0.85,
+    "sniper_threshold": 0.9,
     "sniper_conservative": False,  # Activa modo conservador (menos exclusiones).
     "sniper_threshold_boost": 0.08,  # Incremento de umbral en modo conservador.
     "auto_std_compensation": False,  # Ajusta std para sostener tamaño objetivo.

@@ -102,9 +102,7 @@ class VectorizedFilters:
             dtype=self.xp.int32,
         )
 
-    def get_sniper_exclusion(
-        self, history, threshold=0.85, weights=None, n_exclude=1
-    ):
+    def get_sniper_exclusion(self, history, threshold=0.85, weights=None, n_exclude=1):
         """
         PROTOCOLO E1-SNIPER (Opción B): Exclusión Quirúrgica.
         weights: Tupla (w_gap, w_term, w_freq).
@@ -311,3 +309,142 @@ class VectorizedFilters:
             return universe
         candidates_np = universe if isinstance(universe, np.ndarray) else universe.get()
         return universe[calculate_ac_numba(candidates_np) >= ac_min]
+
+    # ==============================
+    # SURVIVAL SCORING ENGINE V15
+    # ==============================
+
+    def compute_survival_scores(self, universe, cfg):
+        """
+        Calcula score acumulado normalizado [0,1]
+        SIN descartar tickets.
+        GPU-first.
+        """
+
+        if len(universe) == 0:
+            return self.xp.zeros(0, dtype=self.xp.float32)
+
+        xp = self.xp
+        universe_f = universe.astype(xp.float32)
+
+        # ----------------------------
+        # 1. Score Suma (gaussiano)
+        # ----------------------------
+        sums = xp.sum(universe_f, axis=1)
+        mean_sum = (cfg.get("sum_min", 110) + cfg.get("sum_max", 132)) / 2.0
+        std_sum = (cfg.get("sum_max", 132) - cfg.get("sum_min", 110)) / 4.0
+        score_sum = xp.exp(-((sums - mean_sum) ** 2) / (2 * std_sum**2))
+
+        # ----------------------------
+        # 2. Score Desviación Estándar
+        # ----------------------------
+        stds = xp.std(universe_f, axis=1)
+        mean_std = (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0
+        std_std = (cfg.get("std_max", 12.0) - cfg.get("std_min", 8.0)) / 4.0
+        score_std = xp.exp(-((stds - mean_std) ** 2) / (2 * std_std**2))
+
+        # ----------------------------
+        # 3. Score Paridad Balance
+        # ----------------------------
+        evens = xp.sum(universe % 2 == 0, axis=1)
+        ideal_even = (cfg.get("even_min", 2) + cfg.get("even_max", 4)) / 2.0
+        score_even = 1.0 - xp.abs(evens - ideal_even) / 6.0
+
+        # ----------------------------
+        # 4. Score Terminal Distribution
+        # ----------------------------
+        last_digits = universe % 10
+        counts = xp.zeros((len(universe), 10), dtype=xp.int32)
+        for i in range(6):
+            xp.add.at(counts, (xp.arange(len(universe)), last_digits[:, i]), 1)
+        max_rep = xp.max(counts, axis=1)
+        score_term = 1.0 - (max_rep - 1) / 5.0
+
+        # ----------------------------
+        # Score Total (ponderado)
+        # ----------------------------
+        total_score = (
+            0.30 * score_sum + 0.30 * score_std + 0.20 * score_even + 0.20 * score_term
+        )
+
+        return total_score.astype(xp.float32)
+
+    # ============================================
+    # CORE SURVIVAL SCORE (V15)
+    # ============================================
+    def compute_survival_scores(self, universe, cfg):
+
+        xp = self.xp
+        universe_f = universe.astype(xp.float32)
+
+        sums = xp.sum(universe_f, axis=1)
+        mean_sum = (cfg.get("sum_min", 110) + cfg.get("sum_max", 132)) / 2.0
+        std_sum = (cfg.get("sum_max", 132) - cfg.get("sum_min", 110)) / 4.0
+        score_sum = xp.exp(-((sums - mean_sum) ** 2) / (2 * std_sum**2))
+
+        stds = xp.std(universe_f, axis=1)
+        mean_std = (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0
+        std_std = (cfg.get("std_max", 12.0) - cfg.get("std_min", 8.0)) / 4.0
+        score_std = xp.exp(-((stds - mean_std) ** 2) / (2 * std_std**2))
+
+        evens = xp.sum(universe % 2 == 0, axis=1)
+        ideal_even = 3.0
+        score_even = 1.0 - xp.abs(evens - ideal_even) / 6.0
+
+        total_score = 0.4 * score_sum + 0.4 * score_std + 0.2 * score_even
+
+        return total_score.astype(xp.float32)
+
+    # ============================================
+    # TAIL EXPLORATION SCORE (NUEVO)
+    # ============================================
+    def compute_tail_scores(self, universe, cfg):
+
+        xp = self.xp
+        universe_f = universe.astype(xp.float32)
+
+        stds = xp.std(universe_f, axis=1)
+        mean_std = (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0
+
+        # Distancia al centro (cola controlada)
+        tail_score = xp.abs(stds - mean_std)
+
+        # Normalización
+        tail_score = tail_score / (xp.max(tail_score) + 1e-9)
+
+        return tail_score.astype(xp.float32)
+
+    # ============================================
+    # DENSITY PENALTY (2D BINNING SUM + STD)
+    # ============================================
+    def compute_density_penalty(self, universe):
+
+        xp = self.xp
+
+        universe_f = universe.astype(xp.float32)
+
+        sums = xp.sum(universe_f, axis=1)
+        stds = xp.std(universe_f, axis=1)
+
+        # Binning
+        sum_bins = xp.floor((sums - xp.min(sums)) / 3).astype(xp.int32)
+        std_bins = xp.floor((stds - xp.min(stds)) / 0.5).astype(xp.int32)
+
+        # Crear índice 2D compacto
+        combined_bin = sum_bins * 100 + std_bins
+
+        unique_bins, counts = xp.unique(combined_bin, return_counts=True)
+
+        # Map bin -> density
+        bin_to_density = dict(zip(unique_bins.tolist(), counts.tolist()))
+
+        # Construir vector densidad
+        density = xp.array(
+            [bin_to_density[int(b)] for b in combined_bin.tolist()],
+            dtype=xp.float32,
+        )
+
+        # Normalización
+        density = density / (xp.max(density) + 1e-9)
+
+        return density
