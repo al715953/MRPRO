@@ -21,7 +21,7 @@ MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
-VERSION_TAG = "V15_OMEGA_STRIDE"
+VERSION_TAG = "V16_SEL_GA_fitnessV1_covTop200_n500_20260215"
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39

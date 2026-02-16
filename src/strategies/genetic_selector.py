@@ -4,6 +4,11 @@ import numpy as np
 from src.domain.dtos import PredictionResultDTO
 from src.strategies.genetic.resonance import ResonanceEngine
 from src.data_access.config import GPU_ENABLED
+from src.strategies.genetic.fitness import (
+    select_tickets_v16,
+    FitnessConfig,
+    StrataConfig,
+)
 
 # Sincronización de hardware
 try:
@@ -106,9 +111,20 @@ class GeneticSelectorStrategy:
             return PredictionResultDTO("Resonance_Collapse", [])
 
         # 2. SELECCIÓN V15 (Omega Stride)
-        final_tickets = self.apply_omega_stride(
-            res["u_reduced"], res["final_scores_reduced"], config.num_tickets, xp
+        # final_tickets = self.apply_omega_stride(
+        #    res["u_reduced"], res["final_scores_reduced"], config.num_tickets, xp
+        # )
+        # 2 Nueva logica de 200
+
+        final_tickets, dbg = select_tickets_v16(
+            res["u_reduced"],
+            res["final_scores_reduced"],
+            n_tickets=config.num_tickets,
+            xp=xp,
+            cfg=FitnessConfig(focus_max_rank=200, candidate_max_rank=500),
+            strata=StrataConfig(rank_edges=(10, 30, 60, 100, 150, 200, 500)),
         )
+        # si quieres, puedes guardar dbg["selected_ranks"] directo
 
         # 3. TELEMETRÍA
         u_cpu = univ.get() if hasattr(univ, "get") else univ

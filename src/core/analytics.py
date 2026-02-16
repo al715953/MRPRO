@@ -49,7 +49,9 @@ class PerformanceTracker:
                     "proximity",
                     "ai_score",
                     "geo_score",
+                    "hybrid_score",
                     "sniper_log",
+                    "sniper_log_short",
                 ]
             )
             df.to_csv(self.log_path, index=False)
@@ -83,7 +85,9 @@ class PerformanceTracker:
                 "proximity",
                 "ai_score",
                 "geo_score",
+                "hybrid_score",
                 "sniper_log",
+                "sniper_log_short",
             ]
 
             for col in columns_order:

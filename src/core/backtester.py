@@ -1,5 +1,6 @@
 # src/core/backtester.py
 
+from sys import audit
 import time
 import numpy as np
 from rich.console import Console
@@ -14,6 +15,7 @@ from rich.progress import (
 
 try:
     import cupy as cp
+
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
@@ -23,6 +25,7 @@ from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
 from src.core.forensics import LotteryForensics
 from src.data_access.config import VERSION_TAG
+
 
 class BacktestEngine:
     """Motor Sniper V14.10: Full Data Capture (Visual + CSV)."""
@@ -85,7 +88,10 @@ class BacktestEngine:
                         curr_h, config, verbose=False
                     )
                     config.raw_universe_ptr = res_univ.metadata.get("raw_ndarray")
-                    sniper_msg = res_univ.metadata.get("sniper_log", "")
+                    sniper_msg_full = res_univ.metadata.get("sniper_log", "")
+                    sniper_msg = res_univ.metadata.get(
+                        "sniper_log_short", sniper_msg_full
+                    )  # consola
 
                     if config.raw_universe_ptr is not None:
                         xp = (
@@ -122,17 +128,18 @@ class BacktestEngine:
 
                 if audit:
                     audit["draw_id"] = int(t_id)
-                    
+
                     # 1. Guardamos el Tamaño del Universo
                     audit["univ_size"] = (
                         len(config.raw_universe_ptr)
                         if config.raw_universe_ptr is not None
                         else 0
                     )
-                    
+
                     # 2. Guardamos el Log del Sniper (¡LA PIEZA FALTANTE!)
-                    audit["sniper_log"] = sniper_msg
-                    
+                    audit["sniper_log"] = sniper_msg_full  # FULL al CSV
+                    audit["sniper_log_short"] = sniper_msg  # opcional (SHORT)
+
                     self.forensic_data.append(audit)
 
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
@@ -196,13 +203,13 @@ class BacktestEngine:
 
         st_c = "bold green" if d == 0 else "bold red"
         h_c = (
-            "bold green" if h == 6 else 
-            "bold yellow" if h == 5 else 
-            "cyan" if h == 4 else "white"
+            "bold green"
+            if h == 6
+            else "bold yellow" if h == 5 else "cyan" if h == 4 else "white"
         )
         d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
         status = "🎯 HIT" if d == 0 else "❌"
-        
+
         line = (
             f"[bold blue]#{t_id}[/] | "
             f"U: {u_s:>6,d} | "
@@ -213,7 +220,7 @@ class BacktestEngine:
             f"Dist: [{d_c}]{d:<4}[/] | "
             f"[{st_c}]{status}[/] | [dim]{time.time()-t_s:.2f}s[/dim]"
         )
-        
+
         if sniper_msg:
             line += f" | [cyan]{sniper_msg}[/]"
 
@@ -225,11 +232,16 @@ class BacktestEngine:
         summary.add_column("Métrica Sniper", style="dim", width=20)
         summary.add_column("Valor", justify="right", width=15)
         summary.add_row("Sorteos Analizados", str(res.total_draws_tested))
-        summary.add_row("Balance Neto", f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]")
+        summary.add_row(
+            "Balance Neto",
+            f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]",
+        )
         summary.add_row("Jackpots en Universo", f"[bold yellow]{coverage_6}[/]")
         self.console.print(summary)
-        
-        dist_table = Table(title="Distribución de Aciertos", show_header=True, header_style="bold cyan")
+
+        dist_table = Table(
+            title="Distribución de Aciertos", show_header=True, header_style="bold cyan"
+        )
         dist_table.add_column("Rango", justify="center")
         dist_table.add_column("Tickets", justify="right")
         for h in range(7):
@@ -244,7 +256,9 @@ class BacktestEngine:
         hits_5 = int(max_hits_by_draw.get(5, 0))
         hits_6 = int(max_hits_by_draw.get(6, 0))
 
-        self.console.print("\n[bold green]📊 RESUMEN REDUCCIÓN DE UNIVERSO[/bold green]")
+        self.console.print(
+            "\n[bold green]📊 RESUMEN REDUCCIÓN DE UNIVERSO[/bold green]"
+        )
         summary = Table(show_header=True, header_style="bold magenta")
         summary.add_column("Métrica", style="dim", width=30)
         summary.add_column("Valor", justify="right", width=15)
