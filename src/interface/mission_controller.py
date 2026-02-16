@@ -101,9 +101,9 @@ class MissionController:
             b_size = int(
                 input(f"   ¿Cuántos sorteos hacia atrás probar? (108): ") or 108
             )
-            n_tkt = int(input(f"   ¿Cuántos tickets por sorteo? (20): ") or 20)
+            n_tkt = int(input(f"   ¿Cuántos tickets por sorteo? (24): ") or 24)
         except:
-            b_size, n_tkt = 108, 20
+            b_size, n_tkt = 108, 24
 
         engine = BacktestEngine()
         config = PredictionConfigDTO(
@@ -142,12 +142,12 @@ class MissionController:
         try:
             n_prod = int(
                 input(
-                    f"\n   ¿Cuántos tickets generar para el sorteo #{proximo_id}? (20): "
+                    f"\n   ¿Cuántos tickets generar para el sorteo #{proximo_id}? (24): "
                 )
-                or 20
+                or 24
             )
         except:
-            n_prod = 20
+            n_prod = 24
 
         config = PredictionConfigDTO(
             TOTAL_BALLS, TICKET_SIZE, n_prod, filter_overrides=BEST_SETTINGS

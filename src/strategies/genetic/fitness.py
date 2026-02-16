@@ -386,15 +386,29 @@ def select_tickets_v16(
     # Penaliza candidatos no disponibles
     neg_inf = xp.float32(-1e9)
 
-    for _ in range(int(n_tickets)):
+    # =========================
+    # V16 Patch: 24 tickets + anchors Top-5 + bucket quotas (Opción 2)
+    # =========================
+
+    reserve_top_m = 5
+
+    # cuotas: (lo, hi, count)
+    bucket_plan = [
+        (21, 60, 7),
+        (61, 120, 5),
+        (121, 200, 6),
+        (201, 500, 1),
+    ]
+
+    def _pick_one(mask):
         # Score base
         score = base_exploit.copy()
 
-        # Cobertura de buckets (marginal): w * (log1p(m+u)-log1p(m))
-        b = ctx["bucket_id"]
-        bw = ctx["bucket_w"]
-        prev_mass = bucket_mass[b]
-        w_cand = bw[b]  # <- (N,), peso por candidato según su bucket
+        # Cobertura de buckets (marginal): w(bucket) * (log1p(m+u)-log1p(m))
+        b = ctx["bucket_id"]  # (N,)
+        bw = ctx["bucket_w"]  # (n_buckets,)
+        prev_mass = bucket_mass[b]  # (N,)
+        w_cand = bw[b]  # (N,)
         score += (
             cfg.w_bucket_cov
             * w_cand
@@ -406,56 +420,65 @@ def select_tickets_v16(
         prev_c = struct_counts[sb]
         score += cfg.w_struct_cov * (xp.log1p(prev_c + 1.0) - xp.log1p(prev_c))
 
-        # Cobertura por décadas (marginal simple):
-        # premiamos "nuevo hash" con un bono fijo pequeño usando conteo implícito
-        # (aprox: si dec ya usado => 0, si no => +w_decade_cov * 0.25)
-        # Nota: lo hacemos en CPU por k pequeño.
-        # Para mantenerlo GPU-friendly, mantenemos un set python de hashes ya usados.
-        # (no es cuello de botella: 20 steps)
-        # -> se aplica como ajuste puntual a score en CPU solo para top-candidatos.
-        # Aquí hacemos una estrategia: penalizamos repetición con +0 mediante máscara después del argmax,
-        # y dejamos el empuje fuerte a la variedad por struct_cov + similarity.
-
         # Penalidad de similitud incremental
         score -= cfg.w_similarity * sim_accum
 
-        # Bloqueos
-        score = xp.where(available, score, neg_inf)
+        # Máscara de disponibilidad + bucket
+        score = xp.where(mask, score, neg_inf)
 
-        # Elegir mejor
-        best_idx = int(score.argmax())
-        if float(score[best_idx]) <= float(neg_inf) / 2:
-            break
+        bi = int(score.argmax())
+        if float(score[bi]) <= float(neg_inf) / 2:
+            return None
+        return bi
 
-        selected.append(best_idx)
-        selected_ranks.append(
-            int(ctx["ranks"][best_idx].item())
-            if hasattr(ctx["ranks"][best_idx], "item")
-            else int(ctx["ranks"][best_idx])
-        )
+    def _accept(idx_i: int):
+        selected.append(idx_i)
+        selected_ranks.append(int(ctx["ranks"][idx_i]))
 
-        # Marcar como no disponible
-        available[best_idx] = False
+        available[idx_i] = False
 
-        # Actualizar masas
-        bi = (
-            int(ctx["bucket_id"][best_idx].item())
-            if hasattr(ctx["bucket_id"][best_idx], "item")
-            else int(ctx["bucket_id"][best_idx])
-        )
-        bucket_mass[bi] += ctx["utility"][best_idx]
+        # update bucket mass
+        bi = int(ctx["bucket_id"][idx_i])
+        bucket_mass[bi] += ctx["utility"][idx_i]
 
-        sbi = (
-            int(ctx["struct_bin"][best_idx].item())
-            if hasattr(ctx["struct_bin"][best_idx], "item")
-            else int(ctx["struct_bin"][best_idx])
-        )
+        # update struct
+        sbi = int(ctx["struct_bin"][idx_i])
         struct_counts[sbi] += 1.0
 
-        # Actualizar penalidad de similitud para TODOS contra el nuevo seleccionado (1 dot product)
-        matches = xp.dot(one_hot, one_hot[best_idx])  # (N,)
-        sim_accum += _pair_penalty(matches, xp, cfg)
-        # el mismo se auto-penaliza (matches=6) pero ya está bloqueado, ok.
+        # update similarity penalties (1 dot product)
+        matches = xp.dot(one_hot, one_hot[idx_i])  # (N,)
+        sim_accum[:] = sim_accum + _pair_penalty(matches, xp, cfg)
+
+    # ---- 1) Anchors: fuerza Top-5 por rank (exploit duro) ----
+    if int(n_tickets) >= reserve_top_m:
+        order = xp.argsort(ctx["ranks"])  # rank ascendente => mejores primero
+        anchors = order[:reserve_top_m]
+
+        for a in anchors.tolist() if hasattr(anchors, "tolist") else list(anchors):
+            a = int(a)
+            if not bool(available[a]):
+                continue
+            _accept(a)
+
+    # ---- 2) Buckets con cuotas fijas ----
+    for lo, hi, cnt in bucket_plan:
+        for _ in range(int(cnt)):
+            if len(selected) >= int(n_tickets):
+                break
+
+            mask = available & (ctx["ranks"] >= lo) & (ctx["ranks"] <= hi)
+            idx_i = _pick_one(mask)
+            if idx_i is None:
+                break
+            _accept(int(idx_i))
+
+    # ---- 3) Fill: si faltan picks, rellena con lo mejor disponible <= candidate_max_rank ----
+    while len(selected) < int(n_tickets):
+        mask = available  # ya incluye cand_ok OR focus<=200 (por tu lógica previa)
+        idx_i = _pick_one(mask)
+        if idx_i is None:
+            break
+        _accept(int(idx_i))
 
     # Export CPU
     t_sel = ctx["tickets"][xp.asarray(selected, dtype=xp.int32)]
