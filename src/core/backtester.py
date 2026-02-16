@@ -1,6 +1,5 @@
 # src/core/backtester.py
 
-from sys import audit
 import time
 import numpy as np
 from rich.console import Console
@@ -46,6 +45,12 @@ class BacktestEngine:
         hits_dist = {i: 0 for i in range(7)}
         reduced_sizes = []
         max_hits_by_draw = {4: 0, 5: 0, 6: 0}
+
+        # --- LOG: print once per run ---
+        sniper_header_printed = False
+        sniper_header_msg = ""
+        # -----------------------------
+
         is_reduction_only = (
             pre_process_strategy is None
             and strategy.__class__.__name__ == "UniverseReductionStrategy"
@@ -83,15 +88,22 @@ class BacktestEngine:
 
                 # --- FASE 1: REDUCCIÓN ---
                 sniper_msg = ""
+                sniper_msg_for_line = ""  # <- no repetimos el log por sorteo
                 if pre_process_strategy:
                     res_univ = pre_process_strategy.predict(
                         curr_h, config, verbose=False
                     )
                     config.raw_universe_ptr = res_univ.metadata.get("raw_ndarray")
-                    sniper_msg_full = res_univ.metadata.get("sniper_log", "")
-                    sniper_msg = res_univ.metadata.get(
-                        "sniper_log_short", sniper_msg_full
-                    )  # consola
+                    sniper_msg = res_univ.metadata.get("sniper_log", "")
+
+                    # --- LOG: imprimir solo 1 vez en toda la corrida ---
+                    if verbose and (not sniper_header_printed) and sniper_msg:
+                        sniper_header_msg = sniper_msg
+                        self.console.print(
+                            f"[cyan]🧷 SNIPER (run):[/] {sniper_header_msg}"
+                        )
+                        sniper_header_printed = True
+                    # ---------------------------------------------------
 
                     if config.raw_universe_ptr is not None:
                         xp = (
@@ -136,9 +148,8 @@ class BacktestEngine:
                         else 0
                     )
 
-                    # 2. Guardamos el Log del Sniper (¡LA PIEZA FALTANTE!)
-                    audit["sniper_log"] = sniper_msg_full  # FULL al CSV
-                    audit["sniper_log_short"] = sniper_msg  # opcional (SHORT)
+                    # 2. Guardamos el Log del Sniper (sin cambios; se guarda en CSV igual)
+                    audit["sniper_log"] = sniper_msg
 
                     self.forensic_data.append(audit)
 
@@ -168,7 +179,8 @@ class BacktestEngine:
                     )
 
                 if verbose and audit and not is_reduction_only:
-                    self._render_telemetry(audit, t_id, t_start, sniper_msg)
+                    # <- log por sorteo apagado (solo se imprimió 1 vez arriba)
+                    self._render_telemetry(audit, t_id, t_start, sniper_msg_for_line)
 
                 if HAS_CUPY:
                     cp.get_default_memory_pool().free_all_blocks()
@@ -240,7 +252,9 @@ class BacktestEngine:
         self.console.print(summary)
 
         dist_table = Table(
-            title="Distribución de Aciertos", show_header=True, header_style="bold cyan"
+            title="Distribución de Aciertos",
+            show_header=True,
+            header_style="bold cyan",
         )
         dist_table.add_column("Rango", justify="center")
         dist_table.add_column("Tickets", justify="right")
