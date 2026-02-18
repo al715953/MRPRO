@@ -6,24 +6,20 @@ class MelateRetroRules:
 
     def __init__(self):
         self.ticket_cost = 10.0
-        # Tabla de premios EXACTOS
         self.pay_table = {
-            (6, False): 4650000.0,  # 1er Lugar
-            (5, True): 30000.0,  # 2do Lugar (Naturales + Adicional)
-            (5, False): 800.0,  # 3er Lugar
-            (4, False): 150.0,  # 4to Lugar
-            (3, False): 20.0,  # 5to Lugar
-            (2, True): 15.0,  # 6to Lugar (2 + Adicional)
-            (1, True): 10.0,  # 7mo Lugar (1 + Adicional)
+            (6, False): 4650000.0,
+            (5, True): 30000.0,
+            (5, False): 800.0,
+            (4, False): 150.0,
+            (3, False): 20.0,
+            (2, True): 15.0,
+            (1, True): 10.0,
         }
+        self.max_hits = 6
 
     def validate_ticket(
         self, ticket: List[int], winning_draw: List[int]
     ) -> Tuple[int, bool]:
-        """
-        Calcula aciertos.
-        winning_draw debe tener 7 números: [6 Naturales..., 1 Adicional]
-        """
         naturales_reales = set(winning_draw[:6])
         adicional_real = winning_draw[6]
         ticket_set = set(ticket)
@@ -34,19 +30,36 @@ class MelateRetroRules:
         return hits_naturales, has_adicional
 
     def calculate_prize(self, hits_naturales: int, has_adicional: bool) -> float:
-        """
-        Calcula el premio intentando el match exacto y luego el fallback.
-        Ej: 3 Naturales + Adicional -> No existe en tabla -> Paga como 3 Naturales.
-        """
-        # 1. Intento Exacto (Prioridad a premios con Adicional)
         prize = self.pay_table.get((hits_naturales, has_adicional))
         if prize is not None:
             return prize
 
-        # 2. Intento Fallback (Si tiene adicional pero no hay premio especial, paga el base)
         if has_adicional:
             prize = self.pay_table.get((hits_naturales, False))
             if prize is not None:
                 return prize
 
         return 0.0
+
+
+class TrisMultiplicadorRules:
+    """Reglas base para backtest de Tris con Multiplicador."""
+
+    def __init__(self, ticket_cost: float = 10.0, base_prize: float = 600.0):
+        self.ticket_cost = ticket_cost
+        self.base_prize = base_prize
+        self.max_hits = 5
+
+    def validate_ticket(
+        self, ticket: List[int], winning_draw: List[int]
+    ) -> Tuple[int, bool]:
+        # Para Tris: acierto principal es orden exacto de los 5 dígitos.
+        exact_match = int(ticket == winning_draw[:5])
+        # has_adicional se reutiliza para indicar presencia de multiplicador (>1) en el sorteo.
+        has_multiplier = bool(winning_draw[5]) if len(winning_draw) > 5 else False
+        return exact_match * 5, has_multiplier
+
+    def calculate_prize(self, hits_naturales: int, has_adicional: bool) -> float:
+        if hits_naturales < 5:
+            return 0.0
+        return self.base_prize * (2 if has_adicional else 1)

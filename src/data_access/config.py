@@ -1,5 +1,6 @@
 import os
 import sys
+from src.domain.lottery_profile import LotteryProfile
 
 # --- INFRAESTRUCTURA DE RUTAS ---
 # Detectar si estamos en modo Ejecutable (.exe) o Script (.py) para persistencia en Windows
@@ -29,6 +30,38 @@ VERSION_TAG = (
 TOTAL_BALLS = 39
 TICKET_SIZE = 6
 URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQB0AGUALQBSAGUAdAByAG8A"
+
+# --- CONFIGURACIÓN: TRIS CON MULTIPLICADOR ---
+# Nota: Ajustar URL final cuando la fuente oficial quede confirmada.
+URL_TRIS_MULTIPLICADOR = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=VHJpcw=="
+TRIS_DIGITS = 5
+
+
+LOTTERY_PROFILES = {
+    "melate_retro": LotteryProfile(
+        code="melate_retro",
+        display_name="Melate Retro",
+        csv_filename="Melate-Retro.csv",
+        source_url=URL_MELATE,
+        total_balls=TOTAL_BALLS,
+        ticket_size=TICKET_SIZE,
+        includes_additional_ball=True,
+    ),
+    "tris_multiplicador": LotteryProfile(
+        code="tris_multiplicador",
+        display_name="Tris con Multiplicador",
+        csv_filename="Tris-Multiplicador.csv",
+        source_url=URL_TRIS_MULTIPLICADOR,
+        total_balls=10,
+        ticket_size=TRIS_DIGITS,
+        includes_additional_ball=False,
+    ),
+}
+
+
+def get_lottery_profile(game_code: str) -> LotteryProfile:
+    """Devuelve el perfil del juego o Melate Retro como fallback seguro."""
+    return LOTTERY_PROFILES.get(game_code, LOTTERY_PROFILES["melate_retro"])
 
 # --- CONFIGURACIÓN DE HARDWARE (UHPC) ---
 # Forzar uso de núcleos CUDA en RTX 4070 Ti

@@ -29,8 +29,9 @@ from src.data_access.config import VERSION_TAG
 class BacktestEngine:
     """Motor Sniper V14.10: Full Data Capture (Visual + CSV)."""
 
-    def __init__(self):
-        self.rules, self.console = MelateRetroRules(), Console()
+    def __init__(self, rules=None):
+        self.rules = rules or MelateRetroRules()
+        self.console = Console()
         self.tracker, self.forensic_data = PerformanceTracker(), []
 
     def run(
@@ -42,7 +43,8 @@ class BacktestEngine:
         pre_process_strategy=None,
     ):
         total_inv, total_earn, coverage_6 = 0.0, 0.0, 0
-        hits_dist = {i: 0 for i in range(7)}
+        max_hits = getattr(self.rules, "max_hits", config.ticket_size)
+        hits_dist = {i: 0 for i in range(max_hits + 1)}
         reduced_sizes = []
         max_hits_by_draw = {4: 0, 5: 0, 6: 0}
 
