@@ -1,11 +1,12 @@
 # src/data_access/scraper.py
+import io
 import os
 import requests
 import pandas as pd
-import io
 import warnings
 from rich.console import Console
-from src.data_access.config import URL_MELATE, CSV_FILE_PATH
+
+from src.data_access.config import CSV_FILE_PATH, get_lottery_profile
 
 warnings.simplefilter(
     "ignore", requests.packages.urllib3.exceptions.InsecureRequestWarning
@@ -13,22 +14,25 @@ warnings.simplefilter(
 console = Console()
 
 
-def actualizar_csv():
-    """EntryPoint V15.1: Sincronización con inspección de integridad."""
+def actualizar_csv(game_code: str = "melate_retro"):
+    """Sincronización de históricos para el juego indicado."""
+    profile = get_lottery_profile(game_code)
+    destination_path = os.path.join(
+        os.path.dirname(CSV_FILE_PATH), profile.csv_filename
+    )
+
     console.print(
-        f"\n[bold blue]📡 INICIANDO RECOLECCIÓN DE INTELIGENCIA (V15.1)[/bold blue]"
+        f"\n[bold blue]📡 INICIANDO RECOLECCIÓN ({profile.display_name})[/bold blue]"
     )
 
     try:
-        raw_content = _download_historical_data()
+        raw_content = _download_historical_data(profile.source_url)
         if not raw_content:
             console.print(
                 "[bold red]❌ ERROR: El servidor no devolvió bytes de datos.[/bold red]"
             )
             return False
 
-        # --- MEJORA: Detección Dinámica de Encoding ---
-        # Intentamos leer con 'utf-8', si falla saltamos a 'latin-1' (Común en MX)
         try:
             df = pd.read_csv(io.StringIO(raw_content), sep=None, engine="python")
         except Exception:
@@ -40,12 +44,10 @@ def actualizar_csv():
             )
             return False
 
-        # --- LIMPIEZA DE CABECERAS ---
-        # A veces el scraper baja basura en los nombres de columnas
         df.columns = [c.strip().replace('"', "") for c in df.columns]
 
-        os.makedirs(os.path.dirname(CSV_FILE_PATH), exist_ok=True)
-        df.to_csv(CSV_FILE_PATH, index=False, encoding="utf-8")
+        os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+        df.to_csv(destination_path, index=False, encoding="utf-8")
 
         console.print(
             f"[bold green]✅ SINCRONIZACIÓN EXITOSA:[/bold green] {len(df)} registros en local."
@@ -57,7 +59,7 @@ def actualizar_csv():
         return False
 
 
-def _download_historical_data():
+def _download_historical_data(url: str):
     """Descarga usando Session y emulación de navegador de alto nivel."""
     session = requests.Session()
     headers = {
@@ -68,13 +70,11 @@ def _download_historical_data():
     }
 
     try:
-        # Forzamos allow_redirects=True para seguir el rastro del CSV
         response = session.get(
-            URL_MELATE, headers=headers, timeout=20, verify=False, allow_redirects=True
+            url, headers=headers, timeout=20, verify=False, allow_redirects=True
         )
 
         if response.status_code == 200:
-            # Si el contenido es HTML en lugar de CSV, algo anda mal (posible redirección a login/mantenimiento)
             if "<html" in response.text.lower():
                 console.print(
                     "[bold red]❌ ERROR: El servidor devolvió HTML en lugar de CSV (Posible bloqueo).[/bold red]"
