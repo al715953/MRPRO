@@ -1,81 +1,96 @@
+# src/data_access/loader.py
+
 import pandas as pd
-from typing import List
+import os
 from datetime import datetime
 from src.domain.dtos import DrawHistoryDTO
+from src.data_access.config import DATA_FOLDER
 
 
-class MelateLoader:
-    def __init__(self, csv_path: str):
-        self.csv_path = csv_path
+class LotteryLoader:
+    """
+    Loader universal para MRPRO.
+    Capaz de procesar Melate (Combinación) y Tris (Permutación).
+    """
+
+    def __init__(self, profile):
+        self.profile = profile
+        self.csv_path = os.path.join(DATA_FOLDER, profile.csv_filename)
 
     def load_data(self) -> DrawHistoryDTO:
-        """
-        Carga el histórico de Melate Retro.
-        Estructura esperada: 6 Naturales + 1 Adicional.
-        """
-        try:
-            # 1. Cargar CSV
-            df = pd.read_csv(self.csv_path)
+        if not os.path.exists(self.csv_path):
+            raise FileNotFoundError(f"No se encontró el archivo: {self.csv_path}")
 
-            # Limpieza de nombres de columnas
-            df.columns = df.columns.str.strip().str.upper()
+        # Cargamos el CSV
+        df = pd.read_csv(self.csv_path)
 
-            # 2. Procesar Columna 'CONCURSO'
-            if "CONCURSO" in df.columns:
-                concursos = df["CONCURSO"].astype(int).tolist()
-            else:
-                print(
-                    "⚠️ Columna 'CONCURSO' no detectada. Generando numeración automática."
-                )
-                concursos = list(range(1, len(df) + 1))
+        # 1. Normalización de Fechas
+        # Intentamos varios formatos comunes en los reportes de Pronósticos
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                df["FECHA"] = pd.to_datetime(df["FECHA"], format=fmt)
+                break
+            except (ValueError, KeyError):
+                continue
 
-            # 3. Procesar Fechas
-            dates = pd.to_datetime(df["FECHA"], dayfirst=True).dt.date.tolist()
-
-            # 4. Procesar Números Ganadores
-            # Buscamos columnas F1...F6
-            cols_juego = [f"F{i}" for i in range(1, 7)]
-
-            # Verificación de columnas naturales
-            if not all(col in df.columns for col in cols_juego):
-                raise ValueError("El CSV no contiene las columnas F1...F6")
-
-            # Buscamos la columna del Adicional (F7 o ADICIONAL)
-            col_adicional = None
-            if "F7" in df.columns:
-                col_adicional = "F7"
-            elif "ADICIONAL" in df.columns:
-                col_adicional = "ADICIONAL"
-            else:
-                raise ValueError("Falta columna de número adicional (F7 o ADICIONAL)")
-
-            # Extraemos todo junto primero
-            cols_totales = cols_juego + [col_adicional]
-            raw_numbers = df[cols_totales].values.tolist()
-
-            # --- CORRECCIÓN CRÍTICA DE ORDENAMIENTO ---
-            # Ordenamos SOLO los primeros 6 (Naturales) y dejamos el 7º (Adicional) fijo al final.
-            winning_numbers = []
-            for row in raw_numbers:
-                ints = [int(n) for n in row]
-                naturales = sorted(ints[:6])  # Ordenar solo naturales
-                adicional = ints[6]  # El adicional se respeta tal cual
-                winning_numbers.append(naturales + [adicional])
-
-            print(f"✅ Histórico MRPRO cargado: {len(dates)} sorteos.")
-            print(f"📊 Rango de concursos: {concursos[0]} al {concursos[-1]}")
-
-            return DrawHistoryDTO(
-                dates=dates, winning_numbers=winning_numbers, concursos=concursos
+        # 2. Extracción de Números según el Perfil
+        if self.profile.code == "melate_retro":
+            return self._process_melate(df)
+        elif "tris" in self.profile.code:
+            return self._process_tris(df)
+        else:
+            raise ValueError(
+                f"Lógica de carga no implementada para: {self.profile.code}"
             )
 
-        except FileNotFoundError:
-            print(f"❌ Archivo no encontrado: {self.csv_path}")
-            return DrawHistoryDTO(dates=[], winning_numbers=[], concursos=[])
-        except Exception as e:
-            print(f"❌ Error crítico leyendo histórico: {e}")
-            return DrawHistoryDTO(dates=[], winning_numbers=[], concursos=[])
+    def _process_melate(self, df: pd.DataFrame) -> DrawHistoryDTO:
+        """Lógica para Melate: 6 números naturales + 1 adicional. Ordenamiento activo."""
+        concursos = df["CONCURSO"].tolist()
+        fechas = df["FECHA"].tolist()
 
-    def load_history(self) -> DrawHistoryDTO:
-        """Alias para mantener compatibilidad con main.py"""
-        return self.load_data()
+        # En Melate, el orden de aparición no importa, el modelo entrena mejor con datos ordenados
+        numeros_raw = df[["F1", "F2", "F3", "F4", "F5", "F6"]].values
+        naturales = [sorted(x.tolist()) for x in numeros_raw]
+        additional_col = next(
+            (col for col in ("ADICIONAL", "F7") if col in df.columns),
+            None,
+        )
+        if additional_col is None:
+            adicionales = [0] * len(concursos)
+        else:
+            adicionales = (
+                pd.to_numeric(df[additional_col], errors="coerce")
+                .fillna(0)
+                .astype(int)
+                .tolist()
+            )
+
+        winning_numbers = [naturales[i] + [adicionales[i]] for i in range(len(naturales))]
+
+        return DrawHistoryDTO(
+            concursos=concursos,
+            dates=fechas,
+            winning_numbers=winning_numbers,
+        )
+
+    def _process_tris(self, df: pd.DataFrame) -> DrawHistoryDTO:
+        """Lógica para Tris: 5 dígitos independientes (0-9). PROHIBIDO ORDENAR."""
+        concursos = df["CONCURSO"].tolist()
+        fechas = df["FECHA"].tolist()
+
+        # Tris usa R1 a R5. Mantenemos la posición exacta (es una permutación)
+        # Si tu CSV de Tris usa nombres de columnas distintos, cámbialos aquí:
+        cols_tris = ["R1", "R2", "R3", "R4", "R5"]
+
+        # Verificamos que existan las columnas, si no, intentamos extraer de una cadena
+        if set(cols_tris).issubset(df.columns):
+            numeros = df[cols_tris].values.tolist()
+        else:
+            # Si el CSV de Tris trae los números juntos como "12345"
+            numeros = [list(map(int, list(str(x).zfill(5)))) for x in df["NUMEROS"]]
+
+        return DrawHistoryDTO(
+            concursos=concursos,
+            dates=fechas,
+            winning_numbers=numeros,
+        )

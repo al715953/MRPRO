@@ -7,96 +7,94 @@ from colorama import Fore, Style
 
 import src.data_access.report as report
 import src.data_access.scraper as scraper
-from src.data_access.loader import MelateLoader
-from src.data_access.config import CSV_FILE_PATH
+from src.data_access.loader import LotteryLoader
+from src.data_access.config import LOTTERY_PROFILES
 from src.interface.cli import ConsoleUI
 from src.interface.mission_controller import MissionController
-
 
 # Asegurar que el sistema reconozca las rutas del proyecto
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 
-def initialize_data_layer(ui):
+def initialize_data_layer(ui, loader, profile):
     """
-    Carga de datos con lógica de sincronización inteligente.
-    Detecta si los datos son obsoletos basándose en la fecha máxima real.
+    Carga de datos genérica basada en el perfil seleccionado.
     """
-    loader = MelateLoader(CSV_FILE_PATH)
-
-    # Intento de carga inicial
     try:
         history = loader.load_data()
-    except (FileNotFoundError, OSError, ValueError):
         ui.console.print(
-            "[yellow]⚠️ Base de datos no encontrada. Iniciando descarga...[/]"
+            f"[green]✅ Datos de {profile.display_name} cargados correctamente.[/]"
         )
-        if scraper.actualizar_csv():
+    except (FileNotFoundError, OSError, ValueError) as e:
+        ui.console.print(f"[yellow]⚠️ Error al cargar base de datos: {e}[/]")
+        ui.console.print("[cyan]Iniciando descarga de emergencia...[/]")
+
+        # El scraper actualmente está optimizado para Melate,
+        # para Tris podrías necesitar implementar su propia lógica de scraping
+        if profile.code == "melate_retro" and scraper.actualizar_csv():
             history = loader.load_data()
         else:
+            ui.console.print(
+                "[bold red]❌ No se pudieron obtener datos para este sorteo.[/]"
+            )
             return None
 
     if not history or not history.dates:
         return None
 
-    # LÓGICA DE ACTUALIZACIÓN INTELIGENTE (UX Refined)
-    # Buscamos la fecha más reciente (el CSV es descendente, pero max() es infalible)
-    try:
-        dates_obj = []
-        for d in history.dates:
-            if isinstance(d, str):
-                dates_obj.append(datetime.strptime(d, "%d/%m/%Y").date())
-            else:
-                dates_obj.append(d)
-
-        ultima_fecha = max(dates_obj)
-        dias_desde_ultimo = (datetime.now().date() - ultima_fecha).days
-
-        # Si han pasado más de 3 días, intentamos sincronizar (Melate Retro: Mar, Jue, Sáb)
-        if dias_desde_ultimo > 3:
-            ui.console.print(
-                f"[cyan]🌐 Sincronizando nuevos sorteos (Último: {ultima_fecha})...[/]"
-            )
-            if scraper.actualizar_csv():
-                history = loader.load_data()
-    except (ValueError, TypeError) as e:
-        ui.console.print(
-            f"[dim red]Aviso: No se pudo verificar caducidad de datos ({e})[/]"
-        )
-
     return history
 
 
+def select_lottery_profile(ui):
+    """
+    Interfaz de selección de sorteo al inicio.
+    """
+    ui.console.print("\n[bold cyan]🛸 MRPRO SYSTEM - SELECCIÓN DE MISIÓN[/]")
+    ui.console.print("=" * 45)
+    ui.console.print("1. Melate Retro (Tradicional)")
+    ui.console.print("2. Tris Multiplicador (Alta Frecuencia)")
+    ui.console.print("0. Salir")
+
+    choice = ui.console.input("\n[bold yellow]Selecciona el objetivo: [/]")
+
+    if choice == "1":
+        return LOTTERY_PROFILES["melate_retro"]
+    elif choice == "2":
+        return LOTTERY_PROFILES["tris_multiplicador"]
+    elif choice == "0":
+        sys.exit()
+    else:
+        ui.console.print("[red]Opción inválida. Reintentando...[/]")
+        return select_lottery_profile(ui)
+
+
 def main():
-    # 1. Preparación de Interfaz
     ui = ConsoleUI()
     ui.clear_screen()
-    ui.console.print("[bold white]📡 INICIANDO SISTEMA MRPRO V15...[/]", justify="left")
 
-    # 2. Inicialización de Datos (Carga Silenciosa)
-    loader = MelateLoader(CSV_FILE_PATH)
-    history = initialize_data_layer(ui)
+    # 1. Selección del Perfil de Lotería
+    profile = select_lottery_profile(ui)
 
+    # 2. Inicialización del Loader con el perfil inyectado
+    loader = LotteryLoader(profile)
+
+    # 3. Inicialización de Capa de Datos
+    history = initialize_data_layer(ui, loader, profile)
     if not history:
-        ui.console.print(
-            "[bold red]❌ ERROR CRÍTICO:[/] No se pudo establecer conexión con el histórico."
-        )
+        ui.console.print("[bold red]FATAL ERROR: Capa de datos no inicializada.[/]")
         return
 
-    # 3. Inyección de dependencias al controlador
-    controller = MissionController(ui, history)
+    # 4. Configuración del Controlador de Misión
+    # Inyectamos el historial y el perfil para que las estrategias sepan qué reglas usar
+    controller = MissionController(ui, history, profile)
 
-    # 4. BUCLE OPERATIVO (Command Center)
+    # 5. Loop Principal de Operaciones
     while True:
-        # UX: Refresco visual de bienvenida
-        ui.show_welcome()
+        ui.clear_screen()
 
-        # Sincronización de estado para el HUD (Heads-Up Display)
-        # Buscamos el máximo real para evitar el error del ID incorrecto
+        # Metadata de HUD
         ultimo_id = max(history.concursos)
         proximo_id = ultimo_id + 1
-
-        # Verificamos si ya hay apuestas en el Ledger para el HUD
         apuestas_bloqueadas = report.tiene_apuestas_pendientes(proximo_id)
 
         # Renderizado de la barra de estado superior
@@ -116,13 +114,17 @@ def main():
         try:
             controller.run_mission(opcion)
 
-            # UX: Si hubo sincronización o liquidación, refrescamos la memoria del sistema
+            # UX: Si hubo sincronización o liquidación, refrescamos la memoria
             if opcion.upper() in ["5", "8"]:
                 history = loader.load_data()
                 controller.history = history
 
         except Exception as e:
             ui.console.print(f"\n[bold red]⚠️ ERROR EN MISIÓN:[/] {e}")
+            import traceback
+
+            # Solo para debug de arquitectura en desarrollo:
+            # ui.console.print(traceback.format_exc())
             ui.console.input(
                 f"\n[yellow]Presiona ENTER para reestablecer consola...[/]"
             )
@@ -132,5 +134,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n\n{Fore.RED}🛑 Interrupción forzada por el usuario.{Style.RESET_ALL}")
-        sys.exit()
+        print(
+            f"\n{Fore.RED}Interrupción forzada por el usuario. Cerrando...{Style.RESET_ALL}"
+        )

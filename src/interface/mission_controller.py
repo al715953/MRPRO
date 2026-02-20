@@ -16,9 +16,10 @@ from src.data_access.visualizer import run_forensic_visualization
 
 
 class MissionController:
-    def __init__(self, ui, history):
+    def __init__(self, ui, history, profile=None):
         self.ui = ui
         self.history = history
+        self.profile = profile
 
     def run_mission(self, option):
         option = option.upper()

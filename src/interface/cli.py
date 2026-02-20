@@ -1,6 +1,7 @@
 # src/interface/cli.py
 
 import os
+import sys
 from collections import Counter
 from rich.console import Console
 from rich.table import Table
@@ -13,6 +14,18 @@ from src.domain.dtos import PredictionResultDTO, DrawHistoryDTO
 from src.data_access.config import VERSION_TAG
 from src.core.health import get_model_status
 
+
+def _ensure_utf8_console():
+    """Evita errores con emojis/unicode en terminales Windows cp1252."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_ensure_utf8_console()
 console = Console()
 
 
