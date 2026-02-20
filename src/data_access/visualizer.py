@@ -3,8 +3,6 @@
 import json
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from src.data_access.config import DATA_FOLDER
 
 
@@ -13,6 +11,14 @@ def run_forensic_visualization(json_path=None):
     VISUALIZER V7.21: Tablero Táctico Magneto (Clean UI).
     Corregido para procesar la estructura de datos Omega Stride V15.
     """
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except Exception as e:
+        print(f"❌ Dependencias de visualización no disponibles: {e}")
+        print("ℹ️ Instala/actualiza matplotlib y seaborn para usar esta opción.")
+        return
+
     if json_path is None:
         json_path = os.path.join(DATA_FOLDER, "backtest_results.json")
 

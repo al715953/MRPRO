@@ -160,6 +160,23 @@ BEST_SETTINGS = {
     },
 }
 
+# --- CONFIGURACION BASE: TRIS V1-A ---
+BEST_SETTINGS_TRIS = {
+    "num_tickets": 200,
+    "backtest_size": 500,
+    "topk_k": 2000,
+    "beam_width": 2500,
+    "per_pos_topm": 6,
+    "diversity_min_hamming": 2,
+    "short_window": 200,
+    "long_window": 2000,
+    "alpha_bayes": 0.5,
+    "mix_lambda": 0.7,
+    "markov_window": 2000,
+    "alpha_markov": 0.2,
+    "blend_markov": 0.35,
+}
+
 # --- ESTÉTICA DE CONSOLA (ANSI) ---
 CYAN = "\033[0;36m"
 VERDE = "\033[0;32m"

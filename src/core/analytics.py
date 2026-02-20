@@ -37,30 +37,50 @@ class PerformanceTracker:
         self._ensure_log_exists()
 
     def _ensure_log_exists(self):
+        columns_order = [
+            "timestamp",
+            "tag",
+            "draw_id",
+            "hits",
+            "univ_size",
+            "rank",
+            "proximity",
+            "ai_score",
+            "geo_score",
+            "hybrid_score",
+            "sniper_log",
+            "event_id",
+            "profile_code",
+            "dataset_hash",
+            "model_version",
+            "seed",
+            "split_id",
+            "metrics_json",
+        ]
+
         if not os.path.exists(self.log_path):
-            df = pd.DataFrame(
-                columns=[
-                    "timestamp",
-                    "tag",
-                    "draw_id",
-                    "hits",
-                    "univ_size",
-                    "rank",
-                    "proximity",
-                    "ai_score",
-                    "geo_score",
-                    "hybrid_score",
-                    "sniper_log",
-                ]
-            )
-            df.to_csv(self.log_path, index=False)
+            pd.DataFrame(columns=columns_order).to_csv(self.log_path, index=False)
+            return
+
+        try:
+            existing = pd.read_csv(self.log_path)
+            changed = False
+            for col in columns_order:
+                if col not in existing.columns:
+                    existing[col] = ""
+                    changed = True
+            if changed:
+                existing = existing[columns_order]
+                existing.to_csv(self.log_path, index=False)
+        except Exception:
+            # Fallback seguro ante CSV corrupto
+            pd.DataFrame(columns=columns_order).to_csv(self.log_path, index=False)
 
     def log_run(self, result_dto, tag, forensic_data):
         """
         Punto de Persistencia Dual: Guarda en CSV para histórico y JSON para el modelo estático.
         """
-        if not forensic_data:
-            return
+        forensic_data = forensic_data or []
 
         # --- FASE 1: PERSISTENCIA CSV (Forense) ---
         self._save_to_csv(tag, forensic_data)
@@ -70,6 +90,9 @@ class PerformanceTracker:
 
     def _save_to_csv(self, tag, forensic_data):
         try:
+            if not forensic_data:
+                return
+
             new_rows = pd.DataFrame(forensic_data)
             new_rows["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_rows["tag"] = tag
@@ -86,16 +109,39 @@ class PerformanceTracker:
                 "geo_score",
                 "hybrid_score",
                 "sniper_log",
+                "event_id",
+                "profile_code",
+                "dataset_hash",
+                "model_version",
+                "seed",
+                "split_id",
+                "metrics_json",
             ]
 
             for col in columns_order:
                 if col not in new_rows.columns:
                     new_rows[col] = ""
 
+            if "metrics_json" in new_rows.columns:
+                def _compact_json(value):
+                    if isinstance(value, dict):
+                        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                    if isinstance(value, list):
+                        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                    if value is None or value == "":
+                        return ""
+                    return str(value)
+
+                new_rows["metrics_json"] = new_rows["metrics_json"].apply(_compact_json)
+
             new_rows = new_rows[columns_order]
 
             if os.path.exists(self.log_path):
                 existing = pd.read_csv(self.log_path)
+                for col in columns_order:
+                    if col not in existing.columns:
+                        existing[col] = ""
+                existing = existing[columns_order]
                 combined = pd.concat([existing, new_rows], ignore_index=True)
             else:
                 combined = new_rows

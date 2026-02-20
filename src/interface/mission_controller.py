@@ -5,14 +5,22 @@ import src.data_access.scraper as scraper
 import subprocess
 from colorama import Fore, Style
 from rich.panel import Panel
+from rich.table import Table
 from src.domain.dtos import PredictionConfigDTO
-from src.data_access.config import BEST_SETTINGS, TOTAL_BALLS, TICKET_SIZE, VERSION_TAG
+from src.data_access.config import (
+    BEST_SETTINGS,
+    BEST_SETTINGS_TRIS,
+    TOTAL_BALLS,
+    TICKET_SIZE,
+    VERSION_TAG,
+)
 from src.strategies.universe_reduction import UniverseReductionStrategy
 from src.strategies.genetic_selector import GeneticSelectorStrategy
+from src.strategies.tris.tris_forecast import TrisForecastV1A
 from src.core.backtester import BacktestEngine
 from src.core.optimizer import StrategyOptimizer
 from src.core.coverage_tester import CoverageTester
-from src.data_access.visualizer import run_forensic_visualization
+from src.core.rules import TrisMultiplicadorRules
 
 
 class MissionController:
@@ -71,15 +79,9 @@ class MissionController:
         elif option == "5":
             self._update_history()
         elif option == "6":
-            self._notify_beta_feature(
-                "Backtest Tris",
-                "El laboratorio financiero de Tris aun no tiene reglas/ledger operativos.",
-            )
+            self._run_tris_backtest()
         elif option == "7":
-            self._notify_beta_feature(
-                "Produccion Tris",
-                "La generacion de tickets Tris se habilitara en la siguiente fase.",
-            )
+            self._run_tris_production()
         elif option == "8":
             self._notify_beta_feature(
                 "Liquidacion Tris",
@@ -239,8 +241,94 @@ class MissionController:
 
     def _run_forensic_plot(self):
         print(f"\n{Fore.CYAN}📊 Generando visualización forense...{Style.RESET_ALL}")
-        run_forensic_visualization()
+        try:
+            from src.data_access.visualizer import run_forensic_visualization
+
+            run_forensic_visualization()
+        except Exception as e:
+            print(
+                f"{Fore.RED}❌ No se pudo cargar el módulo de visualización: {e}{Style.RESET_ALL}"
+            )
         input(f"\n{Fore.YELLOW}>> Reporte generado. Presiona ENTER...{Style.RESET_ALL}")
+
+    def _run_tris_backtest(self):
+        self.ui.clear_screen()
+        self.ui.console.print(
+            "\n[bold magenta]🧪 BACKTEST TRIS V1-A (BAYES + MARKOV)[/]"
+        )
+
+        settings = BEST_SETTINGS_TRIS.copy()
+        config = PredictionConfigDTO(
+            total_balls=self.profile.total_balls,
+            ticket_size=self.profile.ticket_size,
+            num_tickets=int(settings["num_tickets"]),
+            backtest_size=int(settings["backtest_size"]),
+            filter_overrides=settings.copy(),
+        )
+
+        engine = BacktestEngine(rules=TrisMultiplicadorRules())
+        engine.run(
+            strategy=TrisForecastV1A(),
+            history=self.history,
+            config=config,
+            verbose=True,
+            pre_process_strategy=None,
+        )
+        self._pause()
+
+    def _run_tris_production(self):
+        self.ui.clear_screen()
+        self.ui.console.print(
+            "\n[bold green]🎯 PRODUCCION TRIS V1-A (ONE-SHOT)[/]"
+        )
+
+        settings = BEST_SETTINGS_TRIS.copy()
+        config = PredictionConfigDTO(
+            total_balls=self.profile.total_balls,
+            ticket_size=self.profile.ticket_size,
+            num_tickets=int(settings["num_tickets"]),
+            backtest_size=int(settings["backtest_size"]),
+            filter_overrides=settings.copy(),
+        )
+
+        predictor = TrisForecastV1A()
+        pred = predictor.predict(self.history, config)
+
+        preview_n = min(10, len(pred.tickets))
+        self.ui.console.print(
+            f"[cyan]Estrategia:[/] {pred.strategy_name} | [cyan]Tickets generados:[/] {len(pred.tickets)}"
+        )
+        self.ui.console.print(f"[cyan]Top {preview_n} tickets:[/]")
+        for idx, t in enumerate(pred.tickets[:preview_n], start=1):
+            t_str = "".join(str(int(d)) for d in t[:5])
+            self.ui.console.print(f"  [bold]{idx:02d}.[/] {t_str}")
+
+        pos_probs = pred.metadata.get("pos_probs", [])
+        if pos_probs and len(pos_probs) == 5:
+            table = Table(title="Top-3 digitos por posicion", show_header=True)
+            table.add_column("Pos", justify="center")
+            table.add_column("Top-1", justify="center")
+            table.add_column("Top-2", justify="center")
+            table.add_column("Top-3", justify="center")
+
+            for pos in range(5):
+                row = pos_probs[pos]
+                ranked = sorted(
+                    enumerate(row),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:3]
+                top_cells = [f"{d} ({p:.3f})" for d, p in ranked]
+                table.add_row(str(pos + 1), top_cells[0], top_cells[1], top_cells[2])
+
+            self.ui.console.print(table)
+
+        p_multiplier = float(pred.metadata.get("p_multiplier", 0.0))
+        entropy_mean = float(pred.metadata.get("entropy_mean", 0.0))
+        self.ui.console.print(
+            f"[yellow]p_multiplier:[/] {p_multiplier:.4f} | [yellow]entropy_mean:[/] {entropy_mean:.4f}"
+        )
+        self._pause()
 
     def _retrain_model(self):
         """Módulo de Calibración de Neuronas V15."""

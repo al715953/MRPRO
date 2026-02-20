@@ -7,14 +7,48 @@ class LotteryForensics:
     """Módulo de Auditoría de Alta Fidelidad V15 (Omega Stride)."""
 
     @staticmethod
+    def _minimal_result(univ_size: int = 0) -> Dict[str, Any]:
+        return {"hits": 0, "rank": 0, "proximity": 999, "univ_size": univ_size}
+
+    @staticmethod
     def audit_winner(
         snapshot: Dict[str, Any], target_numbers: list, xp_audit
     ) -> Dict[str, Any]:
         """
         Analiza el desempeño de un sorteo específico comparando el universo contra el ganador.
         """
-        if not snapshot or "universe" not in snapshot:
-            return {"hits": 0, "rank": 0, "proximity": 999, "univ_size": 0}
+        if not snapshot:
+            # Snapshot vacío o nulo: no hay material de auditoría.
+            return LotteryForensics._minimal_result(0)
+
+        if "universe" not in snapshot:
+            # Ruta Tris/no-universe: auditoría sobre tickets predichos.
+            pred_tickets = snapshot.get("pred_tickets") or snapshot.get("_pred_tickets")
+            if not pred_tickets:
+                return LotteryForensics._minimal_result(0)
+
+            target_digits = [int(x) for x in target_numbers[:5]]
+            hits_vec = []
+            for ticket in pred_tickets:
+                t = [int(x) for x in ticket[:5]]
+                hits_pos = sum(1 for i in range(5) if t[i] == target_digits[i])
+                hits_vec.append(hits_pos)
+
+            max_h = max(hits_vec) if hits_vec else 0
+            best_idx = hits_vec.index(max_h) if hits_vec else 0
+            hamming_min = 5 - max_h
+            rank = (best_idx + 1) if max_h == 5 else 0
+
+            return {
+                "hits": int(max_h),
+                "rank": int(rank),
+                "proximity": int(hamming_min),
+                "univ_size": len(pred_tickets),
+                "hybrid_score": 0.0,
+                "ai_score": 0.0,
+                "geo_score": 0.0,
+                "sniper_log": snapshot.get("sniper_msg", "N/A"),
+            }
 
         univ = snapshot["universe"]
 
@@ -39,7 +73,7 @@ class LotteryForensics:
             xp = np
 
         if max_h == 0:
-            return {"hits": 0, "rank": 0, "proximity": 999, "univ_size": len(univ)}
+            return LotteryForensics._minimal_result(len(univ))
 
         # 2. Identificación de Coordenadas de Éxito
         best_indices = xp.where(hits_vec == max_h)[0]

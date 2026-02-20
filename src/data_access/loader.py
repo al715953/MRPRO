@@ -140,3 +140,65 @@ class LotteryLoader:
             dates=fechas,
             winning_numbers=numeros,
         )
+
+
+class TrisMultiplicadorLoader:
+    """
+    Adaptador legacy para pruebas/consumidores antiguos.
+    Carga historicos Tris desde una ruta de CSV directa.
+    """
+
+    def __init__(self, csv_path: str):
+        self.csv_path = csv_path
+
+    def load_data(self) -> DrawHistoryDTO:
+        if not os.path.exists(self.csv_path):
+            raise FileNotFoundError(f"No se encontró el archivo: {self.csv_path}")
+
+        df = pd.read_csv(self.csv_path)
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                df["FECHA"] = pd.to_datetime(df["FECHA"], format=fmt)
+                break
+            except (ValueError, KeyError):
+                continue
+
+        digit_candidates = [
+            [f"DIGITO{i}" for i in range(1, 6)],
+            [f"D{i}" for i in range(1, 6)],
+            [f"F{i}" for i in range(1, 6)],
+            [f"R{i}" for i in range(1, 6)],
+        ]
+
+        digit_cols = next(
+            (cols for cols in digit_candidates if set(cols).issubset(df.columns)),
+            None,
+        )
+
+        if digit_cols:
+            digits_df = df[digit_cols].apply(pd.to_numeric, errors="coerce")
+            valid_mask = ~digits_df.isna().any(axis=1)
+            digits_df = digits_df.loc[valid_mask].astype(int)
+            concursos = df.loc[valid_mask, "CONCURSO"].tolist()
+            fechas = df.loc[valid_mask, "FECHA"].tolist()
+            numeros = digits_df.values.tolist()
+        elif "NUMEROS" in df.columns:
+            concursos, fechas, numeros = [], [], []
+            for _, row in df.iterrows():
+                digits = "".join(ch for ch in str(row["NUMEROS"]) if ch.isdigit())
+                if not digits:
+                    continue
+                digits = digits.zfill(5)[-5:]
+                concursos.append(row["CONCURSO"])
+                fechas.append(row["FECHA"])
+                numeros.append([int(ch) for ch in digits])
+        else:
+            raise ValueError(
+                "CSV Tris sin columnas válidas: requiere DIGITO1..5 (o D/F/R1..5) o NUMEROS."
+            )
+
+        return DrawHistoryDTO(
+            concursos=concursos,
+            dates=fechas,
+            winning_numbers=numeros,
+        )

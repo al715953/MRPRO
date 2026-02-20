@@ -53,11 +53,12 @@ class TrisMultiplicadorRules:
     def validate_ticket(
         self, ticket: List[int], winning_draw: List[int]
     ) -> Tuple[int, bool]:
-        # Para Tris: acierto principal es orden exacto de los 5 dígitos.
-        exact_match = int(ticket == winning_draw[:5])
-        # has_adicional se reutiliza para indicar presencia de multiplicador (>1) en el sorteo.
+        winning_digits = winning_draw[:5]
+        hits_pos = sum(
+            1 for i in range(5) if int(ticket[i]) == int(winning_digits[i])
+        )
         has_multiplier = bool(winning_draw[5]) if len(winning_draw) > 5 else False
-        return exact_match * 5, has_multiplier
+        return hits_pos, has_multiplier
 
     def calculate_prize(self, hits_naturales: int, has_adicional: bool) -> float:
         if hits_naturales < 5:

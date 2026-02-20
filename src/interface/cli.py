@@ -141,8 +141,8 @@ class ConsoleUI:
             "[dim]--[/]",
             "[dim]SISTEMA[/]",
         )
-        menu_table.add_row("6", "Backtest Tris [yellow](beta)[/]", "0", "Finalizar Sesion")
-        menu_table.add_row("7", "[bold green]EJECUTAR MODO TRIS [yellow](beta)[/][/]", "", "")
+        menu_table.add_row("6", "Backtest Tris", "0", "Finalizar Sesion")
+        menu_table.add_row("7", "[bold green]EJECUTAR MODO TRIS[/]", "", "")
         menu_table.add_row("8", "[bold yellow]LIQUIDAR CARTERA TRIS [yellow](beta)[/][/]", "", "")
 
         self.console.print(menu_table)
