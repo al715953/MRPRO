@@ -29,9 +29,7 @@ def initialize_data_layer(ui, loader, profile):
         ui.console.print(f"[yellow]⚠️ Error al cargar base de datos: {e}[/]")
         ui.console.print("[cyan]Iniciando descarga de emergencia...[/]")
 
-        # El scraper actualmente está optimizado para Melate,
-        # para Tris podrías necesitar implementar su propia lógica de scraping
-        if profile.code == "melate_retro" and scraper.actualizar_csv():
+        if scraper.actualizar_csv(profile.code):
             history = loader.load_data()
         else:
             ui.console.print(
@@ -55,7 +53,19 @@ def select_lottery_profile(ui):
     ui.console.print("2. Tris Multiplicador (Alta Frecuencia)")
     ui.console.print("0. Salir")
 
-    choice = ui.console.input("\n[bold yellow]Selecciona el objetivo: [/]")
+    try:
+        choice = ui.console.input("\n[bold yellow]Selecciona el objetivo: [/]")
+    except KeyboardInterrupt:
+        ui.console.print(
+            "\n[yellow]Interrupción detectada (Ctrl+C). "
+            "Ingresa 1, 2 o 0 para continuar.[/]"
+        )
+        return select_lottery_profile(ui)
+    except EOFError:
+        ui.console.print(
+            "\n[bold red]No hay entrada interactiva disponible (EOF). Cerrando.[/]"
+        )
+        return None
 
     if choice == "1":
         return LOTTERY_PROFILES["melate_retro"]
@@ -74,6 +84,8 @@ def main():
 
     # 1. Selección del Perfil de Lotería
     profile = select_lottery_profile(ui)
+    if profile is None:
+        return
 
     # 2. Inicialización del Loader con el perfil inyectado
     loader = LotteryLoader(profile)
@@ -98,10 +110,12 @@ def main():
         apuestas_bloqueadas = report.tiene_apuestas_pendientes(proximo_id)
 
         # Renderizado de la barra de estado superior
-        ui.show_status_bar(history, tiene_apuestas=apuestas_bloqueadas)
+        ui.show_status_bar(
+            history, tiene_apuestas=apuestas_bloqueadas, profile=profile
+        )
 
         # Despliegue de Menú y captura de orden
-        opcion = ui.show_main_menu()
+        opcion = ui.show_main_menu(profile)
 
         if opcion == "0":
             ui.clear_screen()

@@ -41,10 +41,13 @@ class ConsoleUI:
     def clear_screen(self):
         os.system("cls" if os.name == "nt" else "clear")
 
-    def show_status_bar(self, history: DrawHistoryDTO, tiene_apuestas: bool = False):
+    def show_status_bar(
+        self, history: DrawHistoryDTO, tiene_apuestas: bool = False, profile=None
+    ):
         """HUD (Heads-Up Display) Refinado."""
         ultimo_id = max(history.concursos)
         proximo_id = ultimo_id + 1
+        game_label = profile.display_name if profile else "MRPRO"
         status_ledg = (
             "[white on red] 🔒 BLOQUEADO [/]"
             if tiene_apuestas
@@ -57,7 +60,7 @@ class ConsoleUI:
         grid.add_column(justify="right", ratio=1)
 
         grid.add_row(
-            f"[bold blue]📦 BASE:[/] {ultimo_id}",
+            f"[bold blue]📦 {game_label}:[/] {ultimo_id}",
             f"[bold cyan]🎯 TARGET:[/] {proximo_id}  {status_ledg}",
             f"[dim]{VERSION_TAG}[/]",
         )
@@ -74,8 +77,12 @@ class ConsoleUI:
             justify="left",
         )
 
-    def show_main_menu(self) -> str:
+    def show_main_menu(self, profile=None) -> str:
+        if profile and profile.code == "tris_multiplicador":
+            return self._show_main_menu_tris()
+        return self._show_main_menu_melate()
 
+    def _show_main_menu_melate(self) -> str:
         dias, color = get_model_status()
         status_brain = f"[{color}]({dias})[/]"
 
@@ -112,14 +119,47 @@ class ConsoleUI:
         self.console.print(menu_table)
         return self.console.input(f"\n[bold cyan]MRPRO[/] > ")
 
-    def show_history(self, history: DrawHistoryDTO):
+    def _show_main_menu_tris(self) -> str:
+        menu_table = Table(box=None, show_header=False, padding=(0, 2))
+        menu_table.add_column("ID", style="bold cyan", width=4)
+        menu_table.add_column("Accion", style="white")
+        menu_table.add_column("ID ", style="bold cyan", width=4)
+        menu_table.add_column("Accion ", style="white")
+
+        menu_table.add_row(
+            "[dim]--[/]", "[dim]INTELIGENCIA[/]", "[dim]--[/]", "[dim]DATOS[/]"
+        )
+        menu_table.add_row("1", "Ver Historial", "4", "Calibrador Tris [yellow](beta)[/]")
+        menu_table.add_row("2", "Analisis Frecuencia", "5", "Sincronizar Historico")
+        menu_table.add_row("3", "Optimizador Tris [yellow](beta)[/]", "", "")
+        menu_table.add_row("P", "Plot Forense [yellow](beta)[/]", "", "")
+
+        menu_table.add_row("", "", "", "")
+        menu_table.add_row(
+            "[dim]--[/]",
+            "[bold green]OPERACIONES[/]",
+            "[dim]--[/]",
+            "[dim]SISTEMA[/]",
+        )
+        menu_table.add_row("6", "Backtest Tris [yellow](beta)[/]", "0", "Finalizar Sesion")
+        menu_table.add_row("7", "[bold green]EJECUTAR MODO TRIS [yellow](beta)[/][/]", "", "")
+        menu_table.add_row("8", "[bold yellow]LIQUIDAR CARTERA TRIS [yellow](beta)[/][/]", "", "")
+
+        self.console.print(menu_table)
+        return self.console.input(f"\n[bold cyan]TRIS[/] > ")
+
+    def show_history(self, history: DrawHistoryDTO, profile=None):
         """Visualización compacta del historial (Opción 1)."""
+        is_tris = bool(profile and profile.code == "tris_multiplicador")
+        title = "HISTORIAL TRIS RECIENTE" if is_tris else "HISTORIAL RECIENTE"
         table = Table(
-            title="HISTORIAL RECIENTE", box=box.SIMPLE, header_style="bold blue"
+            title=title, box=box.SIMPLE, header_style="bold blue"
         )
         table.add_column("Concurso", justify="center")
         table.add_column("Fecha", justify="center")
-        table.add_column("Combinación Ganadora", justify="center")
+        table.add_column("Combinacion Ganadora", justify="center")
+        if is_tris:
+            table.add_column("Multiplicador", justify="center")
 
         # ZIP de datos y ordenamiento por ID descendente
         data = sorted(
@@ -131,28 +171,56 @@ class ConsoleUI:
         ]  # Mostramos los últimos 15
 
         for conc, date, nums in data:
-            nums_str = "-".join(f"{n:02d}" for n in nums[:6])
-            if len(nums) > 6:
-                nums_str += f" [bold yellow]({nums[6]:02d})[/]"
-            table.add_row(str(conc), str(date), nums_str)
+            date_text = self._format_date_only(date)
+            if is_tris:
+                nums_str = "".join(str(int(n)) for n in nums[:5])
+                has_multiplier = bool(nums[5]) if len(nums) > 5 else False
+                mult_text = (
+                    "[bold green]SI[/]" if has_multiplier else "[bold red]NO[/]"
+                )
+                table.add_row(str(conc), date_text, nums_str, mult_text)
+            else:
+                nums_str = "-".join(f"{n:02d}" for n in nums[:6])
+                if len(nums) > 6:
+                    nums_str += f" [bold yellow]({nums[6]:02d})[/]"
+                table.add_row(str(conc), date_text, nums_str)
 
         self.console.print(table)
 
-    def show_frequency_analysis(self, history: DrawHistoryDTO):
+    def _format_date_only(self, value) -> str:
+        if hasattr(value, "strftime"):
+            try:
+                return value.strftime("%d/%m/%Y")
+            except Exception:
+                pass
+        text = str(value)
+        if " " in text:
+            text = text.split(" ", 1)[0]
+        if "T" in text:
+            text = text.split("T", 1)[0]
+        return text
+
+    def show_frequency_analysis(self, history: DrawHistoryDTO, profile=None):
         """Dashboard de frecuencias Hot/Cold (Opción 2)."""
-        all_nums = [n for draw in history.winning_numbers for n in draw[:6]]
+        is_tris = bool(profile and profile.code == "tris_multiplicador")
+        limit = 5 if is_tris else 6
+        all_nums = [n for draw in history.winning_numbers for n in draw[:limit]]
         counts = Counter(all_nums)
 
-        # Asegurar que todos los números (1-39) existan en el conteo
-        for n in range(1, 40):
+        # Asegurar cobertura completa de dominio por juego.
+        number_range = range(0, 10) if is_tris else range(1, 40)
+        for n in number_range:
             if n not in counts:
                 counts[n] = 0
 
-        hot_table = Table(title="🔥 HOT (Frecuentes)", box=box.SIMPLE)
+        hot_title = "HOT DIGITOS" if is_tris else "HOT (Frecuentes)"
+        cold_title = "COLD DIGITOS" if is_tris else "COLD (Rezagados)"
+
+        hot_table = Table(title=f"🔥 {hot_title}", box=box.SIMPLE)
         hot_table.add_column("Num", style="bold yellow")
         hot_table.add_column("Hits", justify="right")
 
-        cold_table = Table(title="❄️ COLD (Rezagados)", box=box.SIMPLE)
+        cold_table = Table(title=f"❄️ {cold_title}", box=box.SIMPLE)
         cold_table.add_column("Num", style="bold blue")
         cold_table.add_column("Hits", justify="right")
 

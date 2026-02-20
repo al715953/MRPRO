@@ -75,19 +75,65 @@ class LotteryLoader:
 
     def _process_tris(self, df: pd.DataFrame) -> DrawHistoryDTO:
         """Lógica para Tris: 5 dígitos independientes (0-9). PROHIBIDO ORDENAR."""
-        concursos = df["CONCURSO"].tolist()
-        fechas = df["FECHA"].tolist()
-
-        # Tris usa R1 a R5. Mantenemos la posición exacta (es una permutación)
-        # Si tu CSV de Tris usa nombres de columnas distintos, cámbialos aquí:
+        # Tris usa R1 a R5. Mantenemos la posicion exacta (es una permutacion).
         cols_tris = ["R1", "R2", "R3", "R4", "R5"]
+        mult_col = next(
+            (
+                c
+                for c in df.columns
+                if c.strip().upper() in ("MULTIPLICADOR", "MULTIPLIER")
+            ),
+            None,
+        )
 
-        # Verificamos que existan las columnas, si no, intentamos extraer de una cadena
+        # Verificamos columnas; si no existen, usamos columna compacta NUMEROS.
         if set(cols_tris).issubset(df.columns):
-            numeros = df[cols_tris].values.tolist()
+            digits_df = df[cols_tris].apply(pd.to_numeric, errors="coerce")
+            valid_mask = ~digits_df.isna().any(axis=1)
+            digits_df = digits_df.loc[valid_mask].astype(int)
+
+            concursos = df.loc[valid_mask, "CONCURSO"].tolist()
+            fechas = df.loc[valid_mask, "FECHA"].tolist()
+            if mult_col:
+                mult_series = (
+                    df.loc[valid_mask, mult_col]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .map(
+                        {
+                            "SI": 1,
+                            "SÍ": 1,
+                            "YES": 1,
+                            "Y": 1,
+                            "TRUE": 1,
+                            "1": 1,
+                        }
+                    )
+                    .fillna(0)
+                    .astype(int)
+                    .tolist()
+                )
+            else:
+                mult_series = [0] * len(digits_df)
+
+            digit_rows = digits_df.values.tolist()
+            numeros = [digit_rows[i] + [mult_series[i]] for i in range(len(digit_rows))]
         else:
-            # Si el CSV de Tris trae los números juntos como "12345"
-            numeros = [list(map(int, list(str(x).zfill(5)))) for x in df["NUMEROS"]]
+            concursos, fechas, numeros = [], [], []
+            for _, row in df.iterrows():
+                raw = row.get("NUMEROS")
+                digits = "".join(ch for ch in str(raw) if ch.isdigit())
+                if not digits:
+                    continue
+                digits = digits.zfill(5)[-5:]
+                mult_raw = str(row.get(mult_col, "")).strip().upper() if mult_col else ""
+                has_multiplier = int(
+                    mult_raw in ("SI", "SÍ", "YES", "Y", "TRUE", "1")
+                )
+                concursos.append(row["CONCURSO"])
+                fechas.append(row["FECHA"])
+                numeros.append([int(ch) for ch in digits] + [has_multiplier])
 
         return DrawHistoryDTO(
             concursos=concursos,

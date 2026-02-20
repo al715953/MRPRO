@@ -22,6 +22,12 @@ class MissionController:
         self.profile = profile
 
     def run_mission(self, option):
+        if self._is_tris():
+            self._run_mission_tris(option)
+            return
+        self._run_mission_melate(option)
+
+    def _run_mission_melate(self, option):
         option = option.upper()
         if option == "1":
             self._view_history()
@@ -42,14 +48,59 @@ class MissionController:
             self._validate_bets()
         elif option == "P":
             self._run_forensic_plot()
+        else:
+            self.ui.console.print("[red]Opcion no valida.[/]")
+            self._pause()
+
+    def _run_mission_tris(self, option):
+        option = option.upper()
+        if option == "1":
+            self._view_history()
+        elif option == "2":
+            self._analyze_frequency()
+        elif option == "3":
+            self._notify_beta_feature(
+                "Optimizador Tris",
+                "La logica de optimizacion para secuencias (00000-99999) aun no esta integrada.",
+            )
+        elif option == "4":
+            self._notify_beta_feature(
+                "Reentrenamiento Tris",
+                "El pipeline de entrenamiento para Tris Multiplicador sigue en desarrollo.",
+            )
+        elif option == "5":
+            self._update_history()
+        elif option == "6":
+            self._notify_beta_feature(
+                "Backtest Tris",
+                "El laboratorio financiero de Tris aun no tiene reglas/ledger operativos.",
+            )
+        elif option == "7":
+            self._notify_beta_feature(
+                "Produccion Tris",
+                "La generacion de tickets Tris se habilitara en la siguiente fase.",
+            )
+        elif option == "8":
+            self._notify_beta_feature(
+                "Liquidacion Tris",
+                "La liquidacion de cartera para Tris requiere ledger separado y tabla oficial de premios.",
+            )
+        elif option == "P":
+            self._notify_beta_feature(
+                "Plot Forense Tris",
+                "El reporte forense para Tris aun no tiene esquema final.",
+            )
+        else:
+            self.ui.console.print("[red]Opcion no valida.[/]")
+            self._pause()
 
     def _view_history(self):
-        self.ui.show_history(self.history)
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+        self.ui.show_history(self.history, self.profile)
+        self._pause()
 
     def _analyze_frequency(self):
-        self.ui.show_frequency_analysis(self.history)
-        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+        self.ui.show_frequency_analysis(self.history, self.profile)
+        self._pause()
 
     def _run_optimizer(self):
         self.ui.clear_screen()
@@ -173,7 +224,8 @@ class MissionController:
 
     def _update_history(self):
         print(f"\n{Fore.YELLOW}🌐 Sincronizando datos...{Style.RESET_ALL}")
-        if scraper.actualizar_csv():
+        game_code = self.profile.code if self.profile else "melate_retro"
+        if scraper.actualizar_csv(game_code):
             print(f"{Fore.GREEN}✅ Historial actualizado.{Style.RESET_ALL}")
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
@@ -215,3 +267,20 @@ class MissionController:
             )
 
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+    def _notify_beta_feature(self, title: str, details: str):
+        self.ui.console.print(
+            Panel(
+                f"[bold yellow]MODULO EN BETA: {title}[/]\n\n{details}",
+                border_style="yellow",
+            )
+        )
+        self._pause()
+
+    def _pause(self):
+        self.ui.console.input(
+            f"\n[yellow]>> Presiona ENTER para volver...[/]"
+        )
+
+    def _is_tris(self) -> bool:
+        return bool(self.profile and self.profile.code == "tris_multiplicador")

@@ -32,9 +32,10 @@ TICKET_SIZE = 6
 URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQB0AGUALQBSAGUAdAByAG8A"
 
 # --- CONFIGURACIÓN: TRIS CON MULTIPLICADOR ---
-# Nota: Ajustar URL final cuando la fuente oficial quede confirmada.
+# El endpoint de Historicos usa ARHP en Base64 UTF-16LE.
+# "Tris" => "VAByAGkAcwA="
 URL_TRIS_MULTIPLICADOR = (
-    "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=VHJpcw=="
+    "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=VAByAGkAcwA="
 )
 TRIS_DIGITS = 5
 
