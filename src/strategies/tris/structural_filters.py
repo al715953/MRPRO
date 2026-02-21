@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+import numpy as np
+
 
 @dataclass
 class StructuralFilterConfig:
@@ -52,6 +54,83 @@ class StructuralFilterEngine:
     def __init__(self, config: StructuralFilterConfig):
         self.config = config
 
+    @staticmethod
+    def _coerce_prev(prev_digits, n_pos: int):
+        if prev_digits is None:
+            return None
+        prev_arr = np.asarray(prev_digits, dtype=np.int16).reshape(-1)
+        if prev_arr.size < n_pos:
+            return None
+        return prev_arr[:n_pos]
+
+    @staticmethod
+    def _cfg_value(cfg, key: str, default):
+        if cfg is None:
+            return default
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+        return getattr(cfg, key, default)
+
+    def _violations(self, ticket: List[int], prev_digits, cfg) -> List[str]:
+        vals = [int(d) for d in ticket]
+        violations = []
+
+        s = digit_sum(vals)
+        if s < int(self._cfg_value(cfg, "sum_min", 15)) or s > int(
+            self._cfg_value(cfg, "sum_max", 30)
+        ):
+            violations.append("sum")
+
+        allowed_even = self._cfg_value(cfg, "allowed_even_counts", (2, 3))
+        if not isinstance(allowed_even, (list, tuple, set)):
+            allowed_even = (allowed_even,)
+        allowed_even = tuple(int(v) for v in allowed_even)
+        if even_count(vals) not in allowed_even:
+            violations.append("parity")
+
+        if unique_count(vals) < int(self._cfg_value(cfg, "min_unique_digits", 3)):
+            violations.append("uniques")
+
+        run_len = max(2, int(self._cfg_value(cfg, "max_consecutive_run", 3)) + 1)
+        if has_consecutive_run(vals, run_len=run_len):
+            violations.append("consecutive")
+
+        if prev_digits is not None:
+            repeats = positional_repeats(vals, prev_digits.tolist())
+            if repeats > int(self._cfg_value(cfg, "max_positional_repeats_vs_prev", 2)):
+                violations.append("mirror_prev")
+
+        return violations
+
+    def passes(self, ticket: List[int], prev_digits: List[int] | None) -> bool:
+        prev = self._coerce_prev(prev_digits, len(ticket))
+        return len(self._violations(ticket, prev, self.config)) == 0
+
+    @staticmethod
+    def mask_all(
+        all_tickets,
+        prev_digits,
+        static_mask,
+        cfg,
+    ):
+        tickets = np.asarray(all_tickets, dtype=np.uint8)
+        base_mask = np.asarray(static_mask, dtype=bool)
+        if tickets.ndim != 2 or tickets.shape[1] != 5:
+            raise ValueError("all_tickets debe tener shape (N, 5).")
+        if base_mask.shape[0] != tickets.shape[0]:
+            raise ValueError("static_mask debe tener longitud N.")
+
+        prev = StructuralFilterEngine._coerce_prev(prev_digits, tickets.shape[1])
+        if prev is None:
+            return base_mask
+
+        max_repeats = int(
+            StructuralFilterEngine._cfg_value(cfg, "max_positional_repeats_vs_prev", 2)
+        )
+        mirror_count = np.sum(tickets.astype(np.int16) == prev[None, :], axis=1)
+        mirror_mask = mirror_count <= max_repeats
+        return base_mask & mirror_mask
+
     def apply(
         self,
         candidates: List[List[int]],
@@ -60,8 +139,8 @@ class StructuralFilterEngine:
     ):
         items = [[int(d) for d in ticket] for ticket in (candidates or [])]
         prev = (
-            [int(d) for d in prev_digits[: len(items[0])]]
-            if (prev_digits is not None and len(items) > 0)
+            self._coerce_prev(prev_digits, len(items[0]))
+            if len(items) > 0
             else None
         )
 
@@ -77,31 +156,8 @@ class StructuralFilterEngine:
         soft_total = 0.0
         soft_positive = 0
 
-        run_len = max(2, int(self.config.max_consecutive_run) + 1)
-        allowed_even = tuple(int(v) for v in self.config.allowed_even_counts)
-
         for ticket in items:
-            violations = []
-
-            s = digit_sum(ticket)
-            if s < int(self.config.sum_min) or s > int(self.config.sum_max):
-                violations.append("sum")
-
-            evens = even_count(ticket)
-            if evens not in allowed_even:
-                violations.append("parity")
-
-            uniq = unique_count(ticket)
-            if uniq < int(self.config.min_unique_digits):
-                violations.append("uniques")
-
-            if has_consecutive_run(ticket, run_len=run_len):
-                violations.append("consecutive")
-
-            if prev is not None:
-                repeats = positional_repeats(ticket, prev)
-                if repeats > int(self.config.max_positional_repeats_vs_prev):
-                    violations.append("mirror_prev")
+            violations = self._violations(ticket, prev, self.config)
 
             if violations:
                 for reason in set(violations):
