@@ -258,10 +258,30 @@ class MissionController:
         )
 
         settings = BEST_SETTINGS_TRIS.copy()
+        self.ui.console.print("\n[bold cyan]Modo de backtest Tris:[/]")
+        self.ui.console.print("1) Universe-only (solo filtros)")
+        self.ui.console.print("2) Full selector (ranking + selección final)")
+        mode_in = self.ui.console.input("\n[yellow]Selecciona modo [2]: [/]").strip()
+        if mode_in == "1":
+            tris_backtest_mode = "universe"
+            n_tickets = int(settings.get("num_tickets", 200))
+        else:
+            tris_backtest_mode = "selector"
+            try:
+                n_tickets = int(
+                    self.ui.console.input(
+                        f"[yellow]¿Cuántos tickets por sorteo? ({int(settings.get('num_tickets', 200))}): [/] "
+                    ).strip()
+                    or int(settings.get("num_tickets", 200))
+                )
+            except Exception:
+                n_tickets = int(settings.get("num_tickets", 200))
+        settings["tris_backtest_mode"] = tris_backtest_mode
+
         config = PredictionConfigDTO(
             total_balls=self.profile.total_balls,
             ticket_size=self.profile.ticket_size,
-            num_tickets=int(settings["num_tickets"]),
+            num_tickets=int(max(1, n_tickets)),
             backtest_size=int(settings["backtest_size"]),
             filter_overrides=settings.copy(),
         )

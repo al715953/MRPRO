@@ -33,6 +33,11 @@ from src.core.prob_metrics import (
 )
 from src.data_access.config import VERSION_TAG, DATA_FOLDER, get_lottery_profile
 from src.data_access.dataset_version import compute_dataset_version
+from src.strategies.tris.structural_filters import (
+    StructuralFilterConfig,
+    StructuralFilterEngine,
+)
+from src.strategies.tris.universe_5d import get_universe_and_static_mask
 from src.strategies.tris.random_within_filters import (
     RandomWithinStructuralFiltersStrategy,
 )
@@ -108,6 +113,28 @@ class BacktestEngine:
             "split_id": f"bt_last_{test_size}",
         }
 
+    @staticmethod
+    def _build_tris_structural_config(overrides):
+        ov = overrides if isinstance(overrides, dict) else {}
+        allowed_even = ov.get("structural_allowed_even_counts", [2, 3])
+        if allowed_even is None:
+            allowed_even = [2, 3]
+        if not isinstance(allowed_even, (list, tuple, set)):
+            allowed_even = [allowed_even]
+        return StructuralFilterConfig(
+            enabled=bool(ov.get("structural_enabled", True)),
+            sum_min=int(ov.get("structural_sum_min", 15)),
+            sum_max=int(ov.get("structural_sum_max", 30)),
+            allowed_even_counts=tuple(int(v) for v in allowed_even),
+            min_unique_digits=int(ov.get("structural_min_unique_digits", 3)),
+            max_consecutive_run=int(ov.get("structural_max_consecutive_run", 3)),
+            max_positional_repeats_vs_prev=int(
+                ov.get("structural_max_positional_repeats_vs_prev", 2)
+            ),
+            hard_filter=bool(ov.get("structural_hard_filter", True)),
+            soft_penalties=ov.get("structural_soft_penalties", None),
+        )
+
     def run(
         self,
         strategy,
@@ -154,13 +181,17 @@ class BacktestEngine:
             else {}
         )
         run_baseline = bool(overrides.get("run_baseline", True))
+        tris_backtest_mode = str(overrides.get("tris_backtest_mode", "selector")).lower()
+        is_tris_universe_mode = is_tris_profile and tris_backtest_mode == "universe"
         baseline_strategy = (
-            TrisUniformBaselineStrategy() if (is_tris_profile and run_baseline) else None
+            TrisUniformBaselineStrategy()
+            if (is_tris_profile and run_baseline and not is_tris_universe_mode)
+            else None
         )
         compare_baselines = bool(overrides.get("compare_baselines", False))
         random_filter_baseline = (
             RandomWithinStructuralFiltersStrategy()
-            if (is_tris_profile and compare_baselines)
+            if (is_tris_profile and compare_baselines and not is_tris_universe_mode)
             else None
         )
         baseline_compare_stats = (
@@ -187,6 +218,25 @@ class BacktestEngine:
         delta_ll_draw_ids = []
         delta_br_values = []
         delta_ll_details = []
+        tris_universe_sizes = []
+        tris_fs_pass_count = 0
+        tris_winner_fail_reasons = {
+            "sum": 0,
+            "parity": 0,
+            "uniques": 0,
+            "consecutive": 0,
+            "mirror_prev": 0,
+        }
+        tris_struct_cfg = None
+        tris_struct_engine = None
+        tris_all_tickets = None
+        tris_static_mask = None
+        if is_tris_universe_mode:
+            tris_struct_cfg = self._build_tris_structural_config(overrides)
+            tris_struct_engine = StructuralFilterEngine(tris_struct_cfg)
+            tris_all_tickets, _, tris_static_mask = get_universe_and_static_mask(
+                tris_struct_cfg
+            )
 
         self.console.print(
             f"\n[bold magenta]🚀 INICIANDO MISIÓN ALPHA GLOBAL ({VERSION_TAG})[/bold magenta]"
@@ -265,19 +315,60 @@ class BacktestEngine:
                                 jackpot_coverage += 1
 
                 # --- FASE 2: ESTRATEGIA ---
-                if is_reduction_only:
-                    prediction = strategy.predict(curr_h, config, verbose=False)
-                else:
-                    prediction = strategy.predict(curr_h, config)
-                snapshot = prediction.metadata
-                if is_reduction_only:
-                    reduced_sizes.append(
-                        int(snapshot.get("final_size", len(prediction.tickets)))
+                univ_size_curr = 0
+                fs_pass = False
+                winner_fail_reasons_curr = {}
+                if is_tris_universe_mode:
+                    prediction = None
+                    snapshot = {}
+                    prev_digits = (
+                        [int(d) for d in curr_h.winning_numbers[-1][:5]]
+                        if curr_h.winning_numbers
+                        else None
                     )
+                    winner_digits = [int(d) for d in target[:5]]
+                    final_mask = StructuralFilterEngine.mask_all(
+                        tris_all_tickets,
+                        prev_digits,
+                        tris_static_mask,
+                        tris_struct_cfg,
+                    )
+                    univ_size_curr = int(np.sum(final_mask))
+                    tris_universe_sizes.append(univ_size_curr)
+
+                    accepted_winner, winner_diag = tris_struct_engine.apply(
+                        [winner_digits], prev_digits
+                    )
+                    fs_pass = bool(len(accepted_winner) > 0)
+                    winner_rr = (
+                        winner_diag.get("reject_reasons", {})
+                        if isinstance(winner_diag, dict)
+                        else {}
+                    )
+                    winner_fail_reasons_curr = {
+                        k: int(v) for k, v in winner_rr.items() if int(v) > 0
+                    }
+                    if fs_pass:
+                        tris_fs_pass_count += 1
+                        jackpot_coverage += 1
+                    else:
+                        for k, v in winner_fail_reasons_curr.items():
+                            if k in tris_winner_fail_reasons:
+                                tris_winner_fail_reasons[k] += int(v)
+                else:
+                    if is_reduction_only:
+                        prediction = strategy.predict(curr_h, config, verbose=False)
+                    else:
+                        prediction = strategy.predict(curr_h, config)
+                    snapshot = prediction.metadata
+                    if is_reduction_only:
+                        reduced_sizes.append(
+                            int(snapshot.get("final_size", len(prediction.tickets)))
+                        )
 
                 prob_metrics = {}
                 baseline_metrics = {}
-                if is_tris_profile:
+                if is_tris_profile and not is_tris_universe_mode:
                     y_digits = [int(d) for d in target[:5]]
                     if isinstance(snapshot, dict) and "pos_probs" in snapshot:
                         try:
@@ -364,7 +455,17 @@ class BacktestEngine:
                             baseline_metrics = {}
 
                 # Auditoría Forense
-                if is_reduction_only:
+                if is_tris_universe_mode:
+                    audit = {
+                        "hits": int(max_hits if fs_pass else 0),
+                        "rank": 1 if fs_pass else 0,
+                        "proximity": 0 if fs_pass else 999,
+                        "ai_score": 0.0,
+                        "geo_score": 0.0,
+                        "jackpot_coverage_universe": int(fs_pass),
+                        "winner_fail_reasons": winner_fail_reasons_curr,
+                    }
+                elif is_reduction_only:
                     audit = None
                 else:
                     audit_snapshot = dict(snapshot) if snapshot else {}
@@ -385,11 +486,25 @@ class BacktestEngine:
                     audit["draw_id"] = int(t_id)
 
                     # 1. Guardamos el Tamaño del Universo
-                    audit["univ_size"] = (
-                        len(config.raw_universe_ptr)
-                        if config.raw_universe_ptr is not None
-                        else len(prediction.tickets)
-                    )
+                    if is_tris_universe_mode:
+                        audit["univ_size"] = int(univ_size_curr)
+                    else:
+                        tris_struct_u = None
+                        if is_tris_profile and isinstance(snapshot, dict):
+                            sf_diag = snapshot.get("structural_filters")
+                            if isinstance(sf_diag, dict):
+                                try:
+                                    tris_struct_u = int(sf_diag.get("accepted"))
+                                except Exception:
+                                    tris_struct_u = None
+                        if tris_struct_u is not None and tris_struct_u >= 0:
+                            audit["univ_size"] = tris_struct_u
+                        else:
+                            audit["univ_size"] = (
+                                len(config.raw_universe_ptr)
+                                if config.raw_universe_ptr is not None
+                                else len(prediction.tickets)
+                            )
 
                     # 2. Guardamos el Log del Sniper (sin cambios; se guarda en CSV igual)
                     audit["sniper_log"] = sniper_msg
@@ -422,6 +537,12 @@ class BacktestEngine:
                         metrics_payload["baseline_logloss"] = baseline_metrics["logloss"]
                         metrics_payload["baseline_brier"] = baseline_metrics["brier"]
                         metrics_payload["baseline_ece"] = baseline_metrics["ece"]
+                    if is_tris_universe_mode:
+                        metrics_payload["jackpot_coverage_universe"] = int(fs_pass)
+                        if winner_fail_reasons_curr:
+                            metrics_payload["winner_fail_reasons"] = (
+                                winner_fail_reasons_curr
+                            )
                     audit["metrics_json"] = metrics_payload
 
                     self.forensic_data.append(audit)
@@ -429,17 +550,24 @@ class BacktestEngine:
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
                 max_hit_this_draw = 0
                 high_hits_this_draw = {h: 0 for h in high_hit_levels}
-                for tkt in prediction.tickets:
-                    total_inv += self.rules.ticket_cost
-                    h_n, h_a = self.rules.validate_ticket(tkt, target)
-                    total_earn += self.rules.calculate_prize(h_n, h_a)
+                if is_tris_universe_mode:
+                    h_n = int(max_hits if fs_pass else 0)
                     hits_dist[h_n] += 1
-                    if h_n > max_hit_this_draw:
-                        max_hit_this_draw = h_n
+                    max_hit_this_draw = h_n
                     if h_n in high_hits_this_draw:
                         high_hits_this_draw[h_n] += 1
+                else:
+                    for tkt in prediction.tickets:
+                        total_inv += self.rules.ticket_cost
+                        h_n, h_a = self.rules.validate_ticket(tkt, target)
+                        total_earn += self.rules.calculate_prize(h_n, h_a)
+                        hits_dist[h_n] += 1
+                        if h_n > max_hit_this_draw:
+                            max_hit_this_draw = h_n
+                        if h_n in high_hits_this_draw:
+                            high_hits_this_draw[h_n] += 1
 
-                if baseline_compare_stats is not None:
+                if baseline_compare_stats is not None and not is_tris_universe_mode:
                     model_exact = int(high_hits_this_draw.get(max_hits, 0))
                     baseline_compare_stats["draws_evaluated"] += 1
                     baseline_compare_stats["model_exact_hits"] += model_exact
@@ -508,86 +636,118 @@ class BacktestEngine:
         baseline_prob_summary = None
         tris_delta_summary = None
         tris_outlier_summary = None
+        tris_universe_summary = None
         baseline_compare_summary = None
         if is_tris_profile:
-            tris_prob_summary = {
-                "logloss": (
-                    prob_metric_sums["logloss"] / prob_metric_count
-                    if prob_metric_count
-                    else None
-                ),
-                "brier": (
-                    prob_metric_sums["brier"] / prob_metric_count
-                    if prob_metric_count
-                    else None
-                ),
-                "ece": (
-                    prob_metric_sums["ece"] / prob_metric_count if prob_metric_count else None
-                ),
-                "count": prob_metric_count,
-            }
-            ll_delta_stats = self._bootstrap_mean_ci(delta_ll_values, n_resamples=2000)
-            br_delta_stats = self._bootstrap_mean_ci(delta_br_values, n_resamples=2000)
-            ll_delta_debug = self._delta_distribution_debug(
-                delta_ll_values, draw_ids=delta_ll_draw_ids, top_k=10
-            )
-            if ll_delta_stats is not None and ll_delta_debug is not None:
-                ll_delta_stats.update(ll_delta_debug)
-            if ll_delta_stats or br_delta_stats:
-                top_positive_outliers = sorted(
-                    (row for row in delta_ll_details if float(row.get("delta_ll", 0.0)) > 0.0),
-                    key=lambda x: float(x["delta_ll"]),
-                    reverse=True,
-                )[:10]
-                csv_path = self._dump_tris_outliers_csv(
-                    tracking_ctx.get("event_id", "unknown"), top_positive_outliers
+            if is_tris_universe_mode:
+                if tris_universe_sizes:
+                    u_arr = np.asarray(tris_universe_sizes, dtype=np.float64)
+                    draws_eval = int(u_arr.size)
+                    tris_universe_summary = {
+                        "avg_u": float(np.mean(u_arr)),
+                        "min_u": int(np.min(u_arr)),
+                        "max_u": int(np.max(u_arr)),
+                        "fs_pass_rate": (
+                            float(tris_fs_pass_count / draws_eval) if draws_eval else 0.0
+                        ),
+                        "draws": draws_eval,
+                        "winner_fail_reasons": {
+                            k: int(v) for k, v in tris_winner_fail_reasons.items()
+                        },
+                    }
+            else:
+                tris_prob_summary = {
+                    "logloss": (
+                        prob_metric_sums["logloss"] / prob_metric_count
+                        if prob_metric_count
+                        else None
+                    ),
+                    "brier": (
+                        prob_metric_sums["brier"] / prob_metric_count
+                        if prob_metric_count
+                        else None
+                    ),
+                    "ece": (
+                        prob_metric_sums["ece"] / prob_metric_count
+                        if prob_metric_count
+                        else None
+                    ),
+                    "count": prob_metric_count,
+                }
+                ll_delta_stats = self._bootstrap_mean_ci(delta_ll_values, n_resamples=2000)
+                br_delta_stats = self._bootstrap_mean_ci(delta_br_values, n_resamples=2000)
+                ll_delta_debug = self._delta_distribution_debug(
+                    delta_ll_values, draw_ids=delta_ll_draw_ids, top_k=10
                 )
-                tris_outlier_summary = {
-                    "rows": top_positive_outliers,
-                    "csv_path": csv_path,
-                }
-                tris_delta_summary = {
-                    "logloss": ll_delta_stats,
-                    "brier": br_delta_stats,
-                }
-            if baseline_metric_count:
-                baseline_prob_summary = {
-                    "logloss": baseline_metric_sums["logloss"] / baseline_metric_count,
-                    "brier": baseline_metric_sums["brier"] / baseline_metric_count,
-                    "ece": baseline_metric_sums["ece"] / baseline_metric_count,
-                    "count": baseline_metric_count,
-                }
-            if baseline_compare_stats is not None:
-                draws_eval = int(baseline_compare_stats["draws_evaluated"])
-                model_tickets_total = int(baseline_compare_stats["model_tickets_total"])
-                random_tickets_total = int(baseline_compare_stats["random_tickets_total"])
-                model_exact_hits = int(baseline_compare_stats["model_exact_hits"])
-                random_exact_hits = int(baseline_compare_stats["random_exact_hits"])
-                model_draw_hits = int(baseline_compare_stats["model_draw_hits"])
-                random_draw_hits = int(baseline_compare_stats["random_draw_hits"])
-                baseline_compare_summary = {
-                    "hit_label": f"{max_hits}/{max_hits}",
-                    "draws_evaluated": draws_eval,
-                    "model_exact_hits": model_exact_hits,
-                    "model_hit_rate": (
-                        float(model_exact_hits / model_tickets_total)
-                        if model_tickets_total > 0
-                        else None
-                    ),
-                    "model_draw_hit_rate": (
-                        float(model_draw_hits / draws_eval) if draws_eval > 0 else None
-                    ),
-                    "random_exact_hits": random_exact_hits,
-                    "random_hit_rate": (
-                        float(random_exact_hits / random_tickets_total)
-                        if random_tickets_total > 0
-                        else None
-                    ),
-                    "random_draw_hit_rate": (
-                        float(random_draw_hits / draws_eval) if draws_eval > 0 else None
-                    ),
-                    "random_errors": int(baseline_compare_stats["random_errors"]),
-                }
+                if ll_delta_stats is not None and ll_delta_debug is not None:
+                    ll_delta_stats.update(ll_delta_debug)
+                if ll_delta_stats or br_delta_stats:
+                    top_positive_outliers = sorted(
+                        (
+                            row
+                            for row in delta_ll_details
+                            if float(row.get("delta_ll", 0.0)) > 0.0
+                        ),
+                        key=lambda x: float(x["delta_ll"]),
+                        reverse=True,
+                    )[:10]
+                    csv_path = self._dump_tris_outliers_csv(
+                        tracking_ctx.get("event_id", "unknown"), top_positive_outliers
+                    )
+                    tris_outlier_summary = {
+                        "rows": top_positive_outliers,
+                        "csv_path": csv_path,
+                    }
+                    tris_delta_summary = {
+                        "logloss": ll_delta_stats,
+                        "brier": br_delta_stats,
+                    }
+                if baseline_metric_count:
+                    baseline_prob_summary = {
+                        "logloss": baseline_metric_sums["logloss"] / baseline_metric_count,
+                        "brier": baseline_metric_sums["brier"] / baseline_metric_count,
+                        "ece": baseline_metric_sums["ece"] / baseline_metric_count,
+                        "count": baseline_metric_count,
+                    }
+                if baseline_compare_stats is not None:
+                    draws_eval = int(baseline_compare_stats["draws_evaluated"])
+                    model_tickets_total = int(
+                        baseline_compare_stats["model_tickets_total"]
+                    )
+                    random_tickets_total = int(
+                        baseline_compare_stats["random_tickets_total"]
+                    )
+                    model_exact_hits = int(baseline_compare_stats["model_exact_hits"])
+                    random_exact_hits = int(baseline_compare_stats["random_exact_hits"])
+                    model_draw_hits = int(baseline_compare_stats["model_draw_hits"])
+                    random_draw_hits = int(baseline_compare_stats["random_draw_hits"])
+                    baseline_compare_summary = {
+                        "hit_label": f"{max_hits}/{max_hits}",
+                        "draws_evaluated": draws_eval,
+                        "model_exact_hits": model_exact_hits,
+                        "model_hit_rate": (
+                            float(model_exact_hits / model_tickets_total)
+                            if model_tickets_total > 0
+                            else None
+                        ),
+                        "model_draw_hit_rate": (
+                            float(model_draw_hits / draws_eval)
+                            if draws_eval > 0
+                            else None
+                        ),
+                        "random_exact_hits": random_exact_hits,
+                        "random_hit_rate": (
+                            float(random_exact_hits / random_tickets_total)
+                            if random_tickets_total > 0
+                            else None
+                        ),
+                        "random_draw_hit_rate": (
+                            float(random_draw_hits / draws_eval)
+                            if draws_eval > 0
+                            else None
+                        ),
+                        "random_errors": int(baseline_compare_stats["random_errors"]),
+                    }
         if is_reduction_only:
             self._print_reduction_summary(
                 res, reduced_sizes, max_hits_by_draw, max_hits
@@ -602,6 +762,7 @@ class BacktestEngine:
                 tris_prob_summary=tris_prob_summary,
                 tris_delta_summary=tris_delta_summary,
                 tris_outlier_summary=tris_outlier_summary,
+                tris_universe_summary=tris_universe_summary,
                 baseline_prob_summary=baseline_prob_summary,
                 baseline_compare_summary=baseline_compare_summary,
             )
@@ -791,6 +952,7 @@ class BacktestEngine:
         tris_prob_summary=None,
         tris_delta_summary=None,
         tris_outlier_summary=None,
+        tris_universe_summary=None,
         baseline_prob_summary=None,
         baseline_compare_summary=None,
     ):
@@ -824,6 +986,44 @@ class BacktestEngine:
             style = "bold yellow" if h >= max(0, max_hits - 2) else "white"
             dist_table.add_row(f"{h}/{max_hits} aciertos", f"[{style}]{count}[/]")
         self.console.print(dist_table)
+
+        if isinstance(tris_universe_summary, dict):
+            u_table = Table(
+                title="Tris Universe-Only (Solo Filtros)",
+                show_header=True,
+                header_style="bold magenta",
+            )
+            u_table.add_column("Métrica", justify="left")
+            u_table.add_column("Valor", justify="right")
+            u_table.add_row(
+                "Avg U (universo filtrado)",
+                f"{float(tris_universe_summary.get('avg_u', 0.0)):.2f}",
+            )
+            u_table.add_row(
+                "Min U",
+                str(int(tris_universe_summary.get("min_u", 0))),
+            )
+            u_table.add_row(
+                "Max U",
+                str(int(tris_universe_summary.get("max_u", 0))),
+            )
+            u_table.add_row(
+                "FS-pass rate",
+                f"{100.0 * float(tris_universe_summary.get('fs_pass_rate', 0.0)):.2f}%",
+            )
+            self.console.print(u_table)
+
+            fail_counts = tris_universe_summary.get("winner_fail_reasons", {})
+            fail_table = Table(
+                title="Fail Reasons (Winner fuera de filtros)",
+                show_header=True,
+                header_style="bold yellow",
+            )
+            fail_table.add_column("Reason", justify="left")
+            fail_table.add_column("Count", justify="right")
+            for key in ("sum", "parity", "uniques", "consecutive", "mirror_prev"):
+                fail_table.add_row(key, str(int(fail_counts.get(key, 0))))
+            self.console.print(fail_table)
 
         if isinstance(tris_prob_summary, dict):
             prob_table = Table(
