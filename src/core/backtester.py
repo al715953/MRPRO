@@ -32,6 +32,9 @@ from src.core.prob_metrics import (
 )
 from src.data_access.config import VERSION_TAG, DATA_FOLDER, get_lottery_profile
 from src.data_access.dataset_version import compute_dataset_version
+from src.strategies.tris.random_within_filters import (
+    RandomWithinStructuralFiltersStrategy,
+)
 from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
 
 
@@ -152,6 +155,26 @@ class BacktestEngine:
         run_baseline = bool(overrides.get("run_baseline", True))
         baseline_strategy = (
             TrisUniformBaselineStrategy() if (is_tris_profile and run_baseline) else None
+        )
+        compare_baselines = bool(overrides.get("compare_baselines", False))
+        random_filter_baseline = (
+            RandomWithinStructuralFiltersStrategy()
+            if (is_tris_profile and compare_baselines)
+            else None
+        )
+        baseline_compare_stats = (
+            {
+                "draws_evaluated": 0,
+                "model_exact_hits": 0,
+                "model_draw_hits": 0,
+                "model_tickets_total": 0,
+                "random_exact_hits": 0,
+                "random_draw_hits": 0,
+                "random_tickets_total": 0,
+                "random_errors": 0,
+            }
+            if random_filter_baseline is not None
+            else None
         )
         ll_base_const = 2.302585092994046
         br_base_const = 0.9
@@ -380,6 +403,37 @@ class BacktestEngine:
                     if h_n in high_hits_this_draw:
                         high_hits_this_draw[h_n] += 1
 
+                if baseline_compare_stats is not None:
+                    model_exact = int(high_hits_this_draw.get(max_hits, 0))
+                    baseline_compare_stats["draws_evaluated"] += 1
+                    baseline_compare_stats["model_exact_hits"] += model_exact
+                    baseline_compare_stats["model_tickets_total"] += int(
+                        len(prediction.tickets)
+                    )
+                    if model_exact > 0:
+                        baseline_compare_stats["model_draw_hits"] += 1
+
+                    random_exact = 0
+                    random_ticket_count = 0
+                    try:
+                        random_pred = random_filter_baseline.predict(curr_h, config)
+                        random_ticket_count = int(len(random_pred.tickets))
+                        for tkt in random_pred.tickets:
+                            r_hits, _ = self.rules.validate_ticket(tkt, target)
+                            if r_hits == max_hits:
+                                random_exact += 1
+                    except Exception:
+                        baseline_compare_stats["random_errors"] += 1
+                        random_exact = 0
+                        random_ticket_count = 0
+
+                    baseline_compare_stats["random_exact_hits"] += int(random_exact)
+                    baseline_compare_stats["random_tickets_total"] += int(
+                        random_ticket_count
+                    )
+                    if random_exact > 0:
+                        baseline_compare_stats["random_draw_hits"] += 1
+
                 if is_reduction_only and max_hit_this_draw in max_hits_by_draw:
                     max_hits_by_draw[max_hit_this_draw] += 1
 
@@ -417,6 +471,7 @@ class BacktestEngine:
         tris_prob_summary = None
         baseline_prob_summary = None
         tris_delta_summary = None
+        baseline_compare_summary = None
         if is_tris_profile:
             tris_prob_summary = {
                 "logloss": (
@@ -448,6 +503,37 @@ class BacktestEngine:
                     "ece": baseline_metric_sums["ece"] / baseline_metric_count,
                     "count": baseline_metric_count,
                 }
+            if baseline_compare_stats is not None:
+                draws_eval = int(baseline_compare_stats["draws_evaluated"])
+                model_tickets_total = int(baseline_compare_stats["model_tickets_total"])
+                random_tickets_total = int(baseline_compare_stats["random_tickets_total"])
+                model_exact_hits = int(baseline_compare_stats["model_exact_hits"])
+                random_exact_hits = int(baseline_compare_stats["random_exact_hits"])
+                model_draw_hits = int(baseline_compare_stats["model_draw_hits"])
+                random_draw_hits = int(baseline_compare_stats["random_draw_hits"])
+                baseline_compare_summary = {
+                    "hit_label": f"{max_hits}/{max_hits}",
+                    "draws_evaluated": draws_eval,
+                    "model_exact_hits": model_exact_hits,
+                    "model_hit_rate": (
+                        float(model_exact_hits / model_tickets_total)
+                        if model_tickets_total > 0
+                        else None
+                    ),
+                    "model_draw_hit_rate": (
+                        float(model_draw_hits / draws_eval) if draws_eval > 0 else None
+                    ),
+                    "random_exact_hits": random_exact_hits,
+                    "random_hit_rate": (
+                        float(random_exact_hits / random_tickets_total)
+                        if random_tickets_total > 0
+                        else None
+                    ),
+                    "random_draw_hit_rate": (
+                        float(random_draw_hits / draws_eval) if draws_eval > 0 else None
+                    ),
+                    "random_errors": int(baseline_compare_stats["random_errors"]),
+                }
         if is_reduction_only:
             self._print_reduction_summary(
                 res, reduced_sizes, max_hits_by_draw, max_hits
@@ -462,6 +548,7 @@ class BacktestEngine:
                 tris_prob_summary=tris_prob_summary,
                 tris_delta_summary=tris_delta_summary,
                 baseline_prob_summary=baseline_prob_summary,
+                baseline_compare_summary=baseline_compare_summary,
             )
         self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
         return res
@@ -552,6 +639,7 @@ class BacktestEngine:
         tris_prob_summary=None,
         tris_delta_summary=None,
         baseline_prob_summary=None,
+        baseline_compare_summary=None,
     ):
         self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
         summary = Table(show_header=True, header_style="bold magenta")
@@ -685,6 +773,51 @@ class BacktestEngine:
                         self._fmt_metric(delta),
                     )
                 self.console.print(cmp_table)
+
+            if isinstance(baseline_compare_summary, dict):
+                cmp_hits_table = Table(
+                    title="Comparativa Hits Exactos vs Baseline Aleatorio+Filtros",
+                    show_header=True,
+                    header_style="bold magenta",
+                )
+                cmp_hits_table.add_column("Métrica", justify="left")
+                cmp_hits_table.add_column("Valor", justify="right")
+                hit_label = str(
+                    baseline_compare_summary.get("hit_label", f"{max_hits}/{max_hits}")
+                )
+                cmp_hits_table.add_row(
+                    f"Modelo exactos {hit_label}",
+                    str(int(baseline_compare_summary.get("model_exact_hits", 0))),
+                )
+                cmp_hits_table.add_row(
+                    f"Modelo hit-rate {hit_label}",
+                    self._fmt_metric(baseline_compare_summary.get("model_hit_rate")),
+                )
+                cmp_hits_table.add_row(
+                    f"Modelo draw-hit-rate {hit_label}",
+                    self._fmt_metric(
+                        baseline_compare_summary.get("model_draw_hit_rate")
+                    ),
+                )
+                cmp_hits_table.add_row(
+                    f"Random+Filtros exactos {hit_label}",
+                    str(int(baseline_compare_summary.get("random_exact_hits", 0))),
+                )
+                cmp_hits_table.add_row(
+                    f"Random+Filtros hit-rate {hit_label}",
+                    self._fmt_metric(baseline_compare_summary.get("random_hit_rate")),
+                )
+                cmp_hits_table.add_row(
+                    f"Random+Filtros draw-hit-rate {hit_label}",
+                    self._fmt_metric(
+                        baseline_compare_summary.get("random_draw_hit_rate")
+                    ),
+                )
+                cmp_hits_table.add_row(
+                    "Random+Filtros errors",
+                    str(int(baseline_compare_summary.get("random_errors", 0))),
+                )
+                self.console.print(cmp_hits_table)
 
     def _print_reduction_summary(self, res, reduced_sizes, max_hits_by_draw, max_hits):
         final_universe = int(reduced_sizes[-1]) if reduced_sizes else 0
