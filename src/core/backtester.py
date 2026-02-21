@@ -25,8 +25,14 @@ from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO
 from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
 from src.core.forensics import LotteryForensics
+from src.core.prob_metrics import (
+    logloss_positional,
+    brier_positional,
+    ece_positional,
+)
 from src.data_access.config import VERSION_TAG, DATA_FOLDER, get_lottery_profile
 from src.data_access.dataset_version import compute_dataset_version
+from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
 
 
 class BacktestEngine:
@@ -134,6 +140,27 @@ class BacktestEngine:
         start_idx = len(full_h) - test_size
         tracking_ctx = self._build_tracking_context(config, history, test_size)
         strategy_model_version = getattr(strategy, "model_version", "")
+        is_tris_profile = tracking_ctx["profile_code"] == "tris_multiplicador" or (
+            config.ticket_size == 5 and getattr(config, "total_balls", None) == 10
+        )
+        overrides = (
+            config.filter_overrides
+            if hasattr(config, "filter_overrides")
+            and isinstance(config.filter_overrides, dict)
+            else {}
+        )
+        run_baseline = bool(overrides.get("run_baseline", True))
+        baseline_strategy = (
+            TrisUniformBaselineStrategy() if (is_tris_profile and run_baseline) else None
+        )
+        ll_base_const = 2.302585092994046
+        br_base_const = 0.9
+        prob_metric_sums = {"logloss": 0.0, "brier": 0.0, "ece": 0.0}
+        prob_metric_count = 0
+        baseline_metric_sums = {"logloss": 0.0, "brier": 0.0, "ece": 0.0}
+        baseline_metric_count = 0
+        delta_ll_values = []
+        delta_br_values = []
 
         self.console.print(
             f"\n[bold magenta]🚀 INICIANDO MISIÓN ALPHA GLOBAL ({VERSION_TAG})[/bold magenta]"
@@ -222,6 +249,61 @@ class BacktestEngine:
                         int(snapshot.get("final_size", len(prediction.tickets)))
                     )
 
+                prob_metrics = {}
+                baseline_metrics = {}
+                if is_tris_profile:
+                    y_digits = [int(d) for d in target[:5]]
+                    if isinstance(snapshot, dict) and "pos_probs" in snapshot:
+                        try:
+                            ll = float(logloss_positional(snapshot["pos_probs"], y_digits))
+                            br = float(brier_positional(snapshot["pos_probs"], y_digits))
+                            ece = float(
+                                ece_positional(snapshot["pos_probs"], y_digits, n_bins=10)
+                            )
+                            if np.isfinite(ll) and np.isfinite(br) and np.isfinite(ece):
+                                prob_metrics = {
+                                    "logloss": ll,
+                                    "brier": br,
+                                    "ece": ece,
+                                }
+                                prob_metric_sums["logloss"] += ll
+                                prob_metric_sums["brier"] += br
+                                prob_metric_sums["ece"] += ece
+                                prob_metric_count += 1
+                                delta_ll_values.append(ll - ll_base_const)
+                                delta_br_values.append(br - br_base_const)
+                        except Exception:
+                            prob_metrics = {}
+
+                    if baseline_strategy is not None:
+                        try:
+                            base_pred = baseline_strategy.predict(curr_h, config)
+                            base_probs = (
+                                base_pred.metadata.get("pos_probs")
+                                if isinstance(base_pred.metadata, dict)
+                                else None
+                            )
+                            if base_probs is not None:
+                                b_ll = float(logloss_positional(base_probs, y_digits))
+                                b_br = float(brier_positional(base_probs, y_digits))
+                                b_ece = float(ece_positional(base_probs, y_digits, n_bins=10))
+                                if (
+                                    np.isfinite(b_ll)
+                                    and np.isfinite(b_br)
+                                    and np.isfinite(b_ece)
+                                ):
+                                    baseline_metrics = {
+                                        "logloss": b_ll,
+                                        "brier": b_br,
+                                        "ece": b_ece,
+                                    }
+                                    baseline_metric_sums["logloss"] += b_ll
+                                    baseline_metric_sums["brier"] += b_br
+                                    baseline_metric_sums["ece"] += b_ece
+                                    baseline_metric_count += 1
+                        except Exception:
+                            baseline_metrics = {}
+
                 # Auditoría Forense
                 if is_reduction_only:
                     audit = None
@@ -262,10 +344,26 @@ class BacktestEngine:
                     )
                     audit["seed"] = tracking_ctx["seed"]
                     audit["split_id"] = tracking_ctx["split_id"]
-                    audit["metrics_json"] = {
+                    if prob_metrics:
+                        audit["logloss"] = prob_metrics["logloss"]
+                        audit["brier"] = prob_metrics["brier"]
+                        audit["ece"] = prob_metrics["ece"]
+                    else:
+                        audit["logloss"] = ""
+                        audit["brier"] = ""
+                        audit["ece"] = ""
+
+                    metrics_payload = {
                         "hits_pos": int(audit.get("hits", 0)),
                         "winner_in_topk": "",
                     }
+                    if prob_metrics:
+                        metrics_payload.update(prob_metrics)
+                    if baseline_metrics:
+                        metrics_payload["baseline_logloss"] = baseline_metrics["logloss"]
+                        metrics_payload["baseline_brier"] = baseline_metrics["brier"]
+                        metrics_payload["baseline_ece"] = baseline_metrics["ece"]
+                    audit["metrics_json"] = metrics_payload
 
                     self.forensic_data.append(audit)
 
@@ -316,6 +414,40 @@ class BacktestEngine:
             total_earn - total_inv,
             hits_dist,
         )
+        tris_prob_summary = None
+        baseline_prob_summary = None
+        tris_delta_summary = None
+        if is_tris_profile:
+            tris_prob_summary = {
+                "logloss": (
+                    prob_metric_sums["logloss"] / prob_metric_count
+                    if prob_metric_count
+                    else None
+                ),
+                "brier": (
+                    prob_metric_sums["brier"] / prob_metric_count
+                    if prob_metric_count
+                    else None
+                ),
+                "ece": (
+                    prob_metric_sums["ece"] / prob_metric_count if prob_metric_count else None
+                ),
+                "count": prob_metric_count,
+            }
+            ll_delta_stats = self._bootstrap_mean_ci(delta_ll_values, n_resamples=2000)
+            br_delta_stats = self._bootstrap_mean_ci(delta_br_values, n_resamples=2000)
+            if ll_delta_stats or br_delta_stats:
+                tris_delta_summary = {
+                    "logloss": ll_delta_stats,
+                    "brier": br_delta_stats,
+                }
+            if baseline_metric_count:
+                baseline_prob_summary = {
+                    "logloss": baseline_metric_sums["logloss"] / baseline_metric_count,
+                    "brier": baseline_metric_sums["brier"] / baseline_metric_count,
+                    "ece": baseline_metric_sums["ece"] / baseline_metric_count,
+                    "count": baseline_metric_count,
+                }
         if is_reduction_only:
             self._print_reduction_summary(
                 res, reduced_sizes, max_hits_by_draw, max_hits
@@ -327,6 +459,9 @@ class BacktestEngine:
                 max_hits,
                 expects_universe_coverage,
                 has_universe_data,
+                tris_prob_summary=tris_prob_summary,
+                tris_delta_summary=tris_delta_summary,
+                baseline_prob_summary=baseline_prob_summary,
             )
         self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
         return res
@@ -370,8 +505,53 @@ class BacktestEngine:
 
         self.console.print(line)
 
+    @staticmethod
+    def _fmt_metric(value):
+        if value is None:
+            return "[bold yellow]N/A[/]"
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            return "[bold yellow]N/A[/]"
+        if not np.isfinite(val):
+            return "[bold yellow]N/A[/]"
+        return f"{val:.6f}"
+
+    @staticmethod
+    def _bootstrap_mean_ci(values, n_resamples: int = 2000):
+        arr = np.asarray(values, dtype=np.float64)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return None
+
+        mean = float(np.mean(arr))
+        std = float(np.std(arr))
+        n_resamples = max(1, int(n_resamples))
+        rng = np.random.default_rng(20260221)
+        idx = rng.integers(0, arr.size, size=(n_resamples, arr.size))
+        boot_means = np.mean(arr[idx], axis=1)
+        ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
+        p_lt_zero = float(np.mean(arr < 0.0))
+
+        return {
+            "mean": mean,
+            "std": std,
+            "ci_low": float(ci_low),
+            "ci_high": float(ci_high),
+            "p_lt_zero": p_lt_zero,
+            "count": int(arr.size),
+        }
+
     def _print_final_report(
-        self, res, jackpot_coverage, max_hits, expects_universe_coverage, has_universe_data
+        self,
+        res,
+        jackpot_coverage,
+        max_hits,
+        expects_universe_coverage,
+        has_universe_data,
+        tris_prob_summary=None,
+        tris_delta_summary=None,
+        baseline_prob_summary=None,
     ):
         self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
         summary = Table(show_header=True, header_style="bold magenta")
@@ -403,6 +583,108 @@ class BacktestEngine:
             style = "bold yellow" if h >= max(0, max_hits - 2) else "white"
             dist_table.add_row(f"{h}/{max_hits} aciertos", f"[{style}]{count}[/]")
         self.console.print(dist_table)
+
+        if isinstance(tris_prob_summary, dict):
+            prob_table = Table(
+                title="Métricas Probabilísticas Tris",
+                show_header=True,
+                header_style="bold green",
+            )
+            prob_table.add_column("Métrica", justify="left")
+            prob_table.add_column("Modelo", justify="right")
+            prob_table.add_row(
+                "Avg LogLoss (positional)",
+                self._fmt_metric(tris_prob_summary.get("logloss")),
+            )
+            prob_table.add_row(
+                "Avg Brier (positional)",
+                self._fmt_metric(tris_prob_summary.get("brier")),
+            )
+            prob_table.add_row(
+                "Avg ECE (positional)",
+                self._fmt_metric(tris_prob_summary.get("ece")),
+            )
+            self.console.print(prob_table)
+
+            if isinstance(tris_delta_summary, dict):
+                ll_stats = (
+                    tris_delta_summary.get("logloss")
+                    if isinstance(tris_delta_summary.get("logloss"), dict)
+                    else None
+                )
+                br_stats = (
+                    tris_delta_summary.get("brier")
+                    if isinstance(tris_delta_summary.get("brier"), dict)
+                    else None
+                )
+                delta_table = Table(
+                    title="Delta Tris vs Baseline Uniforme (Constante)",
+                    show_header=True,
+                    header_style="bold blue",
+                )
+                delta_table.add_column("Métrica", justify="left")
+                delta_table.add_column("Valor", justify="right")
+
+                if ll_stats is not None:
+                    delta_table.add_row(
+                        "Delta LogLoss mean ± std",
+                        f"{ll_stats['mean']:.6f} ± {ll_stats['std']:.6f}",
+                    )
+                    delta_table.add_row(
+                        "Delta LogLoss 95% CI",
+                        f"[{ll_stats['ci_low']:.6f}, {ll_stats['ci_high']:.6f}]",
+                    )
+                    delta_table.add_row(
+                        "P(delta LogLoss < 0)",
+                        f"{ll_stats['p_lt_zero']:.4f}",
+                    )
+                else:
+                    delta_table.add_row("Delta LogLoss mean ± std", "[bold yellow]N/A[/]")
+                    delta_table.add_row("Delta LogLoss 95% CI", "[bold yellow]N/A[/]")
+                    delta_table.add_row("P(delta LogLoss < 0)", "[bold yellow]N/A[/]")
+
+                if br_stats is not None:
+                    delta_table.add_row(
+                        "Delta Brier mean ± std",
+                        f"{br_stats['mean']:.6f} ± {br_stats['std']:.6f}",
+                    )
+                    delta_table.add_row(
+                        "Delta Brier 95% CI",
+                        f"[{br_stats['ci_low']:.6f}, {br_stats['ci_high']:.6f}]",
+                    )
+                else:
+                    delta_table.add_row("Delta Brier mean ± std", "[bold yellow]N/A[/]")
+                    delta_table.add_row("Delta Brier 95% CI", "[bold yellow]N/A[/]")
+
+                self.console.print(delta_table)
+
+            if isinstance(baseline_prob_summary, dict):
+                cmp_table = Table(
+                    title="Comparativa vs Baseline Uniforme",
+                    show_header=True,
+                    header_style="bold yellow",
+                )
+                cmp_table.add_column("Métrica", justify="left")
+                cmp_table.add_column("Baseline", justify="right")
+                cmp_table.add_column("Delta (modelo-baseline)", justify="right")
+                for key, label in (
+                    ("logloss", "LogLoss"),
+                    ("brier", "Brier"),
+                    ("ece", "ECE"),
+                ):
+                    model_val = tris_prob_summary.get(key)
+                    base_val = baseline_prob_summary.get(key)
+                    delta = (
+                        model_val - base_val
+                        if (model_val is not None and base_val is not None)
+                        else None
+                    )
+                    cmp_table.add_row(
+                        label,
+                        self._fmt_metric(base_val),
+                        self._fmt_metric(delta),
+                    )
+                self.console.print(cmp_table)
 
     def _print_reduction_summary(self, res, reduced_sizes, max_hits_by_draw, max_hits):
         final_universe = int(reduced_sizes[-1]) if reduced_sizes else 0
