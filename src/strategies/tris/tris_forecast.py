@@ -13,6 +13,7 @@ from src.strategies.tris.structural_filters import (
 )
 from src.strategies.tris.topk import beam_search, select_diverse
 from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
+from src.strategies.tris.universe_5d import get_universe_and_static_mask
 from src.strategies.tris.v1a_model import TrisV1AModel, _extract_tris_series
 
 
@@ -50,6 +51,18 @@ class TrisForecastV1A:
                 filtered.append((digits, lp))
                 counts[key] = remaining - 1
         return filtered
+
+    @staticmethod
+    def _seed_from_overrides(overrides: Dict, history_len: int):
+        if not isinstance(overrides, dict):
+            return None
+        raw = overrides.get("seed")
+        if raw in (None, ""):
+            return None
+        try:
+            return int(raw) + int(history_len)
+        except (TypeError, ValueError):
+            return None
 
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
@@ -129,12 +142,7 @@ class TrisForecastV1A:
                 context_last_digits
             )
 
-        candidates = beam_search(
-            pos_probs,
-            k=topk_k,
-            per_pos_topm=per_pos_topm,
-            beam_width=beam_width,
-        )
+        candidates: List[Tuple[List[int], float]] = []
         prev_digits = (
             [int(d) for d in history.winning_numbers[-1][:5]]
             if history.winning_numbers
@@ -182,12 +190,113 @@ class TrisForecastV1A:
             ),
         )
 
-        filtered_ranked = candidates
+        universe_mode = str(
+            self._get_override(overrides, "universe_mode", "full_filtered_universe")
+        ).lower()
+        selection_mode = str(
+            self._get_override(overrides, "selection_mode", "ranked")
+        ).lower()
+        if selection_mode not in {"random", "ranked"}:
+            selection_mode = "ranked"
+
+        filtered_ranked: List[Tuple[List[int], float]] = []
         structural_diag = {
             "enabled": bool(structural_cfg.enabled),
             "fallback": False,
         }
-        if structural_cfg.enabled:
+        tickets: List[List[int]] = []
+
+        used_full_filtered_universe = universe_mode == "full_filtered_universe"
+        if used_full_filtered_universe:
+            all_tickets, _, static_mask = get_universe_and_static_mask(structural_cfg)
+            if structural_cfg.enabled:
+                final_mask = StructuralFilterEngine.mask_all(
+                    all_tickets, prev_digits, static_mask, structural_cfg
+                )
+            else:
+                final_mask = np.ones(all_tickets.shape[0], dtype=bool)
+            universe_digits = all_tickets[final_mask]
+            universe_size = int(universe_digits.shape[0])
+
+            static_accepted = int(np.sum(static_mask)) if structural_cfg.enabled else int(
+                all_tickets.shape[0]
+            )
+            mirror_rejected = (
+                max(0, static_accepted - universe_size) if structural_cfg.enabled else 0
+            )
+            structural_diag.update(
+                {
+                    "total_in": int(all_tickets.shape[0]),
+                    "accepted": int(universe_size),
+                    "total_out": int(all_tickets.shape[0] - universe_size),
+                    "acceptance_rate": float(
+                        universe_size / int(all_tickets.shape[0])
+                        if int(all_tickets.shape[0]) > 0
+                        else 0.0
+                    ),
+                    "static_accepted": int(static_accepted),
+                    "mirror_rejected": int(mirror_rejected),
+                }
+            )
+            structural_diag["reject_reasons"] = {
+                "sum": 0,
+                "parity": 0,
+                "uniques": 0,
+                "consecutive": 0,
+                "mirror_prev": int(mirror_rejected),
+            }
+
+            if universe_size > 0:
+                if selection_mode == "random":
+                    rng = np.random.default_rng(
+                        self._seed_from_overrides(overrides, n_draws)
+                    )
+                    order_idx = rng.permutation(universe_size)
+                    sampled = universe_digits[order_idx, :]
+                    target_n = int(max(0, config.num_tickets))
+                    if target_n > 0:
+                        tickets = [
+                            [int(d) for d in row.tolist()]
+                            for row in sampled[: min(target_n, universe_size), :]
+                        ]
+                    filtered_ranked = [
+                        ([int(d) for d in row.tolist()], 0.0) for row in sampled
+                    ]
+                else:
+                    eps = 1e-12
+                    logits = np.log(np.clip(pos_probs, eps, None))
+                    scores = (
+                        logits[0, universe_digits[:, 0]]
+                        + logits[1, universe_digits[:, 1]]
+                        + logits[2, universe_digits[:, 2]]
+                        + logits[3, universe_digits[:, 3]]
+                        + logits[4, universe_digits[:, 4]]
+                    )
+                    order_idx = np.argsort(scores)[::-1]
+                    filtered_ranked = [
+                        (
+                            [int(d) for d in universe_digits[idx].tolist()],
+                            float(scores[idx]),
+                        )
+                        for idx in order_idx.tolist()
+                    ]
+            else:
+                filtered_ranked = []
+
+            candidates = filtered_ranked
+            structural_diag["topk_k_initial"] = int(topk_k)
+            structural_diag["topk_k_used"] = int(topk_k)
+            structural_diag["topk_k_max"] = int(topk_k)
+            structural_diag["beam_expansions"] = 0
+            structural_diag["universe_mode"] = "full_filtered_universe"
+            structural_diag["selection_mode"] = selection_mode
+        elif structural_cfg.enabled:
+            candidates = beam_search(
+                pos_probs,
+                k=topk_k,
+                per_pos_topm=per_pos_topm,
+                beam_width=beam_width,
+            )
             engine = StructuralFilterEngine(structural_cfg)
             current_topk = int(max(1, topk_k))
             max_topk = int(
@@ -208,6 +317,8 @@ class TrisForecastV1A:
                 structural_diag["topk_k_max"] = int(max_topk)
                 structural_diag["beam_expansions"] = int(expansions)
                 filtered_ranked = self._filter_ranked_candidates(candidates, accepted_digits)
+                structural_diag["universe_mode"] = "topk_beam"
+                structural_diag["selection_mode"] = "ranked"
 
                 if len(filtered_ranked) >= config.num_tickets:
                     break
@@ -229,12 +340,23 @@ class TrisForecastV1A:
                     per_pos_topm=per_pos_topm,
                     beam_width=max(beam_width, current_topk),
                 )
+        else:
+            candidates = beam_search(
+                pos_probs,
+                k=topk_k,
+                per_pos_topm=per_pos_topm,
+                beam_width=beam_width,
+            )
+            filtered_ranked = candidates
+            structural_diag["universe_mode"] = "topk_beam"
+            structural_diag["selection_mode"] = "ranked"
 
-        tickets = select_diverse(
-            filtered_ranked,
-            n=config.num_tickets,
-            min_hamming=diversity_min_hamming,
-        )
+        if not tickets:
+            tickets = select_diverse(
+                filtered_ranked,
+                n=config.num_tickets,
+                min_hamming=diversity_min_hamming,
+            )
 
         if structural_cfg.enabled and len(tickets) < config.num_tickets:
             structural_diag["fallback"] = True
@@ -283,6 +405,16 @@ class TrisForecastV1A:
         }
         if structural_cfg.enabled:
             metadata["structural_filters"] = structural_diag
+        metadata["universe_size"] = int(structural_diag.get("accepted", len(filtered_ranked)))
+        metadata["universe_mode"] = str(
+            structural_diag.get(
+                "universe_mode",
+                "full_filtered_universe" if used_full_filtered_universe else "topk_beam",
+            )
+        )
+        metadata["selection_mode"] = str(
+            structural_diag.get("selection_mode", selection_mode)
+        )
 
         return PredictionResultDTO(
             strategy_name=self.strategy_name,
