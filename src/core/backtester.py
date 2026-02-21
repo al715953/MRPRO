@@ -1,5 +1,6 @@
 # src/core/backtester.py
 
+import csv
 import time
 import os
 from uuid import uuid4
@@ -185,6 +186,7 @@ class BacktestEngine:
         delta_ll_values = []
         delta_ll_draw_ids = []
         delta_br_values = []
+        delta_ll_details = []
 
         self.console.print(
             f"\n[bold magenta]🚀 INICIANDO MISIÓN ALPHA GLOBAL ({VERSION_TAG})[/bold magenta]"
@@ -285,6 +287,26 @@ class BacktestEngine:
                                 ece_positional(snapshot["pos_probs"], y_digits, n_bins=10)
                             )
                             if np.isfinite(ll) and np.isfinite(br) and np.isfinite(ece):
+                                probs_arr = np.asarray(snapshot["pos_probs"], dtype=np.float64)
+                                probs_arr = np.clip(probs_arr, 1e-12, None)
+                                probs_arr = probs_arr / np.clip(
+                                    probs_arr.sum(axis=1, keepdims=True), 1e-12, None
+                                )
+                                prev_digits = (
+                                    [int(d) for d in curr_h.winning_numbers[-1][:5]]
+                                    if curr_h.winning_numbers
+                                    else []
+                                )
+                                p_true_per_pos = [
+                                    float(probs_arr[pos, y_digits[pos]]) for pos in range(5)
+                                ]
+                                max_prob_per_pos = [
+                                    float(np.max(probs_arr[pos])) for pos in range(5)
+                                ]
+                                entropy_per_pos = [
+                                    float(-np.sum(probs_arr[pos] * np.log(probs_arr[pos])))
+                                    for pos in range(5)
+                                ]
                                 prob_metrics = {
                                     "logloss": ll,
                                     "brier": br,
@@ -294,9 +316,21 @@ class BacktestEngine:
                                 prob_metric_sums["brier"] += br
                                 prob_metric_sums["ece"] += ece
                                 prob_metric_count += 1
-                                delta_ll_values.append(ll - ll_base_const)
+                                delta_ll = ll - ll_base_const
+                                delta_ll_values.append(delta_ll)
                                 delta_ll_draw_ids.append(int(t_id))
                                 delta_br_values.append(br - br_base_const)
+                                delta_ll_details.append(
+                                    {
+                                        "draw_id": int(t_id),
+                                        "delta_ll": float(delta_ll),
+                                        "y_digits": [int(d) for d in y_digits],
+                                        "prev_digits": prev_digits,
+                                        "p_true_per_pos": p_true_per_pos,
+                                        "max_prob_per_pos": max_prob_per_pos,
+                                        "entropy_per_pos": entropy_per_pos,
+                                    }
+                                )
                         except Exception:
                             prob_metrics = {}
 
@@ -473,6 +507,7 @@ class BacktestEngine:
         tris_prob_summary = None
         baseline_prob_summary = None
         tris_delta_summary = None
+        tris_outlier_summary = None
         baseline_compare_summary = None
         if is_tris_profile:
             tris_prob_summary = {
@@ -499,6 +534,18 @@ class BacktestEngine:
             if ll_delta_stats is not None and ll_delta_debug is not None:
                 ll_delta_stats.update(ll_delta_debug)
             if ll_delta_stats or br_delta_stats:
+                top_positive_outliers = sorted(
+                    (row for row in delta_ll_details if float(row.get("delta_ll", 0.0)) > 0.0),
+                    key=lambda x: float(x["delta_ll"]),
+                    reverse=True,
+                )[:10]
+                csv_path = self._dump_tris_outliers_csv(
+                    tracking_ctx.get("event_id", "unknown"), top_positive_outliers
+                )
+                tris_outlier_summary = {
+                    "rows": top_positive_outliers,
+                    "csv_path": csv_path,
+                }
                 tris_delta_summary = {
                     "logloss": ll_delta_stats,
                     "brier": br_delta_stats,
@@ -554,6 +601,7 @@ class BacktestEngine:
                 has_universe_data,
                 tris_prob_summary=tris_prob_summary,
                 tris_delta_summary=tris_delta_summary,
+                tris_outlier_summary=tris_outlier_summary,
                 baseline_prob_summary=baseline_prob_summary,
                 baseline_compare_summary=baseline_compare_summary,
             )
@@ -687,6 +735,52 @@ class BacktestEngine:
             "top_positive": top_positive,
         }
 
+    @staticmethod
+    def _format_float_list(values):
+        if not isinstance(values, (list, tuple)):
+            return ""
+        return "[" + ", ".join(f"{float(v):.6f}" for v in values) + "]"
+
+    def _dump_tris_outliers_csv(self, event_id: str, rows):
+        safe_event_id = str(event_id or "unknown")
+        out_dir = os.path.join("artifacts", "tris")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"outliers_{safe_event_id}.csv")
+
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "draw_id",
+                    "delta_ll",
+                    "y_digits",
+                    "prev_digits",
+                    "p_true_per_pos",
+                    "max_prob_per_pos",
+                    "entropy_per_pos",
+                ]
+            )
+            for row in rows or []:
+                writer.writerow(
+                    [
+                        int(row.get("draw_id", 0)),
+                        f"{float(row.get('delta_ll', 0.0)):.12f}",
+                        " ".join(str(int(x)) for x in row.get("y_digits", [])),
+                        " ".join(str(int(x)) for x in row.get("prev_digits", [])),
+                        " ".join(
+                            f"{float(x):.12f}" for x in row.get("p_true_per_pos", [])
+                        ),
+                        " ".join(
+                            f"{float(x):.12f}"
+                            for x in row.get("max_prob_per_pos", [])
+                        ),
+                        " ".join(
+                            f"{float(x):.12f}" for x in row.get("entropy_per_pos", [])
+                        ),
+                    ]
+                )
+        return out_path
+
     def _print_final_report(
         self,
         res,
@@ -696,6 +790,7 @@ class BacktestEngine:
         has_universe_data,
         tris_prob_summary=None,
         tris_delta_summary=None,
+        tris_outlier_summary=None,
         baseline_prob_summary=None,
         baseline_compare_summary=None,
     ):
@@ -847,6 +942,42 @@ class BacktestEngine:
                     else:
                         top_table.add_row("-", "N/A")
                     self.console.print(top_table)
+
+                if isinstance(tris_outlier_summary, dict):
+                    outlier_rows = tris_outlier_summary.get("rows", [])
+                    csv_path = tris_outlier_summary.get("csv_path", "")
+                    outlier_table = Table(
+                        title="Top 10 delta_ll positivos con detalle",
+                        show_header=True,
+                        header_style="bold green",
+                    )
+                    outlier_table.add_column("draw_id", justify="right")
+                    outlier_table.add_column("delta_ll", justify="right")
+                    outlier_table.add_column("y_digits", justify="left")
+                    outlier_table.add_column("prev_digits", justify="left")
+                    outlier_table.add_column("p_true_per_pos", justify="left")
+                    outlier_table.add_column("max_prob_per_pos", justify="left")
+                    outlier_table.add_column("entropy_per_pos", justify="left")
+                    if outlier_rows:
+                        for row in outlier_rows:
+                            outlier_table.add_row(
+                                str(int(row.get("draw_id", 0))),
+                                f"{float(row.get('delta_ll', 0.0)):.6f}",
+                                str(row.get("y_digits", [])),
+                                str(row.get("prev_digits", [])),
+                                self._format_float_list(row.get("p_true_per_pos", [])),
+                                self._format_float_list(
+                                    row.get("max_prob_per_pos", [])
+                                ),
+                                self._format_float_list(row.get("entropy_per_pos", [])),
+                            )
+                    else:
+                        outlier_table.add_row("-", "N/A", "[]", "[]", "[]", "[]", "[]")
+                    self.console.print(outlier_table)
+                    if csv_path:
+                        self.console.print(
+                            f"[cyan]Outliers CSV:[/] [white]{csv_path}[/]"
+                        )
 
             if isinstance(baseline_prob_summary, dict):
                 cmp_table = Table(
