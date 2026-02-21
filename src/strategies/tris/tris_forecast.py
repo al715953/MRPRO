@@ -75,7 +75,10 @@ class TrisForecastV1A:
         alpha_markov = float(self._get_override(overrides, "alpha_markov", 0.2))
         blend_markov = float(self._get_override(overrides, "blend_markov", 0.35))
         uniform_mix = float(self._get_override(overrides, "uniform_mix", 0.0))
-        temperature = float(self._get_override(overrides, "temperature", 1.0))
+        uniform_floor_mu = float(self._get_override(overrides, "uniform_floor_mu", 0.35))
+        peak_max_prob = float(self._get_override(overrides, "peak_max_prob", 0.22))
+        peak_mu_boost = float(self._get_override(overrides, "peak_mu_boost", 0.20))
+        temperature = float(self._get_override(overrides, "temperature", 1.4))
         topk_k = int(self._get_override(overrides, "topk_k", 2000))
         per_pos_topm = int(self._get_override(overrides, "per_pos_topm", 6))
         beam_width = int(self._get_override(overrides, "beam_width", 2500))
@@ -98,10 +101,17 @@ class TrisForecastV1A:
             p_multiplier = float((positives + 1.0) / (len(mult_list) + 2.0)) if mult_list else 0.5
             entropy_pos = -np.sum(pos_probs * np.log(pos_probs), axis=1)
             entropy_mean = float(np.mean(entropy_pos))
+            prob_guardrails = {
+                "mu_used": float(0.0),
+                "max_probs": np.max(pos_probs, axis=1).tolist(),
+            }
         else:
             model = TrisV1AModel(
                 blend_markov=blend_markov,
                 uniform_mix=uniform_mix,
+                uniform_floor_mu=uniform_floor_mu,
+                peak_max_prob=peak_max_prob,
+                peak_mu_boost=peak_mu_boost,
                 temperature=temperature,
                 bayes_params={
                     "alpha": alpha_bayes,
@@ -115,7 +125,7 @@ class TrisForecastV1A:
                 },
             )
             model.fit(digits_list, mult_list)
-            pos_probs, p_multiplier, entropy_pos, entropy_mean = model.predict(
+            pos_probs, p_multiplier, entropy_pos, entropy_mean, prob_guardrails = model.predict(
                 context_last_digits
             )
 
@@ -263,6 +273,8 @@ class TrisForecastV1A:
             "entropy_pos": entropy_pos.tolist(),
             "entropy_mean": float(entropy_mean),
             "model_version": self.model_version,
+            "mu_used": float(prob_guardrails.get("mu_used", 0.0)),
+            "max_probs": prob_guardrails.get("max_probs", []),
             "gate": gate_report,
             "topk_preview": [
                 {"digits": d, "logp": float(lp)}

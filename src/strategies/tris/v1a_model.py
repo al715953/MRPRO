@@ -145,10 +145,20 @@ class TrisV1AModel:
     def __init__(
         self,
         blend_markov: float = 0.35,
+        uniform_mix: float = 0.0,
+        uniform_floor_mu: float = 0.35,
+        peak_max_prob: float = 0.22,
+        peak_mu_boost: float = 0.20,
+        temperature: float = 1.4,
         bayes_params: dict | None = None,
         markov_params: dict | None = None,
     ):
         self.blend_markov = float(blend_markov)
+        self.uniform_mix = float(uniform_mix)
+        self.uniform_floor_mu = float(uniform_floor_mu)
+        self.peak_max_prob = float(peak_max_prob)
+        self.peak_mu_boost = float(peak_mu_boost)
+        self.temperature = float(temperature)
         self.bayes = BayesMixtureModel(**(bayes_params or {}))
         self.markov = MarkovPositionalModel(**(markov_params or {}))
         self.p_multiplier_short = 0.5
@@ -179,7 +189,7 @@ class TrisV1AModel:
 
     def predict(
         self, context_last_digits: Sequence[int]
-    ) -> Tuple[np.ndarray, float, np.ndarray, float]:
+    ) -> Tuple[np.ndarray, float, np.ndarray, float, dict]:
         bayes_probs = self.bayes.predict_pos_probs(context_last_digits)
         markov_probs = self.markov.predict_pos_probs(context_last_digits)
 
@@ -188,6 +198,31 @@ class TrisV1AModel:
         pos_probs = np.clip(pos_probs, 1e-12, None)
         pos_probs /= np.clip(pos_probs.sum(axis=1, keepdims=True), 1e-12, None)
 
+        max_probs = np.max(pos_probs, axis=1)
+        mu = min(max(self.uniform_floor_mu, 0.0), 0.8)
+        if np.any(max_probs > float(self.peak_max_prob)):
+            mu = min(0.8, mu + max(float(self.peak_mu_boost), 0.0))
+
+        uniform = np.full((5, 10), 0.1, dtype=np.float64)
+        pos_probs = (1.0 - mu) * pos_probs + mu * uniform
+        pos_probs /= np.clip(pos_probs.sum(axis=1, keepdims=True), 1e-12, None)
+
+        temp = max(self.temperature, 1e-6)
+        logits = np.log(np.maximum(pos_probs, 1e-12))
+        logits = logits / temp
+        logits = logits - np.max(logits, axis=1, keepdims=True)
+        exp_logits = np.exp(logits)
+        pos_probs = exp_logits / np.clip(
+            exp_logits.sum(axis=1, keepdims=True), 1e-12, None
+        )
+
+        pos_probs = np.clip(pos_probs, 1e-12, None)
+        pos_probs /= np.clip(pos_probs.sum(axis=1, keepdims=True), 1e-12, None)
+
         entropy_pos = -np.sum(pos_probs * np.log(pos_probs), axis=1)
         entropy_mean = float(np.mean(entropy_pos))
-        return pos_probs, float(self.p_multiplier), entropy_pos, entropy_mean
+        guardrail_meta = {
+            "mu_used": float(mu),
+            "max_probs": max_probs.tolist(),
+        }
+        return pos_probs, float(self.p_multiplier), entropy_pos, entropy_mean, guardrail_meta
