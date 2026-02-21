@@ -31,15 +31,15 @@ def unique_count(ticket: List[int]) -> int:
 
 def has_consecutive_run(ticket: List[int], run_len: int = 4) -> bool:
     if run_len <= 1:
-        return True
+        return False
     if len(ticket) < run_len:
         return False
 
     values = [int(d) for d in ticket]
     for i in range(0, len(values) - run_len + 1):
-        segment = values[i : i + run_len]
-        diffs = [segment[j + 1] - segment[j] for j in range(run_len - 1)]
-        if all(step == 1 for step in diffs) or all(step == -1 for step in diffs):
+        window = values[i : i + run_len]
+        diff = [window[j + 1] - window[j] for j in range(run_len - 1)]
+        if all(d == 1 for d in diff) or all(d == -1 for d in diff):
             return True
     return False
 
