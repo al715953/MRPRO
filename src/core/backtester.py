@@ -183,6 +183,7 @@ class BacktestEngine:
         baseline_metric_sums = {"logloss": 0.0, "brier": 0.0, "ece": 0.0}
         baseline_metric_count = 0
         delta_ll_values = []
+        delta_ll_draw_ids = []
         delta_br_values = []
 
         self.console.print(
@@ -294,6 +295,7 @@ class BacktestEngine:
                                 prob_metric_sums["ece"] += ece
                                 prob_metric_count += 1
                                 delta_ll_values.append(ll - ll_base_const)
+                                delta_ll_draw_ids.append(int(t_id))
                                 delta_br_values.append(br - br_base_const)
                         except Exception:
                             prob_metrics = {}
@@ -491,6 +493,11 @@ class BacktestEngine:
             }
             ll_delta_stats = self._bootstrap_mean_ci(delta_ll_values, n_resamples=2000)
             br_delta_stats = self._bootstrap_mean_ci(delta_br_values, n_resamples=2000)
+            ll_delta_debug = self._delta_distribution_debug(
+                delta_ll_values, draw_ids=delta_ll_draw_ids, top_k=10
+            )
+            if ll_delta_stats is not None and ll_delta_debug is not None:
+                ll_delta_stats.update(ll_delta_debug)
             if ll_delta_stats or br_delta_stats:
                 tris_delta_summary = {
                     "logloss": ll_delta_stats,
@@ -618,7 +625,7 @@ class BacktestEngine:
         idx = rng.integers(0, arr.size, size=(n_resamples, arr.size))
         boot_means = np.mean(arr[idx], axis=1)
         ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
-        p_lt_zero = float(np.mean(arr < 0.0))
+        p_lt_zero = float(np.sum(arr < 0.0) / arr.size)
 
         return {
             "mean": mean,
@@ -627,6 +634,57 @@ class BacktestEngine:
             "ci_high": float(ci_high),
             "p_lt_zero": p_lt_zero,
             "count": int(arr.size),
+        }
+
+    @staticmethod
+    def _delta_distribution_debug(values, draw_ids=None, top_k: int = 10):
+        arr_raw = np.asarray(values, dtype=np.float64)
+        finite_mask = np.isfinite(arr_raw)
+        arr = arr_raw[finite_mask]
+        if arr.size == 0:
+            return None
+
+        ids = None
+        if draw_ids is not None:
+            ids_raw = np.asarray(draw_ids)
+            if ids_raw.shape[0] == arr_raw.shape[0]:
+                ids = ids_raw[finite_mask]
+
+        n_neg = int(np.sum(arr < 0.0))
+        n_pos = int(np.sum(arr > 0.0))
+        n_zero = int(arr.size - n_neg - n_pos)
+
+        q_min, q05, q50, q95, q_max = np.percentile(arr, [0, 5, 50, 95, 100])
+        neg_vals = arr[arr < 0.0]
+        pos_vals = arr[arr > 0.0]
+
+        top_positive = []
+        if ids is not None:
+            order = np.argsort(arr)[::-1]
+            limit = max(1, int(top_k))
+            for idx in order:
+                delta_val = float(arr[idx])
+                if delta_val <= 0.0:
+                    break
+                top_positive.append(
+                    {"draw_id": int(ids[idx]), "delta": delta_val}
+                )
+                if len(top_positive) >= limit:
+                    break
+
+        return {
+            "delta_definition": "model-baseline",
+            "n_neg": n_neg,
+            "n_pos": n_pos,
+            "n_zero": n_zero,
+            "q_min": float(q_min),
+            "q05": float(q05),
+            "q50": float(q50),
+            "q95": float(q95),
+            "q_max": float(q_max),
+            "mean_neg": float(np.mean(neg_vals)) if neg_vals.size else None,
+            "mean_pos": float(np.mean(pos_vals)) if pos_vals.size else None,
+            "top_positive": top_positive,
         }
 
     def _print_final_report(
@@ -726,6 +784,32 @@ class BacktestEngine:
                         "P(delta LogLoss < 0)",
                         f"{ll_stats['p_lt_zero']:.4f}",
                     )
+                    delta_table.add_row(
+                        "Delta LogLoss definition",
+                        str(ll_stats.get("delta_definition", "model-baseline")),
+                    )
+                    delta_table.add_row(
+                        "Delta LogLoss counts (neg/pos/zero)",
+                        f"{int(ll_stats.get('n_neg', 0))}/"
+                        f"{int(ll_stats.get('n_pos', 0))}/"
+                        f"{int(ll_stats.get('n_zero', 0))}",
+                    )
+                    delta_table.add_row(
+                        "Delta LogLoss quantiles min/p05/p50/p95/max",
+                        f"{float(ll_stats.get('q_min', np.nan)):.6f} / "
+                        f"{float(ll_stats.get('q05', np.nan)):.6f} / "
+                        f"{float(ll_stats.get('q50', np.nan)):.6f} / "
+                        f"{float(ll_stats.get('q95', np.nan)):.6f} / "
+                        f"{float(ll_stats.get('q_max', np.nan)):.6f}",
+                    )
+                    delta_table.add_row(
+                        "Delta LogLoss mean_neg",
+                        self._fmt_metric(ll_stats.get("mean_neg")),
+                    )
+                    delta_table.add_row(
+                        "Delta LogLoss mean_pos",
+                        self._fmt_metric(ll_stats.get("mean_pos")),
+                    )
                 else:
                     delta_table.add_row("Delta LogLoss mean ± std", "[bold yellow]N/A[/]")
                     delta_table.add_row("Delta LogLoss 95% CI", "[bold yellow]N/A[/]")
@@ -745,6 +829,24 @@ class BacktestEngine:
                     delta_table.add_row("Delta Brier 95% CI", "[bold yellow]N/A[/]")
 
                 self.console.print(delta_table)
+
+                if ll_stats is not None:
+                    top_positive = ll_stats.get("top_positive", [])
+                    top_table = Table(
+                        title="Top 10 Delta LogLoss Positivos (draw_id)",
+                        show_header=True,
+                        header_style="bold cyan",
+                    )
+                    top_table.add_column("Draw ID", justify="right")
+                    top_table.add_column("Delta LogLoss", justify="right")
+                    if isinstance(top_positive, list) and top_positive:
+                        for item in top_positive[:10]:
+                            draw_id = int(item.get("draw_id", 0))
+                            delta_val = float(item.get("delta", 0.0))
+                            top_table.add_row(str(draw_id), f"{delta_val:.6f}")
+                    else:
+                        top_table.add_row("-", "N/A")
+                    self.console.print(top_table)
 
             if isinstance(baseline_prob_summary, dict):
                 cmp_table = Table(
