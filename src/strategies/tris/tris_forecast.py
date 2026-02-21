@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 
+from src.data_access.config import BEST_SETTINGS_TRIS
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
+from src.strategies.tris.gating import choose_strategy
+from src.strategies.tris.structural_filters import (
+    StructuralFilterConfig,
+    StructuralFilterEngine,
+)
 from src.strategies.tris.topk import beam_search, select_diverse
+from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
 from src.strategies.tris.v1a_model import TrisV1AModel, _extract_tris_series
 
 
@@ -22,10 +29,43 @@ class TrisForecastV1A:
     def _uniform_probs() -> np.ndarray:
         return np.full((5, 10), 0.1, dtype=np.float64)
 
+    def _get_structural_override(self, overrides: Dict, key: str, default):
+        fallback = BEST_SETTINGS_TRIS.get(key, default)
+        return self._get_override(overrides, key, fallback)
+
+    @staticmethod
+    def _filter_ranked_candidates(
+        ranked: List[Tuple[List[int], float]], accepted_digits: List[List[int]]
+    ) -> List[Tuple[List[int], float]]:
+        counts = {}
+        for digits in accepted_digits:
+            key = tuple(int(d) for d in digits)
+            counts[key] = counts.get(key, 0) + 1
+
+        filtered = []
+        for digits, lp in ranked:
+            key = tuple(int(d) for d in digits)
+            remaining = counts.get(key, 0)
+            if remaining > 0:
+                filtered.append((digits, lp))
+                counts[key] = remaining - 1
+        return filtered
+
     def predict(
         self, history: DrawHistoryDTO, config: PredictionConfigDTO
     ) -> PredictionResultDTO:
         overrides = config.filter_overrides or {}
+        verbose_struct = bool(self._get_override(overrides, "verbose", False))
+        gate_choice, gate_report = choose_strategy(history, config)
+        if gate_choice == "uniform":
+            baseline_pred = TrisUniformBaselineStrategy().predict(history, config)
+            metadata = dict(baseline_pred.metadata or {})
+            metadata["gate"] = gate_report
+            return PredictionResultDTO(
+                strategy_name=self.strategy_name,
+                tickets=baseline_pred.tickets[: config.num_tickets],
+                metadata=metadata,
+            )
 
         short_window = int(self._get_override(overrides, "short_window", 200))
         long_window = int(self._get_override(overrides, "long_window", 2000))
@@ -34,6 +74,8 @@ class TrisForecastV1A:
         markov_window = int(self._get_override(overrides, "markov_window", 2000))
         alpha_markov = float(self._get_override(overrides, "alpha_markov", 0.2))
         blend_markov = float(self._get_override(overrides, "blend_markov", 0.35))
+        uniform_mix = float(self._get_override(overrides, "uniform_mix", 0.0))
+        temperature = float(self._get_override(overrides, "temperature", 1.0))
         topk_k = int(self._get_override(overrides, "topk_k", 2000))
         per_pos_topm = int(self._get_override(overrides, "per_pos_topm", 6))
         beam_width = int(self._get_override(overrides, "beam_width", 2500))
@@ -59,6 +101,8 @@ class TrisForecastV1A:
         else:
             model = TrisV1AModel(
                 blend_markov=blend_markov,
+                uniform_mix=uniform_mix,
+                temperature=temperature,
                 bayes_params={
                     "alpha": alpha_bayes,
                     "short_window": short_window,
@@ -81,11 +125,132 @@ class TrisForecastV1A:
             per_pos_topm=per_pos_topm,
             beam_width=beam_width,
         )
+        prev_digits = (
+            [int(d) for d in history.winning_numbers[-1][:5]]
+            if history.winning_numbers
+            else None
+        )
+
+        struct_allowed_even = self._get_structural_override(
+            overrides, "structural_allowed_even_counts", [2, 3]
+        )
+        if struct_allowed_even is None:
+            struct_allowed_even = [2, 3]
+        elif not isinstance(struct_allowed_even, (list, tuple, set)):
+            struct_allowed_even = [struct_allowed_even]
+        structural_cfg = StructuralFilterConfig(
+            enabled=bool(
+                self._get_structural_override(overrides, "structural_enabled", True)
+            ),
+            sum_min=int(
+                self._get_structural_override(overrides, "structural_sum_min", 15)
+            ),
+            sum_max=int(
+                self._get_structural_override(overrides, "structural_sum_max", 30)
+            ),
+            allowed_even_counts=tuple(int(v) for v in struct_allowed_even),
+            min_unique_digits=int(
+                self._get_structural_override(
+                    overrides, "structural_min_unique_digits", 3
+                )
+            ),
+            max_consecutive_run=int(
+                self._get_structural_override(
+                    overrides, "structural_max_consecutive_run", 3
+                )
+            ),
+            max_positional_repeats_vs_prev=int(
+                self._get_structural_override(
+                    overrides, "structural_max_positional_repeats_vs_prev", 2
+                )
+            ),
+            hard_filter=bool(
+                self._get_structural_override(overrides, "structural_hard_filter", True)
+            ),
+            soft_penalties=self._get_structural_override(
+                overrides, "structural_soft_penalties", None
+            ),
+        )
+
+        filtered_ranked = candidates
+        structural_diag = {
+            "enabled": bool(structural_cfg.enabled),
+            "fallback": False,
+        }
+        if structural_cfg.enabled:
+            engine = StructuralFilterEngine(structural_cfg)
+            current_topk = int(max(1, topk_k))
+            max_topk = int(
+                self._get_structural_override(
+                    overrides,
+                    "structural_max_topk_k",
+                    max(current_topk, beam_width, config.num_tickets * 20, current_topk * 8),
+                )
+            )
+            expansions = 0
+
+            while True:
+                candidates_digits = [digits for digits, _ in candidates]
+                accepted_digits, diag = engine.apply(candidates_digits, prev_digits)
+                structural_diag.update(diag)
+                structural_diag["topk_k_initial"] = int(topk_k)
+                structural_diag["topk_k_used"] = int(current_topk)
+                structural_diag["topk_k_max"] = int(max_topk)
+                structural_diag["beam_expansions"] = int(expansions)
+                filtered_ranked = self._filter_ranked_candidates(candidates, accepted_digits)
+
+                if len(filtered_ranked) >= config.num_tickets:
+                    break
+                if current_topk >= max_topk:
+                    break
+
+                next_topk = min(
+                    max_topk,
+                    max(current_topk + 1, int(np.ceil(current_topk * 1.5))),
+                )
+                if next_topk <= current_topk:
+                    break
+
+                current_topk = int(next_topk)
+                expansions += 1
+                candidates = beam_search(
+                    pos_probs,
+                    k=current_topk,
+                    per_pos_topm=per_pos_topm,
+                    beam_width=max(beam_width, current_topk),
+                )
+
         tickets = select_diverse(
-            candidates,
+            filtered_ranked,
             n=config.num_tickets,
             min_hamming=diversity_min_hamming,
         )
+
+        if structural_cfg.enabled and len(tickets) < config.num_tickets:
+            structural_diag["fallback"] = True
+            tickets = select_diverse(
+                candidates,
+                n=config.num_tickets,
+                min_hamming=diversity_min_hamming,
+            )
+        elif structural_cfg.enabled:
+            structural_diag["fallback"] = False
+
+        if structural_cfg.enabled and verbose_struct:
+            reject_counts = structural_diag.get("reject_reasons", {})
+            ranked_reasons = sorted(
+                reject_counts.items(), key=lambda kv: int(kv[1]), reverse=True
+            )
+            top_reasons = [f"{k}:{v}" for k, v in ranked_reasons if int(v) > 0][:3]
+            reasons_text = ", ".join(top_reasons) if top_reasons else "none"
+            print(
+                "[TRIS][Structural] "
+                f"acceptance_rate={float(structural_diag.get('acceptance_rate', 0.0)):.4f} "
+                f"accepted={int(structural_diag.get('accepted', 0))}/"
+                f"{int(structural_diag.get('total_in', 0))} "
+                f"top_rejects={reasons_text} "
+                f"fallback={bool(structural_diag.get('fallback', False))}"
+            )
 
         if len(tickets) < config.num_tickets:
             fallback = [int(np.argmax(pos_probs[pos])) for pos in range(5)]
@@ -98,11 +263,14 @@ class TrisForecastV1A:
             "entropy_pos": entropy_pos.tolist(),
             "entropy_mean": float(entropy_mean),
             "model_version": self.model_version,
+            "gate": gate_report,
             "topk_preview": [
                 {"digits": d, "logp": float(lp)}
                 for d, lp in candidates[: max(0, topk_preview)]
             ],
         }
+        if structural_cfg.enabled:
+            metadata["structural_filters"] = structural_diag
 
         return PredictionResultDTO(
             strategy_name=self.strategy_name,
