@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -9,7 +9,7 @@ class StructuralFilterConfig:
     enabled: bool = True
     sum_min: int = 15
     sum_max: int = 30
-    allowed_even_counts: Tuple[int, ...] = (2, 3)
+    allowed_even_counts: tuple[int, ...] = (2, 3)
     min_unique_digits: int = 3
     max_consecutive_run: int = 3
     max_positional_repeats_vs_prev: int = 2
@@ -103,9 +103,11 @@ class StructuralFilterEngine:
                 if repeats > int(self.config.max_positional_repeats_vs_prev):
                     violations.append("mirror_prev")
 
-            if self.config.hard_filter and violations:
+            if violations:
                 for reason in set(violations):
                     reject_reasons[reason] += 1
+
+            if self.config.hard_filter and violations:
                 continue
 
             if not self.config.hard_filter and violations:
