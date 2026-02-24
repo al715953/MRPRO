@@ -261,10 +261,35 @@ class MissionController:
         self.ui.console.print("\n[bold cyan]Modo de backtest Tris:[/]")
         self.ui.console.print("1) Universe-only (solo filtros)")
         self.ui.console.print("2) Full selector (ranking + selección final)")
+        self.ui.console.print("3) Universe-only (estrategia topK / FeatureLR)")
         mode_in = self.ui.console.input("\n[yellow]Selecciona modo [2]: [/]").strip()
         if mode_in == "1":
             tris_backtest_mode = "universe"
             n_tickets = int(settings.get("num_tickets", 200))
+        elif mode_in == "3":
+            tris_backtest_mode = "universe_strategy"
+            n_tickets = int(settings.get("num_tickets", 200))
+            try:
+                universe_topk_k = int(
+                    self.ui.console.input(
+                        f"[yellow]K del universo topK ({int(settings.get('universe_topk_k', 10000))}): [/] "
+                    ).strip()
+                    or int(settings.get("universe_topk_k", 10000))
+                )
+            except Exception:
+                universe_topk_k = int(settings.get("universe_topk_k", 10000))
+            settings["universe_mode"] = "topk_scored_universe"
+            settings["score_model"] = "feature_lr"
+            settings["universe_topk_k"] = int(max(0, universe_topk_k))
+            guardrails_in = (
+                self.ui.console.input(
+                    "[yellow]¿Usar guardrails estructurales? [Y/n]: [/] "
+                )
+                .strip()
+                .lower()
+            )
+            if guardrails_in in {"n", "no"}:
+                settings["structural_enabled"] = False
         else:
             tris_backtest_mode = "selector"
             try:

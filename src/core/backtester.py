@@ -182,7 +182,10 @@ class BacktestEngine:
         )
         run_baseline = bool(overrides.get("run_baseline", True))
         tris_backtest_mode = str(overrides.get("tris_backtest_mode", "selector")).lower()
-        is_tris_universe_mode = is_tris_profile and tris_backtest_mode == "universe"
+        is_tris_universe_mode = is_tris_profile and tris_backtest_mode in (
+            "universe",
+            "universe_strategy",
+        )
         baseline_strategy = (
             TrisUniformBaselineStrategy()
             if (is_tris_profile and run_baseline and not is_tris_universe_mode)
@@ -226,6 +229,7 @@ class BacktestEngine:
             "uniques": 0,
             "consecutive": 0,
             "mirror_prev": 0,
+            "score_topk": 0,
         }
         tris_struct_cfg = None
         tris_struct_engine = None
@@ -327,27 +331,86 @@ class BacktestEngine:
                         else None
                     )
                     winner_digits = [int(d) for d in target[:5]]
-                    final_mask = StructuralFilterEngine.mask_all(
-                        tris_all_tickets,
-                        prev_digits,
-                        tris_static_mask,
-                        tris_struct_cfg,
-                    )
-                    univ_size_curr = int(np.sum(final_mask))
-                    tris_universe_sizes.append(univ_size_curr)
+                    universe_nd = None
+                    if tris_backtest_mode == "universe_strategy":
+                        try:
+                            prediction = strategy.predict(curr_h, config, verbose=False)
+                        except TypeError:
+                            prediction = strategy.predict(curr_h, config)
+                        snapshot = prediction.metadata if prediction else {}
+                        universe_nd = (
+                            snapshot.get("raw_ndarray")
+                            if isinstance(snapshot, dict)
+                            else None
+                        )
 
-                    accepted_winner, winner_diag = tris_struct_engine.apply(
-                        [winner_digits], prev_digits
-                    )
-                    fs_pass = bool(len(accepted_winner) > 0)
-                    winner_rr = (
-                        winner_diag.get("reject_reasons", {})
-                        if isinstance(winner_diag, dict)
-                        else {}
-                    )
-                    winner_fail_reasons_curr = {
-                        k: int(v) for k, v in winner_rr.items() if int(v) > 0
-                    }
+                    if universe_nd is None:
+                        final_mask = StructuralFilterEngine.mask_all(
+                            tris_all_tickets,
+                            prev_digits,
+                            tris_static_mask,
+                            tris_struct_cfg,
+                        )
+                        univ_size_curr = int(np.sum(final_mask))
+                        tris_universe_sizes.append(univ_size_curr)
+
+                        accepted_winner, winner_diag = tris_struct_engine.apply(
+                            [winner_digits], prev_digits
+                        )
+                        fs_pass = bool(len(accepted_winner) > 0)
+                        winner_rr = (
+                            winner_diag.get("reject_reasons", {})
+                            if isinstance(winner_diag, dict)
+                            else {}
+                        )
+                        winner_fail_reasons_curr = {
+                            k: int(v) for k, v in winner_rr.items() if int(v) > 0
+                        }
+                    else:
+                        universe_ptr = np.asarray(universe_nd)
+                        if universe_ptr.ndim == 1:
+                            universe_ptr = (
+                                universe_ptr.reshape(1, -1)
+                                if universe_ptr.shape[0] >= 5
+                                else np.empty((0, 5), dtype=np.int16)
+                            )
+                        if universe_ptr.ndim != 2 or universe_ptr.shape[1] < 5:
+                            universe_ptr = np.empty((0, 5), dtype=np.int16)
+                        else:
+                            universe_ptr = universe_ptr[:, :5]
+
+                        univ_size_curr = int(universe_ptr.shape[0])
+                        tris_universe_sizes.append(univ_size_curr)
+
+                        winner_arr = np.asarray(winner_digits, dtype=np.int16)
+                        fs_pass = bool(
+                            univ_size_curr > 0
+                            and np.any(
+                                np.all(
+                                    universe_ptr.astype(np.int16, copy=False)
+                                    == winner_arr[None, :],
+                                    axis=1,
+                                )
+                            )
+                        )
+
+                        accepted_winner, winner_diag = tris_struct_engine.apply(
+                            [winner_digits], prev_digits
+                        )
+                        winner_rr = (
+                            winner_diag.get("reject_reasons", {})
+                            if isinstance(winner_diag, dict)
+                            else {}
+                        )
+                        if len(accepted_winner) == 0:
+                            winner_fail_reasons_curr = {
+                                k: int(v) for k, v in winner_rr.items() if int(v) > 0
+                            }
+                        elif not fs_pass:
+                            winner_fail_reasons_curr = {"score_topk": 1}
+                        else:
+                            winner_fail_reasons_curr = {}
+
                     if fs_pass:
                         tris_fs_pass_count += 1
                         jackpot_coverage += 1
@@ -1021,7 +1084,14 @@ class BacktestEngine:
             )
             fail_table.add_column("Reason", justify="left")
             fail_table.add_column("Count", justify="right")
-            for key in ("sum", "parity", "uniques", "consecutive", "mirror_prev"):
+            for key in (
+                "sum",
+                "parity",
+                "uniques",
+                "consecutive",
+                "mirror_prev",
+                "score_topk",
+            ):
                 fail_table.add_row(key, str(int(fail_counts.get(key, 0))))
             self.console.print(fail_table)
 

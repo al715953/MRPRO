@@ -162,6 +162,9 @@ BEST_SETTINGS = {
 
 # --- CONFIGURACION BASE: TRIS V1-A ---
 BEST_SETTINGS_TRIS = {
+    "universe_mode": "topk_scored_universe",
+    "score_model": "feature_lr",  # o "ticket_ngram" / "positional_logp"
+    "universe_topk_k": 10000,  # prueba 2000, 5000, 10000, 20000
     "num_tickets": 200,
     "backtest_size": 500,
     "topk_k": 2000,
@@ -182,10 +185,16 @@ BEST_SETTINGS_TRIS = {
     "structural_enabled": True,
     "structural_sum_min": 15,
     "structural_sum_max": 30,
-    "structural_allowed_even_counts": [2, 3],
+    "structural_allowed_even_counts": [2, 3],  # parity off
     "structural_min_unique_digits": 3,
     "structural_max_consecutive_run": 3,
     "structural_max_positional_repeats_vs_prev": 2,
+    # FeatureLR params
+    "feature_lr_alpha": 1.0,
+    "feature_lr_short_window": 200,
+    "feature_lr_long_window": 2000,
+    "feature_lr_mix_lambda": 0.7,
+    "feature_lr_use_mirror": True,
 }
 
 # --- ESTÉTICA DE CONSOLA (ANSI) ---
