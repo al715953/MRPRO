@@ -114,6 +114,22 @@ class BacktestEngine:
         }
 
     @staticmethod
+    def _coerce_bool(value, default: bool = False) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, np.integer)):
+            return bool(int(value))
+        if isinstance(value, str):
+            raw = value.strip().lower()
+            if raw in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if raw in {"0", "false", "f", "no", "n", "off", ""}:
+                return False
+        return bool(value)
+
+    @staticmethod
     def _build_tris_structural_config(overrides):
         ov = overrides if isinstance(overrides, dict) else {}
         allowed_even = ov.get("structural_allowed_even_counts", [2, 3])
@@ -121,8 +137,8 @@ class BacktestEngine:
             allowed_even = [2, 3]
         if not isinstance(allowed_even, (list, tuple, set)):
             allowed_even = [allowed_even]
-        return StructuralFilterConfig(
-            enabled=bool(ov.get("structural_enabled", True)),
+        cfg = StructuralFilterConfig(
+            enabled=BacktestEngine._coerce_bool(ov.get("structural_enabled", True), True),
             sum_min=int(ov.get("structural_sum_min", 15)),
             sum_max=int(ov.get("structural_sum_max", 30)),
             allowed_even_counts=tuple(int(v) for v in allowed_even),
@@ -131,9 +147,46 @@ class BacktestEngine:
             max_positional_repeats_vs_prev=int(
                 ov.get("structural_max_positional_repeats_vs_prev", 2)
             ),
-            hard_filter=bool(ov.get("structural_hard_filter", True)),
+            hard_filter=BacktestEngine._coerce_bool(
+                ov.get("structural_hard_filter", True), True
+            ),
             soft_penalties=ov.get("structural_soft_penalties", None),
         )
+        cfg.enable_global_sum_filter = BacktestEngine._coerce_bool(
+            ov.get("structural_enable_global_sum_filter", cfg.enable_global_sum_filter),
+            default=bool(cfg.enable_global_sum_filter),
+        )
+        cfg.enable_global_parity_filter = BacktestEngine._coerce_bool(
+            ov.get(
+                "structural_enable_global_parity_filter",
+                cfg.enable_global_parity_filter,
+            ),
+            default=bool(cfg.enable_global_parity_filter),
+        )
+        cfg.immediate_repeat_mode = str(
+            ov.get("structural_immediate_repeat_mode", cfg.immediate_repeat_mode)
+        ).lower()
+        disallow_raw = ov.get(
+            "structural_immediate_repeat_disallow_positions",
+            cfg.immediate_repeat_disallow_positions,
+        )
+        if isinstance(disallow_raw, (list, tuple, np.ndarray)):
+            disallow_arr = np.asarray(disallow_raw, dtype=bool).reshape(-1)
+            if disallow_arr.size < 5:
+                disallow_arr = np.pad(
+                    disallow_arr,
+                    (0, 5 - disallow_arr.size),
+                    mode="constant",
+                    constant_values=False,
+                )
+            cfg.immediate_repeat_disallow_positions = tuple(
+                bool(v) for v in disallow_arr[:5].tolist()
+            )
+        cfg.positional_limits = ov.get("structural_positional_limits", cfg.positional_limits)
+        cfg.camera_entropy_rules = ov.get(
+            "structural_camera_entropy_rules", cfg.camera_entropy_rules
+        )
+        return cfg
 
     def run(
         self,
@@ -180,18 +233,70 @@ class BacktestEngine:
             and isinstance(config.filter_overrides, dict)
             else {}
         )
-        run_baseline = bool(overrides.get("run_baseline", True))
-        tris_backtest_mode = str(overrides.get("tris_backtest_mode", "selector")).lower()
+        run_baseline = self._coerce_bool(overrides.get("run_baseline", True), True)
+        tris_backtest_mode_raw = str(
+            overrides.get("tris_backtest_mode", "selector")
+        ).lower()
+        tris_backtest_mode = (
+            "universe_strategy"
+            if tris_backtest_mode_raw == "compare_models"
+            else tris_backtest_mode_raw
+        )
         is_tris_universe_mode = is_tris_profile and tris_backtest_mode in (
             "universe",
             "universe_strategy",
         )
+        tris_compare_models = bool(
+            is_tris_profile
+            and tris_backtest_mode == "universe_strategy"
+            and (
+                tris_backtest_mode_raw == "compare_models"
+                or self._coerce_bool(overrides.get("compare_models", False), False)
+                or self._coerce_bool(
+                    overrides.get("tris_compare_models", False), False
+                )
+            )
+        )
+        tris_universe_mode_raw = str(
+            overrides.get("universe_mode", "full_filtered_universe")
+        ).lower()
+        tris_score_model_raw = str(overrides.get("score_model", "positional_logp")).lower()
+        try:
+            tris_universe_topk_k_raw = int(
+                overrides.get("universe_topk_k", overrides.get("topk_k", 0))
+            )
+        except (TypeError, ValueError):
+            tris_universe_topk_k_raw = 0
+        try:
+            tris_camera_topm_raw = int(overrides.get("camera_topm_per_position", 10))
+        except (TypeError, ValueError):
+            tris_camera_topm_raw = 10
+        camera_debug_strict = self._coerce_bool(
+            overrides.get("camera_debug_strict", False), False
+        )
+        compare_model_a_score_model = str(
+            overrides.get(
+                "compare_model_a_score_model",
+                overrides.get("score_model", "feature_lr"),
+            )
+        ).lower()
+        compare_model_b_score_model = str(
+            overrides.get("compare_model_b_score_model", "random_topk")
+        ).lower()
+        compare_model_a_name = str(
+            overrides.get("compare_model_a_name", compare_model_a_score_model)
+        ) or str(compare_model_a_score_model or "feature_lr")
+        compare_model_b_name = str(
+            overrides.get("compare_model_b_name", compare_model_b_score_model)
+        ) or str(compare_model_b_score_model or "random_topk")
         baseline_strategy = (
             TrisUniformBaselineStrategy()
             if (is_tris_profile and run_baseline and not is_tris_universe_mode)
             else None
         )
-        compare_baselines = bool(overrides.get("compare_baselines", False))
+        compare_baselines = self._coerce_bool(
+            overrides.get("compare_baselines", False), False
+        )
         random_filter_baseline = (
             RandomWithinStructuralFiltersStrategy()
             if (is_tris_profile and compare_baselines and not is_tris_universe_mode)
@@ -223,6 +328,10 @@ class BacktestEngine:
         delta_ll_details = []
         tris_universe_sizes = []
         tris_fs_pass_count = 0
+        tris_compare_in_lr = []
+        tris_compare_in_rand = []
+        tris_compare_u_lr = []
+        tris_compare_u_rand = []
         tris_winner_fail_reasons = {
             "sum": 0,
             "parity": 0,
@@ -231,15 +340,97 @@ class BacktestEngine:
             "mirror_prev": 0,
             "score_topk": 0,
         }
+        tris_pos_top1_hits = np.zeros(5, dtype=int)
+        tris_pos_top1_total = 0
+        tris_pos_mask_hits = np.zeros(5, dtype=int)
+        tris_pos_mask_total = 0
+        tris_pos_universe_hits = np.zeros(5, dtype=int)
+        tris_pos_universe_total = 0
+        camera_mask_missing_warned = False
+        camera_full_support_draws = 0
+        camera_support_checks = 0
+        camera_mask_present_draws = 0
         tris_struct_cfg = None
+        tris_struct_cfg_effective = (
+            self._build_tris_structural_config(overrides) if is_tris_profile else None
+        )
+        tris_run_context = {}
+        if is_tris_profile and isinstance(tris_struct_cfg_effective, StructuralFilterConfig):
+            tris_run_context = {
+                "tris_backtest_mode": str(tris_backtest_mode),
+                "universe_mode": str(tris_universe_mode_raw),
+                "score_model": str(tris_score_model_raw),
+                "universe_topk_k": int(max(0, tris_universe_topk_k_raw)),
+                "camera_masked_universe": bool(
+                    self._coerce_bool(
+                        overrides.get("camera_masked_universe", False), False
+                    )
+                ),
+                "camera_topm_per_position": int(max(1, min(10, tris_camera_topm_raw))),
+                "structural_enable_global_sum_filter": bool(
+                    tris_struct_cfg_effective.enable_global_sum_filter
+                ),
+                "structural_enable_global_parity_filter": bool(
+                    tris_struct_cfg_effective.enable_global_parity_filter
+                ),
+                "structural_immediate_repeat_mode": str(
+                    tris_struct_cfg_effective.immediate_repeat_mode
+                ),
+                "camera_debug_strict": bool(camera_debug_strict),
+            }
+            if verbose:
+                self.console.print(
+                    "[cyan]TRIS RUN CONTEXT:[/] "
+                    + ", ".join(f"{k}={v}" for k, v in tris_run_context.items())
+                )
         tris_struct_engine = None
         tris_all_tickets = None
         tris_static_mask = None
         if is_tris_universe_mode:
-            tris_struct_cfg = self._build_tris_structural_config(overrides)
+            tris_struct_cfg = tris_struct_cfg_effective
             tris_struct_engine = StructuralFilterEngine(tris_struct_cfg)
             tris_all_tickets, _, tris_static_mask = get_universe_and_static_mask(
                 tris_struct_cfg
+            )
+
+        def _coerce_universe_ptr(universe_nd):
+            if universe_nd is None:
+                return np.empty((0, 5), dtype=np.int16)
+            universe_ptr = np.asarray(universe_nd)
+            if universe_ptr.ndim == 1:
+                universe_ptr = (
+                    universe_ptr.reshape(1, -1)
+                    if universe_ptr.shape[0] >= 5
+                    else np.empty((0, 5), dtype=np.int16)
+                )
+            if universe_ptr.ndim != 2 or universe_ptr.shape[1] < 5:
+                return np.empty((0, 5), dtype=np.int16)
+            return universe_ptr[:, :5].astype(np.int16, copy=False)
+
+        def _predict_snapshot(curr_history, local_overrides):
+            base_overrides = (
+                dict(config.filter_overrides)
+                if hasattr(config, "filter_overrides")
+                and isinstance(config.filter_overrides, dict)
+                else {}
+            )
+            merged_overrides = dict(base_overrides)
+            merged_overrides.update(local_overrides)
+            config.filter_overrides = merged_overrides
+            try:
+                try:
+                    pred = strategy.predict(curr_history, config, verbose=False)
+                except TypeError:
+                    pred = strategy.predict(curr_history, config)
+            finally:
+                config.filter_overrides = base_overrides
+            snap = pred.metadata if pred else {}
+            universe_nd_local = snap.get("raw_ndarray") if isinstance(snap, dict) else None
+            return (
+                pred,
+                snap,
+                _coerce_universe_ptr(universe_nd_local),
+                universe_nd_local is not None,
             )
 
         self.console.print(
@@ -322,6 +513,10 @@ class BacktestEngine:
                 univ_size_curr = 0
                 fs_pass = False
                 winner_fail_reasons_curr = {}
+                compare_metrics_curr = {}
+                camera_mask_present_curr = False
+                camera_mask_hits_curr = None
+                camera_pos_unique_digits_final_curr = None
                 if is_tris_universe_mode:
                     prediction = None
                     snapshot = {}
@@ -331,32 +526,129 @@ class BacktestEngine:
                         else None
                     )
                     winner_digits = [int(d) for d in target[:5]]
-                    universe_nd = None
+                    winner_arr = np.asarray(winner_digits, dtype=np.int16)
+                    universe_ptr = np.empty((0, 5), dtype=np.int16)
+                    has_raw_universe = False
                     if tris_backtest_mode == "universe_strategy":
-                        try:
-                            prediction = strategy.predict(curr_h, config, verbose=False)
-                        except TypeError:
-                            prediction = strategy.predict(curr_h, config)
-                        snapshot = prediction.metadata if prediction else {}
-                        universe_nd = (
-                            snapshot.get("raw_ndarray")
-                            if isinstance(snapshot, dict)
-                            else None
-                        )
+                        if tris_compare_models:
+                            compare_base = dict(overrides)
+                            try:
+                                compare_k = int(
+                                    compare_base.get(
+                                        "universe_topk_k",
+                                        compare_base.get("topk_k", 10000),
+                                    )
+                                )
+                            except (TypeError, ValueError):
+                                compare_k = 10000
+                            compare_k = max(0, compare_k)
+                            compare_common = {
+                                "tris_backtest_mode": "universe_strategy",
+                                "universe_mode": "topk_scored_universe",
+                                "universe_topk_k": compare_k,
+                            }
 
-                    if universe_nd is None:
-                        final_mask = StructuralFilterEngine.mask_all(
-                            tris_all_tickets,
-                            prev_digits,
-                            tris_static_mask,
-                            tris_struct_cfg,
-                        )
+                            _, snap_a, universe_a, has_a_raw = _predict_snapshot(
+                                curr_h,
+                                {
+                                    **compare_common,
+                                    "score_model": compare_model_a_score_model,
+                                },
+                            )
+                            _, snap_b, universe_b, has_b_raw = _predict_snapshot(
+                                curr_h,
+                                {
+                                    **compare_common,
+                                    "score_model": compare_model_b_score_model,
+                                },
+                            )
+                            snapshot = (
+                                dict(snap_a)
+                                if isinstance(snap_a, dict)
+                                else {}
+                            )
+                            if not compare_model_a_name or compare_model_a_name == "none":
+                                compare_model_a_name = str(
+                                    snapshot.get("score_model", compare_model_a_score_model)
+                                )
+                            if (
+                                (not compare_model_b_name or compare_model_b_name == "none")
+                                and isinstance(snap_b, dict)
+                            ):
+                                compare_model_b_name = str(
+                                    snap_b.get("score_model", compare_model_b_score_model)
+                                )
+                            has_raw_universe = bool(has_a_raw and has_b_raw)
+                            if has_raw_universe:
+                                u_a = int(universe_a.shape[0])
+                                u_b = int(universe_b.shape[0])
+                                in_a = bool(
+                                    u_a > 0
+                                    and np.any(
+                                        np.all(
+                                            universe_a.astype(np.int16, copy=False)
+                                            == winner_arr[None, :],
+                                            axis=1,
+                                        )
+                                    )
+                                )
+                                in_b = bool(
+                                    u_b > 0
+                                    and np.any(
+                                        np.all(
+                                            universe_b.astype(np.int16, copy=False)
+                                            == winner_arr[None, :],
+                                            axis=1,
+                                        )
+                                    )
+                                )
+                                compare_metrics_curr = {
+                                    "in_lr": int(in_a),
+                                    "in_rand": int(in_b),
+                                    "u_lr": int(u_a),
+                                    "u_rand": int(u_b),
+                                    "in_model_a": int(in_a),
+                                    "in_model_b": int(in_b),
+                                    "u_model_a": int(u_a),
+                                    "u_model_b": int(u_b),
+                                    "model_a_name": str(compare_model_a_name),
+                                    "model_b_name": str(compare_model_b_name),
+                                }
+                                tris_compare_in_lr.append(int(in_a))
+                                tris_compare_in_rand.append(int(in_b))
+                                tris_compare_u_lr.append(int(u_a))
+                                tris_compare_u_rand.append(int(u_b))
+
+                                universe_ptr = universe_a
+                                univ_size_curr = int(u_a)
+                                tris_universe_sizes.append(univ_size_curr)
+                                fs_pass = bool(in_a)
+                        else:
+                            prediction, snapshot, universe_ptr, has_raw_universe = (
+                                _predict_snapshot(curr_h, {})
+                            )
+
+                    if tris_backtest_mode != "universe_strategy" or not has_raw_universe:
+                        if tris_struct_cfg is not None and bool(tris_struct_cfg.enabled):
+                            final_mask = StructuralFilterEngine.mask_all(
+                                tris_all_tickets,
+                                prev_digits,
+                                tris_static_mask,
+                                tris_struct_cfg,
+                            )
+                        else:
+                            final_mask = np.ones(tris_all_tickets.shape[0], dtype=bool)
                         univ_size_curr = int(np.sum(final_mask))
                         tris_universe_sizes.append(univ_size_curr)
 
-                        accepted_winner, winner_diag = tris_struct_engine.apply(
-                            [winner_digits], prev_digits
-                        )
+                        if tris_struct_cfg is not None and bool(tris_struct_cfg.enabled):
+                            accepted_winner, winner_diag = tris_struct_engine.apply(
+                                [winner_digits], prev_digits
+                            )
+                        else:
+                            accepted_winner, winner_diag = [winner_digits], {
+                                "reject_reasons": {}
+                            }
                         fs_pass = bool(len(accepted_winner) > 0)
                         winner_rr = (
                             winner_diag.get("reject_reasons", {})
@@ -367,36 +659,28 @@ class BacktestEngine:
                             k: int(v) for k, v in winner_rr.items() if int(v) > 0
                         }
                     else:
-                        universe_ptr = np.asarray(universe_nd)
-                        if universe_ptr.ndim == 1:
-                            universe_ptr = (
-                                universe_ptr.reshape(1, -1)
-                                if universe_ptr.shape[0] >= 5
-                                else np.empty((0, 5), dtype=np.int16)
-                            )
-                        if universe_ptr.ndim != 2 or universe_ptr.shape[1] < 5:
-                            universe_ptr = np.empty((0, 5), dtype=np.int16)
-                        else:
-                            universe_ptr = universe_ptr[:, :5]
-
-                        univ_size_curr = int(universe_ptr.shape[0])
-                        tris_universe_sizes.append(univ_size_curr)
-
-                        winner_arr = np.asarray(winner_digits, dtype=np.int16)
-                        fs_pass = bool(
-                            univ_size_curr > 0
-                            and np.any(
-                                np.all(
-                                    universe_ptr.astype(np.int16, copy=False)
-                                    == winner_arr[None, :],
-                                    axis=1,
+                        if not tris_compare_models:
+                            univ_size_curr = int(universe_ptr.shape[0])
+                            tris_universe_sizes.append(univ_size_curr)
+                            fs_pass = bool(
+                                univ_size_curr > 0
+                                and np.any(
+                                    np.all(
+                                        universe_ptr.astype(np.int16, copy=False)
+                                        == winner_arr[None, :],
+                                        axis=1,
+                                    )
                                 )
                             )
-                        )
 
-                        accepted_winner, winner_diag = tris_struct_engine.apply(
-                            [winner_digits], prev_digits
-                        )
+                        if tris_struct_cfg is not None and bool(tris_struct_cfg.enabled):
+                            accepted_winner, winner_diag = tris_struct_engine.apply(
+                                [winner_digits], prev_digits
+                            )
+                        else:
+                            accepted_winner, winner_diag = [winner_digits], {
+                                "reject_reasons": {}
+                            }
                         winner_rr = (
                             winner_diag.get("reject_reasons", {})
                             if isinstance(winner_diag, dict)
@@ -428,6 +712,110 @@ class BacktestEngine:
                         reduced_sizes.append(
                             int(snapshot.get("final_size", len(prediction.tickets)))
                         )
+
+                if is_tris_profile and isinstance(snapshot, dict):
+                    winner_digits_pos = np.asarray(
+                        [int(d) % 10 for d in target[:5]], dtype=np.int16
+                    )
+
+                    probs_payload = snapshot.get("pos_probs")
+                    if probs_payload is None:
+                        probs_payload = snapshot.get("camera_pmf")
+                    if probs_payload is not None:
+                        try:
+                            probs_arr = np.asarray(probs_payload, dtype=np.float64)
+                            if probs_arr.shape == (5, 10):
+                                probs_arr = np.clip(probs_arr, 1e-12, None)
+                                probs_arr = probs_arr / np.clip(
+                                    probs_arr.sum(axis=1, keepdims=True), 1e-12, None
+                                )
+                                pred_top1 = np.argmax(probs_arr, axis=1).astype(np.int16)
+                                tris_pos_top1_hits += (
+                                    pred_top1 == winner_digits_pos
+                                ).astype(int)
+                                tris_pos_top1_total += 1
+                        except Exception:
+                            pass
+
+                    score_model_snapshot = str(
+                        snapshot.get("score_model", tris_score_model_raw)
+                    ).lower()
+                    camera_masked_snapshot = bool(
+                        self._coerce_bool(
+                            snapshot.get(
+                                "camera_masked_universe",
+                                overrides.get("camera_masked_universe", False),
+                            ),
+                            False,
+                        )
+                    )
+                    try:
+                        camera_topm_snapshot = int(
+                            snapshot.get(
+                                "camera_topm_per_position",
+                                overrides.get("camera_topm_per_position", 10),
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        camera_topm_snapshot = 10
+
+                    mask_payload = snapshot.get("camera_positional_mask")
+                    if (
+                        mask_payload is None
+                        and score_model_snapshot == "camera_mech_v1"
+                        and not camera_mask_missing_warned
+                    ):
+                        self.console.print(
+                            "[bold yellow]WARNING:[/] camera_positional_mask missing in metadata"
+                        )
+                        camera_mask_missing_warned = True
+                    if mask_payload is not None:
+                        try:
+                            mask_arr = np.asarray(mask_payload, dtype=bool)
+                            if mask_arr.shape == (5, 10):
+                                idx = winner_digits_pos.astype(np.int64, copy=False)
+                                mask_hits_curr = mask_arr[
+                                    np.arange(5, dtype=np.int64), idx
+                                ].astype(int)
+                                tris_pos_mask_hits += mask_hits_curr
+                                tris_pos_mask_total += 1
+                                camera_mask_present_curr = True
+                                camera_mask_hits_curr = [
+                                    int(v) for v in mask_hits_curr.tolist()
+                                ]
+                                camera_mask_present_draws += 1
+                        except Exception:
+                            pass
+
+                    if "raw_ndarray" in snapshot:
+                        try:
+                            universe_pos = _coerce_universe_ptr(snapshot.get("raw_ndarray"))
+                            for pos in range(5):
+                                if universe_pos.shape[0] > 0 and np.any(
+                                    universe_pos[:, pos] == winner_digits_pos[pos]
+                                ):
+                                    tris_pos_universe_hits[pos] += 1
+                            tris_pos_universe_total += 1
+
+                            if (
+                                score_model_snapshot == "camera_mech_v1"
+                                and camera_masked_snapshot
+                                and int(camera_topm_snapshot) < 10
+                            ):
+                                pos_unique_digits_final = [
+                                    int(np.unique(universe_pos[:, pos]).size)
+                                    if universe_pos.shape[0] > 0
+                                    else 0
+                                    for pos in range(5)
+                                ]
+                                camera_pos_unique_digits_final_curr = (
+                                    pos_unique_digits_final
+                                )
+                                camera_support_checks += 1
+                                if all(v == 10 for v in pos_unique_digits_final):
+                                    camera_full_support_draws += 1
+                        except Exception:
+                            pass
 
                 prob_metrics = {}
                 baseline_metrics = {}
@@ -528,6 +916,8 @@ class BacktestEngine:
                         "jackpot_coverage_universe": int(fs_pass),
                         "winner_fail_reasons": winner_fail_reasons_curr,
                     }
+                    if compare_metrics_curr:
+                        audit.update(compare_metrics_curr)
                 elif is_reduction_only:
                     audit = None
                 else:
@@ -594,6 +984,22 @@ class BacktestEngine:
                         "hits_pos": int(audit.get("hits", 0)),
                         "winner_in_topk": "",
                     }
+                    if is_tris_profile:
+                        metrics_payload["camera_mask_present"] = bool(
+                            camera_mask_present_curr
+                        )
+                        if camera_mask_hits_curr is not None:
+                            metrics_payload["camera_mask_hit_by_pos"] = [
+                                int(v) for v in camera_mask_hits_curr
+                            ]
+                        if camera_pos_unique_digits_final_curr is not None:
+                            metrics_payload["camera_pos_unique_digits_final"] = [
+                                int(v) for v in camera_pos_unique_digits_final_curr
+                            ]
+                        if isinstance(snapshot, dict):
+                            cam_debug_payload = snapshot.get("camera_debug")
+                            if isinstance(cam_debug_payload, dict):
+                                metrics_payload["camera_debug"] = cam_debug_payload
                     if prob_metrics:
                         metrics_payload.update(prob_metrics)
                     if baseline_metrics:
@@ -606,6 +1012,8 @@ class BacktestEngine:
                             metrics_payload["winner_fail_reasons"] = (
                                 winner_fail_reasons_curr
                             )
+                        if compare_metrics_curr:
+                            metrics_payload.update(compare_metrics_curr)
                     audit["metrics_json"] = metrics_payload
 
                     self.forensic_data.append(audit)
@@ -686,6 +1094,21 @@ class BacktestEngine:
 
                 progress.advance(task)
 
+        if camera_support_checks > 0:
+            full_support_ratio = float(camera_full_support_draws / camera_support_checks)
+            if full_support_ratio > 0.80:
+                msg = (
+                    "Positional mask appears ineffective: final universe retains full support "
+                    "0-9 in all positions"
+                )
+                detail = (
+                    f"{msg} (draws={camera_full_support_draws}/{camera_support_checks}, "
+                    f"ratio={full_support_ratio:.2%})"
+                )
+                if camera_debug_strict:
+                    raise RuntimeError(detail)
+                self.console.print(f"[bold yellow]WARNING:[/] {detail}")
+
         # Reporte Final
         res = BacktestResultDTO(
             f"Sniper Global (Dynamic Hybrid)",
@@ -700,8 +1123,43 @@ class BacktestEngine:
         tris_delta_summary = None
         tris_outlier_summary = None
         tris_universe_summary = None
+        tris_positional_summary = None
         baseline_compare_summary = None
         if is_tris_profile:
+            tris_positional_summary = {
+                "top1_hits": [int(v) for v in tris_pos_top1_hits.tolist()],
+                "top1_total": int(tris_pos_top1_total),
+                "top1_hit_rate_by_pos": [
+                    (
+                        float(tris_pos_top1_hits[pos] / tris_pos_top1_total)
+                        if tris_pos_top1_total > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
+                "mask_hits": [int(v) for v in tris_pos_mask_hits.tolist()],
+                "mask_total": int(tris_pos_mask_total),
+                "mask_coverage_rate_by_pos": [
+                    (
+                        float(tris_pos_mask_hits[pos] / tris_pos_mask_total)
+                        if tris_pos_mask_total > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
+                "universe_hits": [int(v) for v in tris_pos_universe_hits.tolist()],
+                "universe_total": int(tris_pos_universe_total),
+                "universe_position_coverage_rate_by_pos": [
+                    (
+                        float(tris_pos_universe_hits[pos] / tris_pos_universe_total)
+                        if tris_pos_universe_total > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
+                "camera_mask_present_draws": int(camera_mask_present_draws),
+                "run_context": dict(tris_run_context),
+            }
             if is_tris_universe_mode:
                 if tris_universe_sizes:
                     u_arr = np.asarray(tris_universe_sizes, dtype=np.float64)
@@ -717,7 +1175,75 @@ class BacktestEngine:
                         "winner_fail_reasons": {
                             k: int(v) for k, v in tris_winner_fail_reasons.items()
                         },
+                        "run_context": dict(tris_run_context),
+                        "structural_flags_effective": {
+                            "enable_global_sum_filter": bool(
+                                tris_run_context.get(
+                                    "structural_enable_global_sum_filter", True
+                                )
+                            ),
+                            "enable_global_parity_filter": bool(
+                                tris_run_context.get(
+                                    "structural_enable_global_parity_filter", True
+                                )
+                            ),
+                            "immediate_repeat_mode": str(
+                                tris_run_context.get(
+                                    "structural_immediate_repeat_mode", "global_count"
+                                )
+                            ),
+                        },
                     }
+                    if tris_compare_models and tris_compare_in_lr and tris_compare_in_rand:
+                        in_lr_arr = np.asarray(tris_compare_in_lr, dtype=np.float64)
+                        in_rand_arr = np.asarray(tris_compare_in_rand, dtype=np.float64)
+                        u_lr_arr = np.asarray(tris_compare_u_lr, dtype=np.float64)
+                        u_rand_arr = np.asarray(tris_compare_u_rand, dtype=np.float64)
+                        delta_arr = in_lr_arr - in_rand_arr
+                        fs_lr = float(np.mean(in_lr_arr))
+                        fs_rand = float(np.mean(in_rand_arr))
+                        b = int(
+                            np.sum(
+                                (in_lr_arr.astype(np.int8) == 1)
+                                & (in_rand_arr.astype(np.int8) == 0)
+                            )
+                        )
+                        c = int(
+                            np.sum(
+                                (in_lr_arr.astype(np.int8) == 0)
+                                & (in_rand_arr.astype(np.int8) == 1)
+                            )
+                        )
+                        bc = b + c
+                        mcnemar_chi2 = (
+                            float(((abs(b - c) - 1.0) ** 2) / bc) if bc > 0 else None
+                        )
+                        block_size = max(2, int(np.sqrt(max(1, int(delta_arr.size)))))
+                        delta_ci = self._bootstrap_block_mean_ci(
+                            delta_arr,
+                            block_size=block_size,
+                            n_resamples=2000,
+                        )
+                        tris_universe_summary["compare_models"] = {
+                            "draws": int(delta_arr.size),
+                            "fs_lr": fs_lr,
+                            "fs_rand": fs_rand,
+                            "delta": float(fs_lr - fs_rand),
+                            "b": int(b),
+                            "c": int(c),
+                            "mcnemar_chi2": mcnemar_chi2,
+                            "delta_ci": delta_ci,
+                            "avg_u_lr": float(np.mean(u_lr_arr)),
+                            "avg_u_rand": float(np.mean(u_rand_arr)),
+                            "model_a_name": str(compare_model_a_name or tris_score_model_raw),
+                            "model_b_name": str(compare_model_b_name or "random_topk"),
+                            "model_a_score_model": str(
+                                compare_model_a_score_model or tris_score_model_raw
+                            ),
+                            "model_b_score_model": str(
+                                compare_model_b_score_model or "random_topk"
+                            ),
+                        }
             else:
                 tris_prob_summary = {
                     "logloss": (
@@ -826,6 +1352,7 @@ class BacktestEngine:
                 tris_delta_summary=tris_delta_summary,
                 tris_outlier_summary=tris_outlier_summary,
                 tris_universe_summary=tris_universe_summary,
+                tris_positional_summary=tris_positional_summary,
                 baseline_prob_summary=baseline_prob_summary,
                 baseline_compare_summary=baseline_compare_summary,
             )
@@ -906,6 +1433,43 @@ class BacktestEngine:
             "ci_high": float(ci_high),
             "p_lt_zero": p_lt_zero,
             "count": int(arr.size),
+        }
+
+    @staticmethod
+    def _bootstrap_block_mean_ci(
+        values, block_size: int | None = None, n_resamples: int = 2000
+    ):
+        arr = np.asarray(values, dtype=np.float64)
+        arr = arr[np.isfinite(arr)]
+        n = int(arr.size)
+        if n == 0:
+            return None
+
+        if block_size is None:
+            block_size = max(2, int(np.sqrt(n)))
+        block_size = int(max(1, min(int(block_size), n)))
+        n_resamples = max(1, int(n_resamples))
+        mean = float(np.mean(arr))
+        std = float(np.std(arr))
+
+        rng = np.random.default_rng(20260222)
+        n_blocks = int(np.ceil(n / block_size))
+        steps = np.arange(block_size, dtype=np.int64)
+        boot_means = np.empty(n_resamples, dtype=np.float64)
+        for j in range(n_resamples):
+            starts = rng.integers(0, n, size=n_blocks, endpoint=False)
+            idx = (starts[:, None] + steps[None, :]) % n
+            sample = arr[idx.reshape(-1)[:n]]
+            boot_means[j] = float(np.mean(sample))
+        ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
+
+        return {
+            "mean": mean,
+            "std": std,
+            "ci_low": float(ci_low),
+            "ci_high": float(ci_high),
+            "count": n,
+            "block_size": int(block_size),
         }
 
     @staticmethod
@@ -1016,6 +1580,7 @@ class BacktestEngine:
         tris_delta_summary=None,
         tris_outlier_summary=None,
         tris_universe_summary=None,
+        tris_positional_summary=None,
         baseline_prob_summary=None,
         baseline_compare_summary=None,
     ):
@@ -1074,6 +1639,12 @@ class BacktestEngine:
                 "FS-pass rate",
                 f"{100.0 * float(tris_universe_summary.get('fs_pass_rate', 0.0)):.2f}%",
             )
+            structural_flags = tris_universe_summary.get("structural_flags_effective")
+            if isinstance(structural_flags, dict):
+                u_table.add_row(
+                    "Structural flags effective",
+                    ", ".join(f"{k}={v}" for k, v in structural_flags.items()),
+                )
             self.console.print(u_table)
 
             fail_counts = tris_universe_summary.get("winner_fail_reasons", {})
@@ -1094,6 +1665,102 @@ class BacktestEngine:
             ):
                 fail_table.add_row(key, str(int(fail_counts.get(key, 0))))
             self.console.print(fail_table)
+
+            compare_summary = tris_universe_summary.get("compare_models")
+            if isinstance(compare_summary, dict):
+                model_a_name = str(
+                    compare_summary.get("model_a_name", "feature_lr")
+                    or "feature_lr"
+                )
+                model_b_name = str(
+                    compare_summary.get("model_b_name", "random_topk")
+                    or "random_topk"
+                )
+                cmp_table = Table(
+                    title=f"Compare Models ({model_a_name} vs {model_b_name})",
+                    show_header=True,
+                    header_style="bold cyan",
+                )
+                cmp_table.add_column("Métrica", justify="left")
+                cmp_table.add_column("Valor", justify="right")
+                cmp_table.add_row(
+                    "FS_lr",
+                    f"{100.0 * float(compare_summary.get('fs_lr', 0.0)):.2f}%",
+                )
+                cmp_table.add_row(
+                    "FS_rand",
+                    f"{100.0 * float(compare_summary.get('fs_rand', 0.0)):.2f}%",
+                )
+                cmp_table.add_row(
+                    "Delta (FS_lr - FS_rand)",
+                    f"{float(compare_summary.get('delta', 0.0)):.6f}",
+                )
+                cmp_table.add_row("b (1,0)", str(int(compare_summary.get("b", 0))))
+                cmp_table.add_row("c (0,1)", str(int(compare_summary.get("c", 0))))
+                mcnemar_chi2 = compare_summary.get("mcnemar_chi2")
+                cmp_table.add_row(
+                    "McNemar chi2",
+                    self._fmt_metric(mcnemar_chi2),
+                )
+                delta_ci = compare_summary.get("delta_ci")
+                if isinstance(delta_ci, dict):
+                    cmp_table.add_row(
+                        "Delta CI 95% (block)",
+                        f"[{float(delta_ci.get('ci_low', 0.0)):.6f}, {float(delta_ci.get('ci_high', 0.0)):.6f}]",
+                    )
+                    cmp_table.add_row(
+                        "Block size",
+                        str(int(delta_ci.get("block_size", 0))),
+                    )
+                cmp_table.add_row(
+                    "Avg U LR",
+                    f"{float(compare_summary.get('avg_u_lr', 0.0)):.2f}",
+                )
+                cmp_table.add_row(
+                    "Avg U Rand",
+                    f"{float(compare_summary.get('avg_u_rand', 0.0)):.2f}",
+                )
+                self.console.print(cmp_table)
+
+        if isinstance(tris_positional_summary, dict):
+            pos_table = Table(
+                title="Hit Rate por Posicion (Camaras)",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            pos_table.add_column("Camara", justify="left")
+            pos_table.add_column("Top1 hit-rate", justify="right")
+            pos_table.add_column("Mask coverage", justify="right")
+            pos_table.add_column("Universe pos coverage", justify="right")
+
+            top1_rates = tris_positional_summary.get("top1_hit_rate_by_pos", [])
+            mask_rates = tris_positional_summary.get("mask_coverage_rate_by_pos", [])
+            univ_rates = tris_positional_summary.get(
+                "universe_position_coverage_rate_by_pos", []
+            )
+
+            def _fmt_rate(v):
+                if v is None:
+                    return "[bold yellow]N/A[/]"
+                try:
+                    val = float(v)
+                except (TypeError, ValueError):
+                    return "[bold yellow]N/A[/]"
+                if not np.isfinite(val):
+                    return "[bold yellow]N/A[/]"
+                return f"{100.0 * val:.2f}%"
+
+            for pos in range(5):
+                t1 = top1_rates[pos] if pos < len(top1_rates) else None
+                mk = mask_rates[pos] if pos < len(mask_rates) else None
+                uv = univ_rates[pos] if pos < len(univ_rates) else None
+                pos_table.add_row(
+                    f"Camara {pos + 1}",
+                    _fmt_rate(t1),
+                    _fmt_rate(mk),
+                    _fmt_rate(uv),
+                )
+            self.console.print(pos_table)
 
         if isinstance(tris_prob_summary, dict):
             prob_table = Table(

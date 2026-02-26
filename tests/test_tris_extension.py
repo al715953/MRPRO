@@ -333,3 +333,224 @@ def test_tris_forecast_topk_scored_universe_size_respects_k():
 
     pred = TrisForecastV1A().predict(history, config)
     assert int(pred.metadata.get("universe_size", -1)) == 1000
+
+
+def test_tris_forecast_topk_scored_universe_random_topk_metadata_and_raw_universe():
+    rng = np.random.default_rng(77)
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(90):
+        row = rng.integers(0, 10, size=5, endpoint=False).tolist()
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), i % 2])
+        concursos.append(7000 + i)
+        dates.append(f"2025-07-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "universe_mode": "topk_scored_universe",
+            "score_model": "random_topk",
+            "universe_topk_k": 321,
+            "random_topk_seed": 12345,
+            "selection_mode": "ranked",
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    raw = pred.metadata.get("raw_ndarray")
+
+    assert pred.metadata.get("universe_mode") == "topk_scored_universe"
+    assert pred.metadata.get("score_model") == "random_topk"
+    assert int(pred.metadata.get("universe_size", -1)) == 321
+    assert isinstance(raw, np.ndarray)
+    assert raw.shape == (321, 5)
+    assert raw.dtype == np.uint8
+
+
+def _build_camera_history(n: int = 120):
+    rng = np.random.default_rng(20260226)
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(n):
+        row = rng.integers(0, 10, size=5, endpoint=False).tolist()
+        mult = 1 if i % 3 == 0 else 0
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), mult])
+        concursos.append(8000 + i)
+        dates.append(f"2025-08-{(i % 28) + 1:02d}")
+    return DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+
+
+def test_tris_forecast_camera_mech_topm10_does_not_reduce_full_universe():
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "camera_mech_v1",
+            "universe_mode": "full_filtered_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 10,
+            "camera_mech_blend_with_v1a": 0.5,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    raw = pred.metadata.get("raw_ndarray")
+
+    assert pred.metadata.get("score_model") == "camera_mech_v1"
+    assert int(pred.metadata.get("universe_size", -1)) == 100000
+    assert isinstance(raw, np.ndarray)
+    assert raw.shape == (100000, 5)
+
+
+def test_tris_forecast_camera_mech_topm2_limits_masked_universe_size_to_32_or_less():
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "camera_mech_v1",
+            "universe_mode": "full_filtered_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 2,
+            "camera_mech_blend_with_v1a": 0.5,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    raw = pred.metadata.get("raw_ndarray")
+
+    assert isinstance(raw, np.ndarray)
+    assert raw.shape[0] <= 32
+    assert int(pred.metadata.get("universe_size", -1)) <= 32
+
+
+def test_tris_forecast_camera_mech_metadata_contains_camera_fields():
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "camera_mech_v1",
+            "universe_mode": "topk_scored_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 2,
+            "universe_topk_k": 10,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    pmf = pred.metadata.get("camera_pmf")
+    mask = pred.metadata.get("camera_positional_mask")
+
+    assert isinstance(pmf, list)
+    assert len(pmf) == 5
+    assert all(len(row) == 10 for row in pmf)
+    assert isinstance(mask, list)
+    assert len(mask) == 5
+    assert all(len(row) == 10 for row in mask)
+    assert pred.metadata.get("camera_masked_universe") is True
+    assert int(pred.metadata.get("camera_topm_per_position", -1)) == 2
+    camera_debug = pred.metadata.get("camera_debug", {})
+    assert isinstance(camera_debug, dict)
+    assert int(camera_debug.get("post_topk_size", -1)) <= 10
+    pos_unique_final = camera_debug.get("pos_unique_digits_final")
+    assert isinstance(pos_unique_final, list)
+    assert len(pos_unique_final) == 5
+    assert all(int(v) <= 2 for v in pos_unique_final)
+    assert pred.metadata.get("score_model_requested") == "camera_mech_v1"
+    assert pred.metadata.get("score_model_effective") == "camera_mech_v1"
+
+
+def test_tris_forecast_random_topk_with_camera_masked_universe_emits_no_invalid_warning(capsys):
+    TrisForecastV1A._reset_warn_once()
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "random_topk",
+            "universe_mode": "topk_scored_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 2,
+            "universe_topk_k": 10,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    TrisForecastV1A().predict(history, config)
+    out = capsys.readouterr().out
+    assert "camera_masked_universe=True but score_model" not in out
+
+
+def test_tris_forecast_invalid_camera_masked_universe_warning_is_once(capsys):
+    TrisForecastV1A._reset_warn_once()
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "feature_lr",
+            "universe_mode": "topk_scored_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 2,
+            "universe_topk_k": 10,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    strategy = TrisForecastV1A()
+    strategy.predict(history, config)
+    strategy.predict(history, config)
+
+    out = capsys.readouterr().out
+    assert out.count("camera_masked_universe=True but score_model='feature_lr'") == 1
+
+
+def test_tris_forecast_score_model_alias_positional_mech_maps_to_camera_mech_v1():
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "positional_mech",
+            "universe_mode": "topk_scored_universe",
+            "camera_masked_universe": True,
+            "camera_topm_per_position": 2,
+            "universe_topk_k": 10,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    assert pred.metadata.get("score_model_requested") == "positional_mech"
+    assert pred.metadata.get("score_model_effective") == "camera_mech_v1"

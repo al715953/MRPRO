@@ -162,9 +162,11 @@ BEST_SETTINGS = {
 
 # --- CONFIGURACION BASE: TRIS V1-A ---
 BEST_SETTINGS_TRIS = {
+    "tris_backtest_mode": "universe_strategy",  # ya lo tienes
+    "compare_models": True,  # activa LR vs RandomTopK
     "universe_mode": "topk_scored_universe",
-    "score_model": "feature_lr",  # o "ticket_ngram" / "positional_logp"
-    "universe_topk_k": 10000,  # prueba 2000, 5000, 10000, 20000
+    "score_model": "camera_mech_v1",  # o "ticket_ngram" / "positional_logp" /random_topk
+    "universe_topk_k": 1000,  # prueba 2000, 5000, 10000, 20000
     "num_tickets": 200,
     "backtest_size": 500,
     "topk_k": 2000,
@@ -186,15 +188,63 @@ BEST_SETTINGS_TRIS = {
     "structural_sum_min": 15,
     "structural_sum_max": 30,
     "structural_allowed_even_counts": [2, 3],  # parity off
+    "structural_enable_global_sum_filter": False,
+    "structural_enable_global_parity_filter": False,
     "structural_min_unique_digits": 3,
     "structural_max_consecutive_run": 3,
     "structural_max_positional_repeats_vs_prev": 2,
+    "structural_immediate_repeat_mode": "global_count",
+    "structural_immediate_repeat_disallow_positions": [
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],
+    "structural_positional_limits": None,
+    "structural_camera_entropy_rules": None,
+    # Camera-aware experimental knobs (legacy-safe by default)
+    "camera_masked_universe": True,
+    "camera_topm_per_position": 4,
+    "camera_alpha": 1.0,
+    "camera_short_window": 100,
+    "camera_long_window": 1000,
+    "camera_mix_lambda": 0.3,
+    "camera_latency_boost": 0.0,
+    "camera_immediate_repeat_penalty": 0.20,
+    "camera_parity_bias_strength": 0.0,
+    "camera_mech_blend_with_v1a": 0.5,
+    "camera_use_slot_context": False,
     # FeatureLR params
-    "feature_lr_alpha": 1.0,
+    "feature_lr_alpha": 2.0,
     "feature_lr_short_window": 200,
     "feature_lr_long_window": 2000,
-    "feature_lr_mix_lambda": 0.7,
-    "feature_lr_use_mirror": True,
+    "feature_lr_mix_lambda": 0.2,
+    "feature_lr_use_mirror": False,
+    "compare_models_random_seeds": 30,  # o 10 para empezar
+    "feature_lr_shrink_c": 20000,
+    "run_context_verbose": True,
+}
+
+# --- PERFIL EXPERIMENTAL: TRIS CAMERA LAB ---
+BEST_SETTINGS_TRIS_CAMERA_LAB = {
+    **BEST_SETTINGS_TRIS,
+    "score_model": "camera_mech_v1",
+    "universe_mode": "topk_scored_universe",
+    "camera_masked_universe": True,
+    "structural_enable_global_sum_filter": False,
+    "structural_enable_global_parity_filter": False,
+    # Guardrails minimos
+    "structural_min_unique_digits": 3,
+    "structural_max_consecutive_run": 3,
+    "structural_immediate_repeat_mode": "per_position",
+    "structural_immediate_repeat_disallow_positions": [
+        False,
+        False,
+        True,
+        False,
+        False,
+    ],
 }
 
 # --- ESTÉTICA DE CONSOLA (ANSI) ---

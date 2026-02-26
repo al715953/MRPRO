@@ -96,15 +96,18 @@ class FeatureLRModel:
         long_window: int = 2000,
         mix_lambda: float = 0.7,
         use_mirror: bool = True,
+        shrink_c: float = 3000.0,
     ):
         self.alpha = float(alpha)
         self.short_window = int(short_window)
         self.long_window = int(long_window)
         self.mix_lambda = float(mix_lambda)
         self.use_mirror = bool(use_mirror)
+        self.shrink_c = float(shrink_c)
 
         self.n_bins_train = _N_BINS_FULL if self.use_mirror else _N_BINS_STATIC
         self.real_prob = np.full(self.n_bins_train, 1.0 / self.n_bins_train, dtype=np.float64)
+        self.n_eff = 0.0
 
     def _codes_for_history(self, rows: np.ndarray, use_mirror: bool) -> tuple[np.ndarray, int]:
         if rows.shape[0] == 0:
@@ -147,12 +150,14 @@ class FeatureLRModel:
 
         short_prob = _smoothed_prob(counts_short, self.alpha, n_bins)
         long_prob = _smoothed_prob(counts_long, self.alpha, n_bins)
-        lam = min(max(self.mix_lambda, 0.0), 1.0)
-        real_prob = lam * short_prob + (1.0 - lam) * long_prob
-        real_prob = real_prob / max(float(np.sum(real_prob)), 1e-12)
+        mix_w = min(max(self.mix_lambda, 0.0), 1.0)
+        real_prob_raw = mix_w * short_prob + (1.0 - mix_w) * long_prob
+        real_prob_raw = real_prob_raw / max(float(np.sum(real_prob_raw)), 1e-12)
+        n_eff = mix_w * float(s_n) + (1.0 - mix_w) * float(l_n)
 
         self.n_bins_train = n_bins
-        self.real_prob = real_prob.astype(np.float64, copy=False)
+        self.real_prob = real_prob_raw.astype(np.float64, copy=False)
+        self.n_eff = max(0.0, float(n_eff))
         return self
 
     @staticmethod
@@ -236,10 +241,17 @@ class FeatureLRModel:
             np.float64, copy=False
         )
         unif_prob = _smoothed_prob(unif_counts, self.alpha, n_bins)
-        real_prob = self._adapt_real_prob(score_use_mirror)
+        real_prob_raw = self._adapt_real_prob(score_use_mirror)
+        n_eff = max(0.0, float(getattr(self, "n_eff", 0.0)))
+        shrink_c = max(0.0, float(getattr(self, "shrink_c", 3000.0)))
+        if shrink_c <= 0.0:
+            lam = 1.0
+        else:
+            lam = n_eff / max(n_eff + shrink_c, 1e-12)
+        lam = min(max(float(lam), 0.0), 1.0)
+        real_prob = lam * real_prob_raw + (1.0 - lam) * unif_prob
 
         score = np.log(np.clip(real_prob[code], 1e-12, None)) - np.log(
             np.clip(unif_prob[code], 1e-12, None)
         )
         return score.astype(np.float64, copy=False)
-

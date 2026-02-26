@@ -17,6 +17,18 @@ class StructuralFilterConfig:
     max_positional_repeats_vs_prev: int = 2
     hard_filter: bool = True
     soft_penalties: Optional[Dict[str, float]] = None
+    enable_global_sum_filter: bool = True
+    enable_global_parity_filter: bool = True
+    positional_limits: Optional[list[dict]] = None
+    immediate_repeat_mode: str = "global_count"  # {"global_count", "per_position"}
+    immediate_repeat_disallow_positions: tuple[bool, ...] = (
+        False,
+        False,
+        False,
+        False,
+        False,
+    )
+    camera_entropy_rules: Optional[list[dict]] = None
 
 
 def digit_sum(ticket: List[int]) -> int:
@@ -71,22 +83,50 @@ class StructuralFilterEngine:
             return cfg.get(key, default)
         return getattr(cfg, key, default)
 
+    @staticmethod
+    def _normalize_positional_limits(cfg, n_pos: int) -> list[dict]:
+        limits = StructuralFilterEngine._cfg_value(cfg, "positional_limits", None)
+        out: list[dict] = [{} for _ in range(n_pos)]
+        if not isinstance(limits, (list, tuple)):
+            return out
+        for pos in range(min(n_pos, len(limits))):
+            rule = limits[pos]
+            if isinstance(rule, dict):
+                out[pos] = rule
+        return out
+
+    @staticmethod
+    def _normalize_disallow_positions(cfg, n_pos: int) -> np.ndarray:
+        raw = StructuralFilterEngine._cfg_value(
+            cfg,
+            "immediate_repeat_disallow_positions",
+            (False, False, False, False, False),
+        )
+        if not isinstance(raw, (list, tuple, np.ndarray)):
+            return np.zeros(n_pos, dtype=bool)
+        arr = np.asarray(raw, dtype=bool).reshape(-1)
+        if arr.size < n_pos:
+            arr = np.pad(arr, (0, n_pos - arr.size), mode="constant", constant_values=False)
+        return arr[:n_pos]
+
     def _violations(self, ticket: List[int], prev_digits, cfg) -> List[str]:
         vals = [int(d) for d in ticket]
         violations = []
 
-        s = digit_sum(vals)
-        if s < int(self._cfg_value(cfg, "sum_min", 15)) or s > int(
-            self._cfg_value(cfg, "sum_max", 30)
-        ):
-            violations.append("sum")
+        if bool(self._cfg_value(cfg, "enable_global_sum_filter", True)):
+            s = digit_sum(vals)
+            if s < int(self._cfg_value(cfg, "sum_min", 15)) or s > int(
+                self._cfg_value(cfg, "sum_max", 30)
+            ):
+                violations.append("sum")
 
-        allowed_even = self._cfg_value(cfg, "allowed_even_counts", (2, 3))
-        if not isinstance(allowed_even, (list, tuple, set)):
-            allowed_even = (allowed_even,)
-        allowed_even = tuple(int(v) for v in allowed_even)
-        if even_count(vals) not in allowed_even:
-            violations.append("parity")
+        if bool(self._cfg_value(cfg, "enable_global_parity_filter", True)):
+            allowed_even = self._cfg_value(cfg, "allowed_even_counts", (2, 3))
+            if not isinstance(allowed_even, (list, tuple, set)):
+                allowed_even = (allowed_even,)
+            allowed_even = tuple(int(v) for v in allowed_even)
+            if even_count(vals) not in allowed_even:
+                violations.append("parity")
 
         if unique_count(vals) < int(self._cfg_value(cfg, "min_unique_digits", 3)):
             violations.append("uniques")
@@ -95,10 +135,34 @@ class StructuralFilterEngine:
         if has_consecutive_run(vals, run_len=run_len):
             violations.append("consecutive")
 
+        positional_limits = self._normalize_positional_limits(cfg, len(vals))
+        for pos, rule in enumerate(positional_limits):
+            forbidden = rule.get("forbidden_digits", [])
+            if isinstance(forbidden, (list, tuple, set, np.ndarray)):
+                forbidden_vals = {int(v) for v in forbidden}
+                if vals[pos] in forbidden_vals:
+                    violations.append(f"pos{pos + 1}_forbidden")
+
+            allowed_parity = rule.get("allowed_parity")
+            if isinstance(allowed_parity, str):
+                parity_mode = allowed_parity.strip().lower()
+                if parity_mode == "even" and (vals[pos] % 2 != 0):
+                    violations.append(f"pos{pos + 1}_parity")
+                elif parity_mode == "odd" and (vals[pos] % 2 == 0):
+                    violations.append(f"pos{pos + 1}_parity")
+
         if prev_digits is not None:
-            repeats = positional_repeats(vals, prev_digits.tolist())
-            if repeats > int(self._cfg_value(cfg, "max_positional_repeats_vs_prev", 2)):
-                violations.append("mirror_prev")
+            prev_vals = np.asarray(prev_digits, dtype=np.int16).reshape(-1)
+            repeat_mode = str(self._cfg_value(cfg, "immediate_repeat_mode", "global_count")).lower()
+            if repeat_mode == "per_position":
+                disallow = self._normalize_disallow_positions(cfg, len(vals))
+                for pos in range(len(vals)):
+                    if bool(disallow[pos]) and vals[pos] == int(prev_vals[pos]):
+                        violations.append(f"pos{pos + 1}_repeat_prev")
+            else:
+                repeats = positional_repeats(vals, [int(v) for v in prev_vals[: len(vals)]])
+                if repeats > int(self._cfg_value(cfg, "max_positional_repeats_vs_prev", 2)):
+                    violations.append("mirror_prev")
 
         return violations
 
@@ -120,16 +184,44 @@ class StructuralFilterEngine:
         if base_mask.shape[0] != tickets.shape[0]:
             raise ValueError("static_mask debe tener longitud N.")
 
+        final_mask = base_mask.copy()
+        n_pos = tickets.shape[1]
+
+        positional_limits = StructuralFilterEngine._normalize_positional_limits(cfg, n_pos)
+        for pos, rule in enumerate(positional_limits):
+            forbidden = rule.get("forbidden_digits", [])
+            if isinstance(forbidden, (list, tuple, set, np.ndarray)):
+                forbidden_vals = np.array([int(v) for v in forbidden], dtype=np.int16)
+                if forbidden_vals.size > 0:
+                    final_mask &= ~np.isin(tickets[:, pos].astype(np.int16), forbidden_vals)
+
+            allowed_parity = rule.get("allowed_parity")
+            if isinstance(allowed_parity, str):
+                parity_mode = allowed_parity.strip().lower()
+                if parity_mode == "even":
+                    final_mask &= (tickets[:, pos] % 2) == 0
+                elif parity_mode == "odd":
+                    final_mask &= (tickets[:, pos] % 2) == 1
+
         prev = StructuralFilterEngine._coerce_prev(prev_digits, tickets.shape[1])
+        repeat_mode = str(StructuralFilterEngine._cfg_value(cfg, "immediate_repeat_mode", "global_count")).lower()
+
         if prev is None:
-            return base_mask
+            return final_mask
+
+        if repeat_mode == "per_position":
+            disallow = StructuralFilterEngine._normalize_disallow_positions(cfg, n_pos)
+            for pos in range(n_pos):
+                if bool(disallow[pos]):
+                    final_mask &= tickets[:, pos].astype(np.int16) != int(prev[pos])
+            return final_mask
 
         max_repeats = int(
             StructuralFilterEngine._cfg_value(cfg, "max_positional_repeats_vs_prev", 2)
         )
         mirror_count = np.sum(tickets.astype(np.int16) == prev[None, :], axis=1)
         mirror_mask = mirror_count <= max_repeats
-        return base_mask & mirror_mask
+        return final_mask & mirror_mask
 
     def apply(
         self,
@@ -161,7 +253,7 @@ class StructuralFilterEngine:
 
             if violations:
                 for reason in set(violations):
-                    reject_reasons[reason] += 1
+                    reject_reasons[reason] = int(reject_reasons.get(reason, 0)) + 1
 
             if self.config.hard_filter and violations:
                 continue
@@ -179,6 +271,8 @@ class StructuralFilterEngine:
                         penalty += float(soft_penalties.get("run_high", 1.0))
                     elif reason == "mirror_prev":
                         penalty += float(soft_penalties.get("mirror_high", 1.0))
+                    else:
+                        penalty += float(soft_penalties.get(reason, 0.0))
                 soft_total += penalty
                 if penalty > 0:
                     soft_positive += 1

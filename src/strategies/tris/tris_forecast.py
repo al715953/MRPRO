@@ -16,11 +16,17 @@ from src.strategies.tris.ticket_ngram_model import TicketNgramModel
 from src.strategies.tris.topk import beam_search, select_diverse
 from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
 from src.strategies.tris.universe_gate import should_use_topk
-from src.strategies.tris.universe_5d import get_universe_and_static_mask
+from src.strategies.tris.positional_analyzers import PositionalAnalyzers
+from src.strategies.tris.universe_5d import (
+    get_universe_and_static_mask,
+    get_universe_with_positional_mask,
+)
 from src.strategies.tris.v1a_model import TrisV1AModel, _extract_tris_series
 
 
 class TrisForecastV1A:
+    _WARNED_ONCE_KEYS: set[str] = set()
+
     def __init__(self):
         self.strategy_name = "Tris Forecast V1-A"
         self.model_version = "tris_v1a_bayes_markov_001"
@@ -36,6 +42,17 @@ class TrisForecastV1A:
     def _get_structural_override(self, overrides: Dict, key: str, default):
         fallback = BEST_SETTINGS_TRIS.get(key, default)
         return self._get_override(overrides, key, fallback)
+
+    def _warn_once(self, key: str, msg: str):
+        token = str(key or msg)
+        if token in self._WARNED_ONCE_KEYS:
+            return
+        self._WARNED_ONCE_KEYS.add(token)
+        print(msg)
+
+    @classmethod
+    def _reset_warn_once(cls):
+        cls._WARNED_ONCE_KEYS.clear()
 
     @staticmethod
     def _filter_ranked_candidates(
@@ -66,6 +83,72 @@ class TrisForecastV1A:
             return int(raw) + int(history_len)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _to_bool(value, default: bool = False) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, np.integer)):
+            return bool(int(value))
+        if isinstance(value, str):
+            raw = value.strip().lower()
+            if raw in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if raw in {"0", "false", "f", "no", "n", "off", ""}:
+                return False
+        return bool(value)
+
+    @staticmethod
+    def _normalize_disallow_positions(raw) -> tuple[bool, ...]:
+        if isinstance(raw, (list, tuple, np.ndarray)):
+            arr = np.asarray(raw, dtype=bool).reshape(-1)
+            if arr.size < 5:
+                arr = np.pad(
+                    arr,
+                    (0, 5 - arr.size),
+                    mode="constant",
+                    constant_values=False,
+                )
+            return tuple(bool(v) for v in arr[:5].tolist())
+        return (False, False, False, False, False)
+
+    @staticmethod
+    def _pos_unique_digits(universe_nd) -> list[int]:
+        arr = np.asarray(universe_nd)
+        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 5:
+            return [0, 0, 0, 0, 0]
+        arr = arr[:, :5]
+        return [int(np.unique(arr[:, pos]).size) for pos in range(5)]
+
+    def _apply_structural_override_mapping(self, cfg: StructuralFilterConfig, overrides: Dict):
+        ov = overrides if isinstance(overrides, dict) else {}
+        cfg.enable_global_sum_filter = self._to_bool(
+            ov.get("structural_enable_global_sum_filter", cfg.enable_global_sum_filter),
+            default=bool(cfg.enable_global_sum_filter),
+        )
+        cfg.enable_global_parity_filter = self._to_bool(
+            ov.get(
+                "structural_enable_global_parity_filter",
+                cfg.enable_global_parity_filter,
+            ),
+            default=bool(cfg.enable_global_parity_filter),
+        )
+        cfg.immediate_repeat_mode = str(
+            ov.get("structural_immediate_repeat_mode", cfg.immediate_repeat_mode)
+        ).lower()
+        cfg.immediate_repeat_disallow_positions = self._normalize_disallow_positions(
+            ov.get(
+                "structural_immediate_repeat_disallow_positions",
+                cfg.immediate_repeat_disallow_positions,
+            )
+        )
+        cfg.positional_limits = ov.get("structural_positional_limits", cfg.positional_limits)
+        cfg.camera_entropy_rules = ov.get(
+            "structural_camera_entropy_rules", cfg.camera_entropy_rules
+        )
+        return cfg
 
     @staticmethod
     def _rank_universe_digits(
@@ -133,7 +216,7 @@ class TrisForecastV1A:
         bypass_uniform_gate = (
             gate_choice == "uniform"
             and gate_universe_mode == "topk_scored_universe"
-            and gate_score_model == "feature_lr"
+            and gate_score_model in {"feature_lr", "random_topk", "camera_mech_v1"}
         )
         if gate_choice == "uniform" and not bypass_uniform_gate:
             baseline_pred = TrisUniformBaselineStrategy().predict(history, config)
@@ -164,6 +247,36 @@ class TrisForecastV1A:
             self._get_override(overrides, "diversity_min_hamming", 2)
         )
         topk_preview = int(self._get_override(overrides, "topk_preview", 50))
+        camera_topm_per_position = int(
+            self._get_override(overrides, "camera_topm_per_position", 10)
+        )
+        camera_alpha = float(self._get_override(overrides, "camera_alpha", 1.0))
+        camera_short_window = int(
+            self._get_override(overrides, "camera_short_window", 100)
+        )
+        camera_long_window = int(
+            self._get_override(overrides, "camera_long_window", 1000)
+        )
+        camera_mix_lambda = float(self._get_override(overrides, "camera_mix_lambda", 0.3))
+        camera_latency_boost = float(
+            self._get_override(overrides, "camera_latency_boost", 0.0)
+        )
+        camera_immediate_repeat_penalty = float(
+            self._get_override(overrides, "camera_immediate_repeat_penalty", 0.0)
+        )
+        camera_parity_bias_strength = float(
+            self._get_override(overrides, "camera_parity_bias_strength", 0.0)
+        )
+        camera_mech_blend_with_v1a = float(
+            self._get_override(overrides, "camera_mech_blend_with_v1a", 0.5)
+        )
+        camera_use_slot_context = bool(
+            self._get_override(overrides, "camera_use_slot_context", False)
+        )
+        camera_masked_universe = self._to_bool(
+            self._get_override(overrides, "camera_masked_universe", True),
+            default=True,
+        )
 
         digits_list, mult_list = _extract_tris_series(history)
         n_draws = len(digits_list)
@@ -230,6 +343,21 @@ class TrisForecastV1A:
             struct_allowed_even = [2, 3]
         elif not isinstance(struct_allowed_even, (list, tuple, set)):
             struct_allowed_even = [struct_allowed_even]
+        structural_positional_limits = self._get_structural_override(
+            overrides, "structural_positional_limits", None
+        )
+        structural_immediate_repeat_mode = str(
+            self._get_structural_override(
+                overrides, "structural_immediate_repeat_mode", "global_count"
+            )
+        ).lower()
+        structural_disallow_positions = self._normalize_disallow_positions(
+            self._get_structural_override(
+                overrides,
+                "structural_immediate_repeat_disallow_positions",
+                (False, False, False, False, False),
+            )
+        )
         structural_cfg = StructuralFilterConfig(
             enabled=bool(
                 self._get_structural_override(overrides, "structural_enabled", True)
@@ -265,7 +393,24 @@ class TrisForecastV1A:
             soft_penalties=self._get_structural_override(
                 overrides, "structural_soft_penalties", None
             ),
+            enable_global_sum_filter=bool(
+                self._get_structural_override(
+                    overrides, "structural_enable_global_sum_filter", True
+                )
+            ),
+            enable_global_parity_filter=bool(
+                self._get_structural_override(
+                    overrides, "structural_enable_global_parity_filter", True
+                )
+            ),
+            positional_limits=structural_positional_limits,
+            immediate_repeat_mode=str(structural_immediate_repeat_mode),
+            immediate_repeat_disallow_positions=structural_disallow_positions,
+            camera_entropy_rules=self._get_structural_override(
+                overrides, "structural_camera_entropy_rules", None
+            ),
         )
+        structural_cfg = self._apply_structural_override_mapping(structural_cfg, overrides)
 
         universe_mode = str(
             self._get_override(overrides, "universe_mode", "full_filtered_universe")
@@ -279,8 +424,35 @@ class TrisForecastV1A:
             score_model = "feature_lr"
         elif score_model_raw == "ticket_ngram":
             score_model = "ticket_ngram"
+        elif score_model_raw == "random_topk":
+            score_model = "random_topk"
+        elif score_model_raw in {"camera_mech_v1", "positional_mech"}:
+            score_model = "camera_mech_v1"
         else:
             score_model = "positional_logp"
+        camera_debug_strict = self._to_bool(
+            self._get_override(overrides, "camera_debug_strict", False),
+            default=False,
+        )
+        if score_model == "camera_mech_v1" and not (
+            1 <= int(camera_topm_per_position) <= 10
+        ):
+            raise ValueError(
+                "camera_topm_per_position must be in [1..10] when score_model='camera_mech_v1'."
+            )
+        valid_camera_mask_controls = {"camera_mech_v1", "random_topk"}
+        if bool(camera_masked_universe) and score_model not in valid_camera_mask_controls:
+            invalid_msg = (
+                "camera_masked_universe=True but "
+                f"score_model='{score_model}'. Positional mask wiring expects "
+                "camera_mech_v1 (or random_topk control)."
+            )
+            if camera_debug_strict:
+                raise RuntimeError(invalid_msg)
+            self._warn_once(
+                f"camera_masked_universe_invalid::{score_model}",
+                f"[TRIS][CameraMask][WARN] {invalid_msg}",
+            )
         universe_topk_k = int(self._get_override(overrides, "universe_topk_k", topk_k))
         universe_topk_k = max(0, universe_topk_k)
         use_topk_gate = bool(self._get_override(overrides, "use_topk_gate", False))
@@ -301,6 +473,143 @@ class TrisForecastV1A:
         ).lower()
         if rank_score_mode not in {"positional_logp", "ticket_score"}:
             rank_score_mode = "positional_logp"
+
+        pos_probs_v1a = np.asarray(pos_probs, dtype=np.float64).copy()
+        camera_analyzer_out = None
+        camera_pmf = None
+        camera_positional_mask = None
+        camera_diag_summary = {}
+        camera_universe_diag = {}
+        camera_debug = {
+            "pre_mask_universe_size": None,
+            "post_static_mask_size": None,
+            "post_topk_size": None,
+            "pos_unique_digits_pre_topk": [0, 0, 0, 0, 0],
+            "pos_unique_digits_final": [0, 0, 0, 0, 0],
+            "structural_flags_effective": {
+                "enable_global_sum_filter": bool(
+                    structural_cfg.enable_global_sum_filter
+                ),
+                "enable_global_parity_filter": bool(
+                    structural_cfg.enable_global_parity_filter
+                ),
+                "immediate_repeat_mode": str(structural_cfg.immediate_repeat_mode),
+            },
+        }
+        if score_model == "camera_mech_v1":
+            topm = int(max(1, min(10, camera_topm_per_position)))
+            blend = float(np.clip(camera_mech_blend_with_v1a, 0.0, 1.0))
+            slot_context = None
+            if camera_use_slot_context:
+                slot_context = self._get_override(overrides, "camera_slot_context", None)
+
+            camera_model = PositionalAnalyzers(
+                alpha=float(camera_alpha),
+                short_window=int(camera_short_window),
+                long_window=int(camera_long_window),
+                mix_lambda=float(camera_mix_lambda),
+                latency_boost=float(camera_latency_boost),
+                immediate_repeat_penalty=float(camera_immediate_repeat_penalty),
+                parity_bias_strength=float(camera_parity_bias_strength),
+                topm_per_position=int(topm),
+                pmf_floor=1e-6,
+            ).fit(digits_list)
+            camera_analyzer_out = camera_model.predict(
+                prev_digits=prev_digits,
+                slot_context=slot_context,
+            )
+
+            pmf_cam_raw = camera_analyzer_out.get("pmf_pos", camera_analyzer_out.get("pmf"))
+            pmf_cam = np.asarray(pmf_cam_raw, dtype=np.float64)
+            if pmf_cam.shape != (5, 10):
+                pmf_cam = self._uniform_probs()
+            pmf_cam = pmf_cam / np.clip(np.sum(pmf_cam, axis=1, keepdims=True), 1e-12, None)
+            if pmf_cam.shape != (5, 10):
+                raise RuntimeError("camera_mech_v1 pmf_cam must have shape (5,10).")
+            pmf_row_sums = np.sum(pmf_cam, axis=1, dtype=np.float64)
+            if not np.all(np.isfinite(pmf_row_sums)) or not np.all(
+                np.abs(pmf_row_sums - 1.0) <= 1e-6
+            ):
+                raise RuntimeError(
+                    "camera_mech_v1 pmf_cam row sums must be approximately 1.0."
+                )
+            camera_pmf = pmf_cam
+
+            mask_raw = camera_analyzer_out.get("positional_mask")
+            if mask_raw is None:
+                camera_positional_mask = np.ones((5, 10), dtype=bool)
+            else:
+                camera_positional_mask = np.asarray(mask_raw, dtype=bool)
+                if camera_positional_mask.shape != (5, 10):
+                    camera_positional_mask = np.ones((5, 10), dtype=bool)
+            camera_positional_mask = np.asarray(camera_positional_mask, dtype=bool)
+            if bool(camera_masked_universe):
+                if camera_positional_mask.shape != (5, 10):
+                    raise RuntimeError(
+                        "camera_masked_universe=True requires positional_digit_mask shape (5,10)."
+                    )
+                if camera_positional_mask.dtype != np.bool_:
+                    raise RuntimeError(
+                        "camera_masked_universe=True requires positional_digit_mask dtype bool."
+                    )
+
+            combined_pos_probs = (1.0 - blend) * pos_probs_v1a + blend * pmf_cam
+            combined_pos_probs = combined_pos_probs / np.clip(
+                np.sum(combined_pos_probs, axis=1, keepdims=True),
+                1e-12,
+                None,
+            )
+            pos_probs = combined_pos_probs
+            entropy_pos = -np.sum(pos_probs * np.log(np.clip(pos_probs, 1e-12, None)), axis=1)
+            entropy_mean = float(np.mean(entropy_pos))
+            prob_guardrails = {
+                "mu_used": float(prob_guardrails.get("mu_used", 0.0)),
+                "max_probs": np.max(pos_probs, axis=1).tolist(),
+            }
+
+            camera_forbidden = camera_analyzer_out.get("forbidden_digits_by_pos")
+            camera_favored = camera_analyzer_out.get("favored_digits_by_pos")
+            if isinstance(camera_forbidden, (list, tuple)):
+                limits_existing = structural_cfg.positional_limits
+                if not isinstance(limits_existing, list) or len(limits_existing) < 5:
+                    limits_existing = [{} for _ in range(5)]
+                limits_out: list[dict] = []
+                for pos in range(5):
+                    base_rule = (
+                        dict(limits_existing[pos])
+                        if pos < len(limits_existing) and isinstance(limits_existing[pos], dict)
+                        else {}
+                    )
+                    forb_values = set(int(v) % 10 for v in base_rule.get("forbidden_digits", []))
+                    if pos < len(camera_forbidden):
+                        forb_values.update(int(v) % 10 for v in (camera_forbidden[pos] or []))
+                    if forb_values:
+                        base_rule["forbidden_digits"] = sorted(forb_values)
+                    if isinstance(camera_favored, (list, tuple)) and pos < len(camera_favored):
+                        base_rule["favored_digits"] = [int(v) % 10 for v in (camera_favored[pos] or [])]
+                    limits_out.append(base_rule)
+                structural_cfg.positional_limits = limits_out
+
+            camera_diag = camera_analyzer_out.get("diagnostics", {})
+            cam_latency = np.asarray(camera_diag.get("latency", np.zeros((5, 10), dtype=np.int32)))
+            cam_parity = np.asarray(camera_diag.get("parity_local_prob", np.full((5, 2), 0.5)))
+            cam_entropy = np.asarray(camera_diag.get("entropy_pos", entropy_pos), dtype=np.float64)
+            camera_diag_summary = {
+                "latency_mean_by_pos": np.mean(cam_latency, axis=1).astype(float).tolist()
+                if cam_latency.shape == (5, 10)
+                else [],
+                "latency_max_by_pos": np.max(cam_latency, axis=1).astype(int).tolist()
+                if cam_latency.shape == (5, 10)
+                else [],
+                "parity_local_prob": cam_parity.tolist()
+                if cam_parity.shape == (5, 2)
+                else [],
+                "entropy_pos": cam_entropy.tolist()
+                if cam_entropy.shape == (5,)
+                else [],
+            }
+            if pmf_cam.shape == (5, 10):
+                camera_diag_summary["pmf_row_sums"] = pmf_row_sums.astype(float).tolist()
 
         filtered_ranked: List[Tuple[List[int], float]] = []
         structural_diag = {
@@ -340,8 +649,30 @@ class TrisForecastV1A:
 
         used_full_filtered_universe = effective_universe_mode == "full_filtered_universe"
         used_topk_scored_universe = effective_universe_mode == "topk_scored_universe"
+        use_camera_masked_universe = bool(
+            score_model == "camera_mech_v1"
+            and camera_masked_universe
+            and camera_positional_mask is not None
+        )
+        if score_model == "camera_mech_v1" and bool(camera_masked_universe):
+            if camera_positional_mask is None:
+                raise RuntimeError(
+                    "camera_masked_universe=True requires camera_positional_mask to be present."
+                )
+            if np.asarray(camera_positional_mask).shape != (5, 10):
+                raise RuntimeError(
+                    "camera_masked_universe=True requires camera_positional_mask shape (5,10)."
+                )
         if used_full_filtered_universe:
-            all_tickets, _, static_mask = get_universe_and_static_mask(structural_cfg)
+            if use_camera_masked_universe:
+                all_tickets, _, static_mask, camera_universe_diag = get_universe_with_positional_mask(
+                    structural_cfg,
+                    camera_positional_mask,
+                    return_diag=True,
+                )
+                camera_debug["pre_mask_universe_size"] = int(all_tickets.shape[0])
+            else:
+                all_tickets, _, static_mask = get_universe_and_static_mask(structural_cfg)
             if structural_cfg.enabled:
                 final_mask = StructuralFilterEngine.mask_all(
                     all_tickets, prev_digits, static_mask, structural_cfg
@@ -349,6 +680,8 @@ class TrisForecastV1A:
             else:
                 final_mask = np.ones(all_tickets.shape[0], dtype=bool)
             universe_digits = all_tickets[final_mask]
+            camera_debug["post_static_mask_size"] = int(np.sum(final_mask))
+            camera_debug["pos_unique_digits_pre_topk"] = self._pos_unique_digits(universe_digits)
             final_universe_digits = universe_digits
             universe_size = int(universe_digits.shape[0])
 
@@ -431,8 +764,21 @@ class TrisForecastV1A:
             structural_diag["beam_expansions"] = 0
             structural_diag["universe_mode"] = "full_filtered_universe"
             structural_diag["selection_mode"] = selection_mode
+            camera_debug["post_topk_size"] = int(universe_size)
         elif used_topk_scored_universe:
-            all_tickets, features_cache, static_mask = get_universe_and_static_mask(structural_cfg)
+            if use_camera_masked_universe:
+                all_tickets, features_cache, static_mask, camera_universe_diag = (
+                    get_universe_with_positional_mask(
+                        structural_cfg,
+                        camera_positional_mask,
+                        return_diag=True,
+                    )
+                )
+                camera_debug["pre_mask_universe_size"] = int(all_tickets.shape[0])
+            else:
+                all_tickets, features_cache, static_mask = get_universe_and_static_mask(
+                    structural_cfg
+                )
             if structural_cfg.enabled:
                 base_mask = StructuralFilterEngine.mask_all(
                     all_tickets, prev_digits, static_mask, structural_cfg
@@ -440,11 +786,36 @@ class TrisForecastV1A:
             else:
                 base_mask = np.ones(all_tickets.shape[0], dtype=bool)
             base_count = int(np.sum(base_mask))
+            base_universe_digits = all_tickets[base_mask]
+            camera_debug["post_static_mask_size"] = int(base_count)
+            camera_debug["pos_unique_digits_pre_topk"] = self._pos_unique_digits(
+                base_universe_digits
+            )
             K = int(self._get_override(overrides, "universe_topk_k", topk_k))
             K = max(0, min(K, base_count))
             universe_topk_k = int(K)
+            top_idx = np.empty(0, dtype=np.int64)
 
-            if score_model == "feature_lr":
+            if score_model == "random_topk":
+                seed_raw = self._get_override(overrides, "random_topk_seed", 12345)
+                try:
+                    random_topk_seed = int(seed_raw)
+                except (TypeError, ValueError):
+                    random_topk_seed = 12345
+                rng_topk = np.random.default_rng(int(random_topk_seed) + int(n_draws))
+                idx_pool = np.flatnonzero(base_mask).astype(np.int64, copy=False)
+                if K > 0 and idx_pool.size > 0:
+                    if idx_pool.size >= K:
+                        top_idx = rng_topk.choice(idx_pool, size=K, replace=False).astype(
+                            np.int64, copy=False
+                        )
+                    else:
+                        top_idx = idx_pool
+                    top_idx = np.sort(top_idx)
+                scores_all = np.full(all_tickets.shape[0], -np.inf, dtype=np.float64)
+                if top_idx.size > 0:
+                    scores_all[top_idx] = rng_topk.random(top_idx.size)
+            elif score_model == "feature_lr":
                 lr_alpha = float(self._get_override(overrides, "feature_lr_alpha", 1.0))
                 lr_short = int(
                     self._get_override(overrides, "feature_lr_short_window", 200)
@@ -458,18 +829,41 @@ class TrisForecastV1A:
                 lr_use_mirror = bool(
                     self._get_override(overrides, "feature_lr_use_mirror", True)
                 )
+                lr_shrink_c = float(
+                    self._get_override(overrides, "feature_lr_shrink_c", 3000.0)
+                )
+                feature_lr_params = {
+                    "alpha": float(lr_alpha),
+                    "short_window": int(lr_short),
+                    "long_window": int(lr_long),
+                    "mix_lambda": float(lr_mix),
+                    "use_mirror": bool(lr_use_mirror),
+                    "shrink_c": float(lr_shrink_c),
+                }
+                structural_diag["feature_lr"] = feature_lr_params
                 lr_model = FeatureLRModel(
                     alpha=lr_alpha,
                     short_window=lr_short,
                     long_window=lr_long,
                     mix_lambda=lr_mix,
                     use_mirror=lr_use_mirror,
+                    shrink_c=lr_shrink_c,
                 ).fit(digits_list)
                 scores_all = lr_model.score_all(
                     all_tickets, features_cache, prev_digits=prev_digits
                 )
             elif score_model == "ticket_ngram" and ngram_model is not None:
                 scores_all = ngram_model.score_all(all_tickets)
+            elif score_model == "camera_mech_v1":
+                eps = 1e-12
+                logits = np.log(np.clip(pos_probs, eps, None))
+                scores_all = (
+                    logits[0, all_tickets[:, 0]]
+                    + logits[1, all_tickets[:, 1]]
+                    + logits[2, all_tickets[:, 2]]
+                    + logits[3, all_tickets[:, 3]]
+                    + logits[4, all_tickets[:, 4]]
+                )
             else:
                 eps = 1e-12
                 logits = np.log(np.clip(pos_probs, eps, None))
@@ -481,26 +875,29 @@ class TrisForecastV1A:
                     + logits[4, all_tickets[:, 4]]
                 )
 
-            scores_all = np.asarray(scores_all, dtype=np.float64).copy()
-            scores_all[~base_mask] = -np.inf
+            if score_model != "random_topk":
+                scores_all = np.asarray(scores_all, dtype=np.float64).copy()
+                scores_all[~base_mask] = -np.inf
 
-            valid_idx = np.flatnonzero(np.isfinite(scores_all))
-            k_eff = int(min(K, valid_idx.size))
-            top_idx = np.empty(0, dtype=np.int64)
-            if k_eff > 0:
-                if k_eff == valid_idx.size:
-                    top_idx = valid_idx.astype(np.int64, copy=False)
-                else:
-                    top_idx = np.argpartition(scores_all, -k_eff)[-k_eff:].astype(
-                        np.int64, copy=False
-                    )
-                top_idx = top_idx[np.argsort(scores_all[top_idx])[::-1]]
+                valid_idx = np.flatnonzero(np.isfinite(scores_all))
+                k_eff = int(min(K, valid_idx.size))
+                if k_eff > 0:
+                    if k_eff == valid_idx.size:
+                        top_idx = valid_idx.astype(np.int64, copy=False)
+                    else:
+                        top_idx = np.argpartition(scores_all, -k_eff)[-k_eff:].astype(
+                            np.int64, copy=False
+                        )
+                    top_idx = top_idx[np.argsort(scores_all[top_idx])[::-1]]
 
             final_mask = np.zeros(all_tickets.shape[0], dtype=bool)
             if top_idx.size > 0:
                 final_mask[top_idx] = True
             universe_digits = all_tickets[final_mask]
-            final_universe_digits = universe_digits
+            if score_model == "random_topk":
+                final_universe_digits = all_tickets[top_idx]
+            else:
+                final_universe_digits = universe_digits
             universe_size = int(universe_digits.shape[0])
 
             static_accepted = int(np.sum(static_mask)) if structural_cfg.enabled else int(
@@ -576,6 +973,7 @@ class TrisForecastV1A:
             structural_diag["selection_mode"] = selection_mode
             structural_diag["score_model"] = str(score_model)
             structural_diag["universe_topk_k"] = int(K)
+            camera_debug["post_topk_size"] = int(universe_size)
         elif structural_cfg.enabled:
             candidates = beam_search(
                 pos_probs,
@@ -637,6 +1035,28 @@ class TrisForecastV1A:
             structural_diag["universe_mode"] = "topk_beam"
             structural_diag["selection_mode"] = "ranked"
 
+        structural_diag["flags_effective"] = dict(
+            camera_debug.get("structural_flags_effective", {})
+        )
+        if (
+            use_camera_masked_universe
+            and int(camera_topm_per_position) < 10
+            and score_model == "camera_mech_v1"
+        ):
+            pre_unique = camera_debug.get("pos_unique_digits_pre_topk", [0, 0, 0, 0, 0])
+            if (
+                isinstance(pre_unique, list)
+                and len(pre_unique) == 5
+                and all(int(v) == 10 for v in pre_unique)
+            ):
+                msg = (
+                    "camera mask not reducing positional support before topK "
+                    f"(pre_topk_unique={pre_unique})"
+                )
+                print(f"[TRIS][CameraMask][WARN] {msg}")
+                if camera_debug_strict:
+                    raise RuntimeError(msg)
+
         if not tickets:
             tickets = select_diverse(
                 filtered_ranked,
@@ -675,6 +1095,14 @@ class TrisForecastV1A:
             while len(tickets) < config.num_tickets:
                 tickets.append(fallback[:])
 
+        if final_universe_digits is None and (used_full_filtered_universe or used_topk_scored_universe):
+            final_universe_digits = np.empty((0, 5), dtype=np.uint8)
+        if final_universe_digits is not None:
+            camera_debug["post_topk_size"] = int(np.asarray(final_universe_digits).shape[0])
+            camera_debug["pos_unique_digits_final"] = self._pos_unique_digits(
+                final_universe_digits
+            )
+
         metadata = {
             "pos_probs": pos_probs.tolist(),
             "p_multiplier": float(p_multiplier),
@@ -689,6 +1117,8 @@ class TrisForecastV1A:
                 for d, lp in candidates[: max(0, topk_preview)]
             ],
             "score_model": score_model,
+            "score_model_requested": score_model_raw,
+            "score_model_effective": score_model,
             "score_preview": [
                 {"digits": d, "score": float(sc)}
                 for d, sc in filtered_ranked[: max(0, topk_preview)]
@@ -707,6 +1137,34 @@ class TrisForecastV1A:
                 "threshold_z": float(topk_gate_threshold_z),
             },
         }
+        if score_model == "feature_lr":
+            metadata["feature_lr"] = structural_diag.get("feature_lr", {})
+        if score_model == "camera_mech_v1":
+            if camera_pmf is None:
+                camera_pmf = np.asarray(pos_probs, dtype=np.float64)
+            if camera_positional_mask is None:
+                camera_positional_mask = np.ones((5, 10), dtype=bool)
+            metadata["score_model"] = "camera_mech_v1"
+            metadata["camera_masked_universe"] = bool(camera_masked_universe)
+            metadata["camera_topm_per_position"] = int(camera_topm_per_position)
+            metadata["camera_pmf"] = np.asarray(camera_pmf, dtype=np.float64).tolist()
+            metadata["camera_entropy_pos"] = (
+                camera_diag_summary.get("entropy_pos")
+                or (-np.sum(np.asarray(camera_pmf) * np.log(np.clip(np.asarray(camera_pmf), 1e-12, None)), axis=1)).tolist()
+            )
+            metadata["camera_positional_mask"] = (
+                np.asarray(camera_positional_mask, dtype=bool).astype(np.uint8).tolist()
+            )
+            metadata["camera_analyzer_diag"] = dict(camera_diag_summary)
+            if camera_universe_diag:
+                metadata["camera_analyzer_diag"]["universe_mask_diag"] = dict(
+                    camera_universe_diag
+                )
+            metadata["camera_mech_blend_with_v1a"] = float(
+                np.clip(camera_mech_blend_with_v1a, 0.0, 1.0)
+            )
+            metadata["camera_debug"] = dict(camera_debug)
+            metadata["camera_debug"]["strict"] = bool(camera_debug_strict)
         if structural_cfg.enabled or used_topk_scored_universe:
             metadata["structural_filters"] = structural_diag
         metadata["universe_size"] = int(structural_diag.get("accepted", len(filtered_ranked)))
@@ -728,8 +1186,6 @@ class TrisForecastV1A:
             structural_diag.get("selection_mode", selection_mode)
         )
         if used_full_filtered_universe or used_topk_scored_universe:
-            if final_universe_digits is None:
-                final_universe_digits = np.empty((0, 5), dtype=np.uint8)
             metadata["raw_ndarray"] = np.asarray(final_universe_digits, dtype=np.uint8)
 
         return PredictionResultDTO(
