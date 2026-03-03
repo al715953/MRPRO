@@ -554,3 +554,66 @@ def test_tris_forecast_score_model_alias_positional_mech_maps_to_camera_mech_v1(
     pred = TrisForecastV1A().predict(history, config)
     assert pred.metadata.get("score_model_requested") == "positional_mech"
     assert pred.metadata.get("score_model_effective") == "camera_mech_v1"
+
+
+def test_tris_forecast_layered_mesh_v1_topk_metadata_and_raw_universe():
+    history = _build_camera_history(120)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "layered_mesh_v1",
+            "universe_mode": "topk_scored_universe",
+            "universe_topk_k": 32,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+            "layered_mask_mode": "coverage",
+            "layered_target_coverage_per_position": 0.70,
+            "layered_min_digits_per_position": 4,
+            "layered_max_digits_per_position": 8,
+            "layered_use_hamming_memory": True,
+            "layered_use_cross_turbulence": True,
+            "layered_use_camera_repeat_penalty": True,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    raw = pred.metadata.get("raw_ndarray")
+    layered = pred.metadata.get("layered_mesh", {})
+
+    assert pred.metadata.get("score_model_effective") == "layered_mesh_v1"
+    assert isinstance(raw, np.ndarray)
+    assert raw.shape[1] == 5
+    assert raw.shape[0] <= 32
+
+    assert isinstance(layered, dict)
+    assert isinstance(layered.get("pmf_pos"), list)
+    assert len(layered.get("pmf_pos", [])) == 5
+    assert isinstance(layered.get("positional_mask"), list)
+    assert len(layered.get("positional_mask", [])) == 5
+
+    mask_digits = layered.get("mask_digits_per_pos", [])
+    assert isinstance(mask_digits, list)
+    assert len(mask_digits) == 5
+    assert all(4 <= int(v) <= 8 for v in mask_digits)
+
+    cov = layered.get("mask_coverage_empirical_per_pos", [])
+    assert isinstance(cov, list)
+    assert len(cov) == 5
+    assert all(0.0 <= float(v) <= 1.0 for v in cov)
+
+    assert int(layered.get("pre_mask_universe_size", -1)) >= 0
+    assert int(layered.get("post_guardrails_size", -1)) >= 0
+    assert int(layered.get("post_topk_size", -1)) <= 32
+
+    comp_stats = layered.get("score_component_stats", {})
+    assert isinstance(comp_stats, dict)
+    for key in (
+        "positional_logp",
+        "hamming_memory",
+        "cross_turbulence",
+        "camera_repeat_penalty",
+    ):
+        assert key in comp_stats

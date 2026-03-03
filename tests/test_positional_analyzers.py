@@ -69,3 +69,125 @@ def test_immediate_repeat_penalty_reduces_prev_digit_probability():
     pmf_pen = penalized.predict(prev_digits=prev_digits)["pmf"]
 
     assert float(pmf_pen[0, 1]) < float(pmf_base[0, 1])
+
+
+def test_coverage_mask_uniform_target_070_selects_7_digits_per_position():
+    model = PositionalAnalyzers(
+        mask_mode="coverage",
+        target_coverage_per_position=0.70,
+        min_digits_per_position=1,
+        max_digits_per_position=10,
+    ).fit([])
+
+    out = model.predict()
+    mask = out["positional_mask"]
+    diag = out["diagnostics"]
+
+    assert mask.shape == (5, 10)
+    assert np.all(np.sum(mask, axis=1) == 7)
+    assert np.all(np.asarray(diag["mask_digits_per_pos"]) == 7)
+    np.testing.assert_allclose(
+        np.asarray(diag["mask_coverage_empirical_per_pos"], dtype=np.float64),
+        np.full(5, 0.7, dtype=np.float64),
+        atol=1e-12,
+    )
+
+
+def test_coverage_mask_concentrated_can_use_fewer_digits_respecting_min_digits():
+    history = [[0, 0, 0, 0, 0] for _ in range(200)]
+    model = PositionalAnalyzers(
+        alpha=0.01,
+        short_window=200,
+        long_window=200,
+        mix_lambda=1.0,
+        mask_mode="coverage",
+        target_coverage_per_position=0.70,
+        min_digits_per_position=2,
+        max_digits_per_position=10,
+    ).fit(history)
+
+    out = model.predict()
+    mask = out["positional_mask"]
+    diag = out["diagnostics"]
+
+    assert np.all(np.sum(mask, axis=1) == 2)
+    assert np.all(np.asarray(diag["mask_digits_per_pos"]) == 2)
+    assert np.all(np.asarray(diag["mask_coverage_empirical_per_pos"]) >= 0.70)
+
+
+def test_coverage_outputs_valid_pmf_mask_and_diagnostics_shapes():
+    rng = np.random.default_rng(101)
+    history = rng.integers(0, 10, size=(180, 5), endpoint=False).tolist()
+    model = PositionalAnalyzers(
+        mask_mode="coverage",
+        target_coverage_per_position=0.65,
+        min_digits_per_position=2,
+        max_digits_per_position=6,
+    ).fit(history)
+
+    out = model.predict()
+    pmf = out["pmf"]
+    mask = out["positional_mask"]
+    diag = out["diagnostics"]
+
+    assert pmf.shape == (5, 10)
+    assert mask.shape == (5, 10)
+    assert mask.dtype == np.bool_
+    np.testing.assert_allclose(np.sum(pmf, axis=1), np.ones(5), atol=1e-12)
+    assert np.asarray(diag["mask_digits_per_pos"]).shape == (5,)
+    assert np.asarray(diag["mask_coverage_empirical_per_pos"]).shape == (5,)
+    assert diag["positional_mask_mode"] == "coverage"
+    assert float(diag["target_coverage_per_position"]) == 0.65
+
+
+def test_slot_conditioning_blends_towards_slot_distribution():
+    history = [[9, 9, 9, 9, 9] for _ in range(60)] + [[0, 0, 0, 0, 0] for _ in range(60)]
+    slot_labels = ["mediodia"] * 60 + ["clasico"] * 60
+
+    model = PositionalAnalyzers(
+        alpha=0.1,
+        short_window=120,
+        long_window=120,
+        mix_lambda=1.0,
+        camera_slot_gamma=1.0,
+    ).fit(history, slot_labels=slot_labels)
+
+    out_global = model.predict(slot_context="unknown")
+    out_slot = model.predict(slot_context="mediodia")
+
+    pmf_global = np.asarray(out_global["pmf"], dtype=np.float64)
+    pmf_slot = np.asarray(out_slot["pmf"], dtype=np.float64)
+    diag = out_slot["diagnostics"]
+
+    assert pmf_slot.shape == (5, 10)
+    assert float(pmf_slot[0, 9]) > float(pmf_global[0, 9])
+    assert float(pmf_slot[0, 9]) > 0.65
+    assert diag["slot_context_used"] == "mediodia"
+    assert int(diag["slot_sample_size"]) == 60
+    assert float(diag["slot_blend_gamma"]) > 0.0
+    assert np.asarray(diag["slot_vs_global_l1_by_pos"]).shape == (5,)
+    assert float(np.mean(np.asarray(diag["slot_vs_global_l1_by_pos"]))) > 0.0
+
+
+def test_slot_conditioning_degrades_to_global_without_slot_labels():
+    history = [[7, 7, 7, 7, 7] for _ in range(90)] + [[1, 1, 1, 1, 1] for _ in range(90)]
+    model = PositionalAnalyzers(
+        alpha=0.5,
+        short_window=120,
+        long_window=180,
+        mix_lambda=0.5,
+        camera_slot_gamma=1.0,
+    ).fit(history)
+
+    out_global = model.predict(slot_context=None)
+    out_slot = model.predict(slot_context="mediodia")
+    diag = out_slot["diagnostics"]
+
+    np.testing.assert_allclose(
+        np.asarray(out_slot["pmf"], dtype=np.float64),
+        np.asarray(out_global["pmf"], dtype=np.float64),
+        atol=1e-12,
+    )
+    assert diag["slot_context_used"] == "mediodia"
+    assert int(diag["slot_sample_size"]) == 0
+    assert float(diag["slot_blend_gamma"]) == 0.0

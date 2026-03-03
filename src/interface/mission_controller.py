@@ -1,8 +1,10 @@
-# src/core/mission_controller.py
+# src/interface/mission_controller.py
 
+from pathlib import Path
 import src.data_access.report as report
 import src.data_access.scraper as scraper
 import subprocess
+import sys
 from colorama import Fore, Style
 from rich.panel import Panel
 from rich.table import Table
@@ -325,9 +327,7 @@ class MissionController:
 
     def _run_tris_production(self):
         self.ui.clear_screen()
-        self.ui.console.print(
-            "\n[bold green]🎯 PRODUCCION TRIS V1-A (ONE-SHOT)[/]"
-        )
+        self.ui.console.print("\n[bold green]🎯 PRODUCCION TRIS V1-A (ONE-SHOT)[/]")
 
         settings = BEST_SETTINGS_TRIS.copy()
         config = PredictionConfigDTO(
@@ -389,10 +389,13 @@ class MissionController:
         )
 
         try:
-            # Ejecutamos el script de entrenamiento como proceso independiente
-            import subprocess
-
-            subprocess.run(["python", "src/core/train_static_model.py"], check=True)
+            # Ejecutamos el entrenamiento como modulo para preservar imports del paquete src.
+            project_root = Path(__file__).resolve().parents[2]
+            subprocess.run(
+                [sys.executable, "-m", "src.core.train_static_model"],
+                check=True,
+                cwd=project_root,
+            )
             print(
                 f"\n{Fore.GREEN}✅ MODELO ACTUALIZADO: Los pesos han sido sincronizados.{Style.RESET_ALL}"
             )
@@ -413,9 +416,7 @@ class MissionController:
         self._pause()
 
     def _pause(self):
-        self.ui.console.input(
-            f"\n[yellow]>> Presiona ENTER para volver...[/]"
-        )
+        self.ui.console.input(f"\n[yellow]>> Presiona ENTER para volver...[/]")
 
     def _is_tris(self) -> bool:
         return bool(self.profile and self.profile.code == "tris_multiplicador")

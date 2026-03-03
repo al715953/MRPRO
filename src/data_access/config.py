@@ -7,10 +7,13 @@ from src.domain.lottery_profile import LotteryProfile
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # config.py vive en src/data_access; subimos hasta la raiz del proyecto.
+    BASE_DIR = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
 
 # Carpetas de Proyecto
-DATA_FOLDER = os.path.join(BASE_DIR, "data")
+DATA_FOLDER = os.path.join(BASE_DIR, "src/data")
 if not os.path.exists(DATA_FOLDER):
     os.makedirs(DATA_FOLDER)
 
@@ -161,11 +164,14 @@ BEST_SETTINGS = {
 }
 
 # --- CONFIGURACION BASE: TRIS V1-A ---
-BEST_SETTINGS_TRIS = {
+BEST_SETTINGS_TRISbk = {
+    # --- ejecución ---
     "tris_backtest_mode": "universe_strategy",  # ya lo tienes
     "compare_models": True,  # activa LR vs RandomTopK
+    "compare_models_random_seeds": 30,  # o 10 para empezar
+    # --- universo / estrategia ---
     "universe_mode": "topk_scored_universe",
-    "score_model": "camera_mech_v1",  # o "ticket_ngram" / "positional_logp" /random_topk
+    "score_model": "layered_mesh_v1",  # o "ticket_ngram" / "positional_logp" /random_topk
     "universe_topk_k": 1000,  # prueba 2000, 5000, 10000, 20000
     "num_tickets": 200,
     "backtest_size": 500,
@@ -221,9 +227,57 @@ BEST_SETTINGS_TRIS = {
     "feature_lr_long_window": 2000,
     "feature_lr_mix_lambda": 0.2,
     "feature_lr_use_mirror": False,
-    "compare_models_random_seeds": 30,  # o 10 para empezar
     "feature_lr_shrink_c": 20000,
     "run_context_verbose": True,
+}
+BEST_SETTINGS_TRIS = {
+    # --- ejecución ---
+    "tris_backtest_mode": "universe_strategy",
+    "compare_models": True,
+    "compare_models_random_seeds": 30,
+    # --- universo / estrategia ---
+    "universe_mode": "topk_scored_universe",
+    "score_model": "layered_mesh_v1",
+    "universe_topk_k": 10000,
+    # --- cámara / PMF ---
+    "camera_masked_universe": True,
+    "camera_debug_strict": False,
+    "camera_alpha": 1.0,
+    "camera_short_window": 100,
+    "camera_long_window": 1000,
+    "camera_mix_lambda": 0.30,
+    "camera_latency_boost": 0.00,
+    "camera_immediate_repeat_penalty": 0.15,
+    "camera_parity_bias_strength": 0.00,
+    "camera_mech_blend_with_v1a": 0.50,
+    "camera_use_slot_context": False,
+    # --- guardrails mínimos ---
+    "structural_enabled": True,
+    "structural_enable_global_sum_filter": False,
+    "structural_enable_global_parity_filter": False,
+    "structural_min_unique_digits": 3,
+    "structural_max_consecutive_run": 3,
+    "structural_immediate_repeat_mode": "per_position",
+    "structural_immediate_repeat_disallow_positions": [
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],
+    # Legacy explícitas (evitar confusión)
+    "structural_sum_min": 15,
+    "structural_sum_max": 30,
+    "structural_allowed_even_counts": [2, 3],
+    "structural_max_positional_repeats_vs_prev": 2,
+    # --- scoring por capas (defaults) ---
+    "layered_use_hamming_memory": True,
+    "layered_use_cross_turbulence": True,
+    "layered_use_camera_repeat_penalty": True,
+    "layered_w_positional_logp": 1.00,
+    "layered_w_hamming_memory": 0.20,
+    "layered_w_cross_turbulence": 0.10,
+    "layered_w_camera_repeat_penalty": 0.15,
 }
 
 # --- PERFIL EXPERIMENTAL: TRIS CAMERA LAB ---

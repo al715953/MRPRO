@@ -17,6 +17,33 @@ def _coerce_rows(digits_list: list[list[int]]) -> np.ndarray:
     return np.asarray(rows, dtype=np.int16)
 
 
+def _normalize_slot_label(slot_value) -> str:
+    if slot_value is None:
+        return "unknown"
+    token = str(slot_value).strip().lower()
+    if not token:
+        return "unknown"
+    token = (
+        token.replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+    compact = token.replace(" ", "").replace("_", "").replace("-", "")
+    if "mediodia" in compact or "midday" in compact or compact == "md":
+        return "mediodia"
+    if (
+        "clasico" in compact
+        or "classic" in compact
+        or "vespertino" in compact
+        or "noche" in compact
+        or compact == "cl"
+    ):
+        return "clasico"
+    return "unknown"
+
+
 class PositionalAnalyzers:
     """Analiza 5 camaras independientes, donde cada camara es una posicion del Tris."""
 
@@ -31,6 +58,11 @@ class PositionalAnalyzers:
         parity_bias_strength: float = 0.0,
         topm_per_position: int | None = None,
         pmf_floor: float = 1e-6,
+        target_coverage_per_position: float | None = None,
+        min_digits_per_position: int = 1,
+        max_digits_per_position: int = 10,
+        mask_mode: str = "topm",
+        camera_slot_gamma: float = 0.0,
     ):
         self.alpha = float(alpha)
         self.short_window = int(short_window)
@@ -41,6 +73,25 @@ class PositionalAnalyzers:
         self.parity_bias_strength = float(parity_bias_strength)
         self.topm_per_position = None if topm_per_position is None else int(topm_per_position)
         self.pmf_floor = float(pmf_floor)
+        self.target_coverage_per_position = (
+            None
+            if target_coverage_per_position is None
+            else float(target_coverage_per_position)
+        )
+        self.min_digits_per_position = int(min_digits_per_position)
+        self.max_digits_per_position = int(max_digits_per_position)
+        self.mask_mode = str(mask_mode or "topm").strip().lower()
+        if self.mask_mode not in {"topm", "coverage"}:
+            self.mask_mode = "topm"
+        self.camera_slot_gamma = float(np.clip(camera_slot_gamma, 0.0, 1.0))
+        self.min_digits_per_position = int(
+            np.clip(self.min_digits_per_position, 1, _N_DIGITS)
+        )
+        self.max_digits_per_position = int(
+            np.clip(self.max_digits_per_position, 1, _N_DIGITS)
+        )
+        if self.max_digits_per_position < self.min_digits_per_position:
+            self.max_digits_per_position = self.min_digits_per_position
 
         self.counts_short = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
         self.counts_long = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
@@ -48,9 +99,52 @@ class PositionalAnalyzers:
         self.parity_counts = np.zeros((_N_POS, 2), dtype=np.float64)
         self.parity_streak_len = np.zeros(_N_POS, dtype=np.int32)
         self.parity_streak_value = np.full(_N_POS, -1, dtype=np.int32)
+        self.slot_counts_short: dict[str, np.ndarray] = {}
+        self.slot_counts_long: dict[str, np.ndarray] = {}
+        self.slot_sample_size_short: dict[str, int] = {}
+        self.slot_sample_size_long: dict[str, int] = {}
         self.n_rows = 0
 
-    def fit(self, digits_list: list[list[int]]) -> "PositionalAnalyzers":
+    @staticmethod
+    def _count_positions(rows: np.ndarray) -> np.ndarray:
+        counts = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
+        if rows.shape[0] == 0:
+            return counts
+        for pos in range(_N_POS):
+            counts[pos] = np.bincount(rows[:, pos], minlength=_N_DIGITS).astype(
+                np.float64, copy=False
+            )
+        return counts
+
+    @staticmethod
+    def _count_positions_by_slot(
+        rows: np.ndarray, slot_labels: list[str]
+    ) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+        counts_by_slot: dict[str, np.ndarray] = {}
+        sample_size_by_slot: dict[str, int] = {}
+        n = int(rows.shape[0])
+        if n == 0:
+            return counts_by_slot, sample_size_by_slot
+        for i in range(n):
+            slot = (
+                _normalize_slot_label(slot_labels[i])
+                if i < len(slot_labels)
+                else "unknown"
+            )
+            if slot not in counts_by_slot:
+                counts_by_slot[slot] = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
+                sample_size_by_slot[slot] = 0
+            sample_size_by_slot[slot] += 1
+            row = rows[i]
+            for pos in range(_N_POS):
+                counts_by_slot[slot][pos, int(row[pos])] += 1.0
+        return counts_by_slot, sample_size_by_slot
+
+    def fit(
+        self,
+        digits_list: list[list[int]],
+        slot_labels: list[str] | None = None,
+    ) -> "PositionalAnalyzers":
         """Ajusta el estado usando solo el historial pasado entregado por el caller."""
         rows = _coerce_rows(digits_list)
         n_rows = int(rows.shape[0])
@@ -60,20 +154,25 @@ class PositionalAnalyzers:
         l_n = min(n_rows, max(0, self.long_window))
         rows_short = rows[-s_n:] if s_n > 0 else rows[:0]
         rows_long = rows[-l_n:] if l_n > 0 else rows[:0]
+        labels = list(slot_labels or [])
+        labels_aligned = (
+            [_normalize_slot_label(v) for v in labels[-n_rows:]]
+            if n_rows > 0 and labels
+            else ["unknown"] * n_rows
+        )
+        labels_short = labels_aligned[-rows_short.shape[0] :] if rows_short.shape[0] else []
+        labels_long = labels_aligned[-rows_long.shape[0] :] if rows_long.shape[0] else []
 
-        counts_short = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
-        counts_long = np.zeros((_N_POS, _N_DIGITS), dtype=np.float64)
-        for pos in range(_N_POS):
-            if rows_short.shape[0] > 0:
-                counts_short[pos] = np.bincount(
-                    rows_short[:, pos], minlength=_N_DIGITS
-                ).astype(np.float64, copy=False)
-            if rows_long.shape[0] > 0:
-                counts_long[pos] = np.bincount(
-                    rows_long[:, pos], minlength=_N_DIGITS
-                ).astype(np.float64, copy=False)
+        counts_short = self._count_positions(rows_short)
+        counts_long = self._count_positions(rows_long)
         self.counts_short = counts_short
         self.counts_long = counts_long
+        self.slot_counts_short, self.slot_sample_size_short = self._count_positions_by_slot(
+            rows_short, labels_short
+        )
+        self.slot_counts_long, self.slot_sample_size_long = self._count_positions_by_slot(
+            rows_long, labels_long
+        )
 
         parity_counts = np.zeros((_N_POS, 2), dtype=np.float64)
         if rows_short.shape[0] > 0:
@@ -112,18 +211,60 @@ class PositionalAnalyzers:
         self.parity_streak_value = streak_value
         return self
 
-    def _smoothed_mix_pmf(self) -> np.ndarray:
+    def _smoothed_mix_pmf_from_counts(
+        self, counts_short: np.ndarray, counts_long: np.ndarray
+    ) -> np.ndarray:
         alpha = max(self.alpha, 1e-12)
-        sum_short = np.sum(self.counts_short, axis=1, keepdims=True)
-        sum_long = np.sum(self.counts_long, axis=1, keepdims=True)
-        short_p = (self.counts_short + alpha) / np.clip(
+        sum_short = np.sum(counts_short, axis=1, keepdims=True)
+        sum_long = np.sum(counts_long, axis=1, keepdims=True)
+        short_p = (counts_short + alpha) / np.clip(
             sum_short + alpha * _N_DIGITS, 1e-12, None
         )
-        long_p = (self.counts_long + alpha) / np.clip(
+        long_p = (counts_long + alpha) / np.clip(
             sum_long + alpha * _N_DIGITS, 1e-12, None
         )
         mix_w = float(np.clip(self.mix_lambda, 0.0, 1.0))
         return mix_w * short_p + (1.0 - mix_w) * long_p
+
+    def _smoothed_mix_pmf(self) -> np.ndarray:
+        return self._smoothed_mix_pmf_from_counts(self.counts_short, self.counts_long)
+
+    def _slot_conditioned_pmf(
+        self, pmf_global: np.ndarray, slot_context: str | None
+    ) -> tuple[np.ndarray, dict]:
+        slot = _normalize_slot_label(slot_context)
+        sample_short = int(self.slot_sample_size_short.get(slot, 0))
+        sample_long = int(self.slot_sample_size_long.get(slot, 0))
+        sample_size = sample_long
+        pmf_slot = pmf_global
+        gamma_eff = 0.0
+
+        counts_short = self.slot_counts_short.get(slot)
+        counts_long = self.slot_counts_long.get(slot)
+        if (
+            counts_short is not None
+            and counts_long is not None
+            and counts_short.shape == (_N_POS, _N_DIGITS)
+            and counts_long.shape == (_N_POS, _N_DIGITS)
+            and sample_long > 0
+        ):
+            pmf_slot = self._smoothed_mix_pmf_from_counts(counts_short, counts_long)
+            base_gamma = float(np.clip(self.camera_slot_gamma, 0.0, 1.0))
+            # Suaviza gamma con evidencia disponible para evitar sobreajuste en slots escasos.
+            n_eff = float(max(0, sample_long))
+            gamma_eff = base_gamma * (n_eff / (n_eff + 20.0))
+
+        pmf_out = (1.0 - gamma_eff) * pmf_global + gamma_eff * pmf_slot
+        slot_vs_global_l1_by_pos = np.sum(np.abs(pmf_slot - pmf_global), axis=1)
+        diag = {
+            "slot_context_used": slot,
+            "slot_sample_size": int(sample_size),
+            "slot_sample_size_short": int(sample_short),
+            "slot_sample_size_long": int(sample_long),
+            "slot_blend_gamma": float(gamma_eff),
+            "slot_vs_global_l1_by_pos": slot_vs_global_l1_by_pos.astype(np.float64),
+        }
+        return pmf_out, diag
 
     def _apply_latency_adjustment(self, pmf: np.ndarray) -> np.ndarray:
         if abs(self.latency_boost) <= 0.0:
@@ -178,6 +319,40 @@ class PositionalAnalyzers:
             mask[pos, order[:m]] = True
         return mask
 
+    def _coverage_mask(self, pmf: np.ndarray) -> np.ndarray:
+        target = self.target_coverage_per_position
+        target_cov = 1.0 if target is None else float(np.clip(target, 0.0, 1.0))
+        min_d = int(np.clip(self.min_digits_per_position, 1, _N_DIGITS))
+        max_d = int(np.clip(self.max_digits_per_position, 1, _N_DIGITS))
+        if max_d < min_d:
+            max_d = min_d
+
+        digits = np.arange(_N_DIGITS, dtype=np.int32)
+        mask = np.zeros_like(pmf, dtype=bool)
+        for pos in range(pmf.shape[0]):
+            # Deterministic tie-break: pmf desc, digit asc.
+            order = np.lexsort((digits, -pmf[pos]))
+            chosen = np.zeros(_N_DIGITS, dtype=bool)
+            cum = 0.0
+            count = 0
+            for d in order.tolist():
+                if count >= max_d:
+                    break
+                chosen[d] = True
+                cum += float(pmf[pos, d])
+                count += 1
+                if count >= min_d and cum >= target_cov:
+                    break
+            if count < min_d:
+                for d in order.tolist():
+                    if count >= min_d:
+                        break
+                    if not chosen[d]:
+                        chosen[d] = True
+                        count += 1
+            mask[pos] = chosen
+        return mask
+
     def predict(
         self,
         prev_digits: list[int] | None = None,
@@ -185,7 +360,8 @@ class PositionalAnalyzers:
         slot_context: str | None = None,
     ) -> dict:
         """Genera PMF por camara (posicion) y mascara de probabilidad por posicion."""
-        pmf = self._smoothed_mix_pmf()
+        pmf_global = self._smoothed_mix_pmf()
+        pmf, slot_diag = self._slot_conditioned_pmf(pmf_global, slot_context)
         pmf = self._apply_latency_adjustment(pmf)
         pmf = self._apply_immediate_repeat_penalty(pmf, prev_digits=prev_digits)
         parity_local_prob = self._parity_local_prob()
@@ -194,24 +370,36 @@ class PositionalAnalyzers:
         pmf = np.clip(pmf, max(self.pmf_floor, 1e-12), None)
         pmf = pmf / np.clip(np.sum(pmf, axis=1, keepdims=True), 1e-12, None)
 
-        if self.topm_per_position is None:
-            positional_mask = np.ones_like(pmf, dtype=bool)
-            favored_digits_by_pos: list[list[int]] = []
-            for pos in range(_N_POS):
-                thr = float(np.quantile(pmf[pos], 0.8))
-                idx = np.where(pmf[pos] >= thr)[0]
-                idx_sorted = idx[np.argsort(-pmf[pos, idx], kind="mergesort")]
-                favored_digits_by_pos.append([int(v) for v in idx_sorted.tolist()])
-        else:
-            positional_mask = self._topm_mask(pmf, self.topm_per_position)
+        if self.mask_mode == "coverage":
+            positional_mask = self._coverage_mask(pmf)
             favored_digits_by_pos = [
-                [int(d) for d in np.where(positional_mask[pos])[0].tolist()] for pos in range(_N_POS)
+                [int(d) for d in np.where(positional_mask[pos])[0].tolist()]
+                for pos in range(_N_POS)
             ]
+        else:
+            if self.topm_per_position is None:
+                positional_mask = np.ones_like(pmf, dtype=bool)
+                favored_digits_by_pos = []
+                for pos in range(_N_POS):
+                    thr = float(np.quantile(pmf[pos], 0.8))
+                    idx = np.where(pmf[pos] >= thr)[0]
+                    idx_sorted = idx[np.argsort(-pmf[pos, idx], kind="mergesort")]
+                    favored_digits_by_pos.append([int(v) for v in idx_sorted.tolist()])
+            else:
+                positional_mask = self._topm_mask(pmf, self.topm_per_position)
+                favored_digits_by_pos = [
+                    [int(d) for d in np.where(positional_mask[pos])[0].tolist()]
+                    for pos in range(_N_POS)
+                ]
 
         forbidden_digits_by_pos = [
             [int(d) for d in np.where(~positional_mask[pos])[0].tolist()] for pos in range(_N_POS)
         ]
         entropy_pos = self._entropy_rows(pmf)
+        mask_digits_per_pos = np.sum(positional_mask.astype(np.int32), axis=1).astype(np.int32)
+        mask_coverage_empirical_per_pos = np.sum(
+            pmf * positional_mask.astype(np.float64), axis=1
+        )
 
         diagnostics = {
             "entropy_pos": entropy_pos,
@@ -219,8 +407,18 @@ class PositionalAnalyzers:
             "latency": self.latency.copy(),
             "slot_labels": slot_labels,
             "slot_context": slot_context,
+            "slot_context_used": slot_diag["slot_context_used"],
+            "slot_sample_size": int(slot_diag["slot_sample_size"]),
+            "slot_sample_size_short": int(slot_diag["slot_sample_size_short"]),
+            "slot_sample_size_long": int(slot_diag["slot_sample_size_long"]),
+            "slot_blend_gamma": float(slot_diag["slot_blend_gamma"]),
+            "slot_vs_global_l1_by_pos": slot_diag["slot_vs_global_l1_by_pos"].copy(),
             "parity_streak_len": self.parity_streak_len.copy(),
             "parity_streak_value": self.parity_streak_value.copy(),
+            "mask_digits_per_pos": mask_digits_per_pos.copy(),
+            "mask_coverage_empirical_per_pos": mask_coverage_empirical_per_pos.copy(),
+            "positional_mask_mode": str(self.mask_mode),
+            "target_coverage_per_position": self.target_coverage_per_position,
         }
         return {
             "pmf": pmf,

@@ -350,6 +350,21 @@ class BacktestEngine:
         camera_full_support_draws = 0
         camera_support_checks = 0
         camera_mask_present_draws = 0
+        tris_layered_mesh_draws = 0
+        tris_mesh_pre_sizes = []
+        tris_mesh_post_guardrails_sizes = []
+        tris_mesh_post_topk_sizes = []
+        tris_mesh_pre_hits = 0
+        tris_mesh_pre_hit_count = 0
+        tris_mesh_post_guardrails_hits = 0
+        tris_mesh_post_guardrails_hit_count = 0
+        tris_mesh_topk_hits = 0
+        tris_mesh_topk_hit_count = 0
+        tris_mesh_conditional_topk_num = 0
+        tris_mesh_conditional_topk_den = 0
+        tris_mesh_attrition_pre_to_guardrails = []
+        tris_mesh_attrition_guardrails_to_topk = []
+        tris_mesh_attrition_total = []
         tris_struct_cfg = None
         tris_struct_cfg_effective = (
             self._build_tris_structural_config(overrides) if is_tris_profile else None
@@ -406,6 +421,39 @@ class BacktestEngine:
             if universe_ptr.ndim != 2 or universe_ptr.shape[1] < 5:
                 return np.empty((0, 5), dtype=np.int16)
             return universe_ptr[:, :5].astype(np.int16, copy=False)
+
+        def _coerce_optional_nonneg_int(value):
+            if value is None:
+                return None
+            try:
+                iv = int(value)
+            except (TypeError, ValueError):
+                return None
+            return iv if iv >= 0 else None
+
+        def _coerce_optional_binary(value):
+            if value is None:
+                return None
+            return int(1 if self._coerce_bool(value, False) else 0)
+
+        def _winner_in_universe_payload(universe_payload, winner_digits):
+            if universe_payload is None:
+                return None
+            try:
+                universe_ptr = _coerce_universe_ptr(universe_payload)
+                if universe_ptr.shape[0] == 0:
+                    return 0
+                return int(
+                    np.any(
+                        np.all(
+                            universe_ptr.astype(np.int16, copy=False)
+                            == winner_digits[None, :],
+                            axis=1,
+                        )
+                    )
+                )
+            except Exception:
+                return None
 
         def _predict_snapshot(curr_history, local_overrides):
             base_overrides = (
@@ -517,6 +565,11 @@ class BacktestEngine:
                 camera_mask_present_curr = False
                 camera_mask_hits_curr = None
                 camera_pos_unique_digits_final_curr = None
+                mesh_pre_universe_size_curr = None
+                mesh_post_guardrails_size_curr = None
+                mesh_post_topk_size_curr = None
+                winner_in_mesh_pre_curr = None
+                winner_in_mesh_post_guardrails_curr = None
                 if is_tris_universe_mode:
                     prediction = None
                     snapshot = {}
@@ -713,6 +766,7 @@ class BacktestEngine:
                             int(snapshot.get("final_size", len(prediction.tickets)))
                         )
 
+                winner_in_topk_curr = int(fs_pass) if is_tris_universe_mode else None
                 if is_tris_profile and isinstance(snapshot, dict):
                     winner_digits_pos = np.asarray(
                         [int(d) % 10 for d in target[:5]], dtype=np.int16
@@ -816,6 +870,117 @@ class BacktestEngine:
                                     camera_full_support_draws += 1
                         except Exception:
                             pass
+
+                    layered_mesh_payload = snapshot.get("layered_mesh")
+                    if isinstance(layered_mesh_payload, dict):
+                        tris_layered_mesh_draws += 1
+                        winner_ticket = winner_digits_pos.astype(np.int16, copy=False)
+                        mesh_pre_universe_size_curr = _coerce_optional_nonneg_int(
+                            layered_mesh_payload.get("pre_mask_universe_size")
+                        )
+                        mesh_post_guardrails_size_curr = _coerce_optional_nonneg_int(
+                            layered_mesh_payload.get("post_guardrails_size")
+                        )
+                        mesh_post_topk_size_curr = _coerce_optional_nonneg_int(
+                            layered_mesh_payload.get("post_topk_size")
+                        )
+
+                        winner_in_mesh_pre_curr = _coerce_optional_binary(
+                            layered_mesh_payload.get("winner_in_mesh_pre")
+                        )
+                        winner_in_mesh_post_guardrails_curr = _coerce_optional_binary(
+                            layered_mesh_payload.get("winner_in_mesh_post_guardrails")
+                        )
+                        if winner_in_topk_curr is None:
+                            winner_in_topk_curr = _coerce_optional_binary(
+                                layered_mesh_payload.get("winner_in_topk")
+                            )
+
+                        if winner_in_mesh_pre_curr is None:
+                            winner_in_mesh_pre_curr = _winner_in_universe_payload(
+                                layered_mesh_payload.get("pre_mask_universe_raw_ndarray"),
+                                winner_ticket,
+                            )
+                        if winner_in_mesh_pre_curr is None:
+                            winner_in_mesh_pre_curr = _winner_in_universe_payload(
+                                layered_mesh_payload.get("pre_mask_universe"),
+                                winner_ticket,
+                            )
+
+                        if winner_in_mesh_post_guardrails_curr is None:
+                            winner_in_mesh_post_guardrails_curr = _winner_in_universe_payload(
+                                layered_mesh_payload.get("post_guardrails_raw_ndarray"),
+                                winner_ticket,
+                            )
+                        if winner_in_mesh_post_guardrails_curr is None:
+                            winner_in_mesh_post_guardrails_curr = _winner_in_universe_payload(
+                                layered_mesh_payload.get("post_guardrails_universe"),
+                                winner_ticket,
+                            )
+
+                        if winner_in_topk_curr == 1:
+                            if winner_in_mesh_pre_curr is None:
+                                winner_in_mesh_pre_curr = 1
+                            if winner_in_mesh_post_guardrails_curr is None:
+                                winner_in_mesh_post_guardrails_curr = 1
+
+                        if mesh_pre_universe_size_curr is not None:
+                            tris_mesh_pre_sizes.append(int(mesh_pre_universe_size_curr))
+                        if mesh_post_guardrails_size_curr is not None:
+                            tris_mesh_post_guardrails_sizes.append(
+                                int(mesh_post_guardrails_size_curr)
+                            )
+                        if mesh_post_topk_size_curr is not None:
+                            tris_mesh_post_topk_sizes.append(int(mesh_post_topk_size_curr))
+
+                        if winner_in_mesh_pre_curr is not None:
+                            tris_mesh_pre_hits += int(winner_in_mesh_pre_curr)
+                            tris_mesh_pre_hit_count += 1
+                        if winner_in_mesh_post_guardrails_curr is not None:
+                            tris_mesh_post_guardrails_hits += int(
+                                winner_in_mesh_post_guardrails_curr
+                            )
+                            tris_mesh_post_guardrails_hit_count += 1
+                        if winner_in_topk_curr is not None:
+                            tris_mesh_topk_hits += int(winner_in_topk_curr)
+                            tris_mesh_topk_hit_count += 1
+
+                        if (
+                            winner_in_mesh_post_guardrails_curr is not None
+                            and winner_in_topk_curr is not None
+                            and int(winner_in_mesh_post_guardrails_curr) == 1
+                        ):
+                            tris_mesh_conditional_topk_den += 1
+                            tris_mesh_conditional_topk_num += int(winner_in_topk_curr)
+
+                        if (
+                            mesh_pre_universe_size_curr is not None
+                            and mesh_post_guardrails_size_curr is not None
+                            and int(mesh_pre_universe_size_curr) > 0
+                        ):
+                            pre_sz = float(mesh_pre_universe_size_curr)
+                            guard_sz = float(mesh_post_guardrails_size_curr)
+                            tris_mesh_attrition_pre_to_guardrails.append(
+                                1.0 - (guard_sz / pre_sz)
+                            )
+                        if (
+                            mesh_post_guardrails_size_curr is not None
+                            and mesh_post_topk_size_curr is not None
+                            and int(mesh_post_guardrails_size_curr) > 0
+                        ):
+                            guard_sz = float(mesh_post_guardrails_size_curr)
+                            topk_sz = float(mesh_post_topk_size_curr)
+                            tris_mesh_attrition_guardrails_to_topk.append(
+                                1.0 - (topk_sz / guard_sz)
+                            )
+                        if (
+                            mesh_pre_universe_size_curr is not None
+                            and mesh_post_topk_size_curr is not None
+                            and int(mesh_pre_universe_size_curr) > 0
+                        ):
+                            pre_sz = float(mesh_pre_universe_size_curr)
+                            topk_sz = float(mesh_post_topk_size_curr)
+                            tris_mesh_attrition_total.append(1.0 - (topk_sz / pre_sz))
 
                 prob_metrics = {}
                 baseline_metrics = {}
@@ -982,7 +1147,11 @@ class BacktestEngine:
 
                     metrics_payload = {
                         "hits_pos": int(audit.get("hits", 0)),
-                        "winner_in_topk": "",
+                        "winner_in_topk": (
+                            int(winner_in_topk_curr)
+                            if winner_in_topk_curr is not None
+                            else ""
+                        ),
                     }
                     if is_tris_profile:
                         metrics_payload["camera_mask_present"] = bool(
@@ -1000,6 +1169,26 @@ class BacktestEngine:
                             cam_debug_payload = snapshot.get("camera_debug")
                             if isinstance(cam_debug_payload, dict):
                                 metrics_payload["camera_debug"] = cam_debug_payload
+                        if mesh_pre_universe_size_curr is not None:
+                            metrics_payload["mesh_pre_universe_size"] = int(
+                                mesh_pre_universe_size_curr
+                            )
+                        if mesh_post_guardrails_size_curr is not None:
+                            metrics_payload["mesh_post_guardrails_size"] = int(
+                                mesh_post_guardrails_size_curr
+                            )
+                        if mesh_post_topk_size_curr is not None:
+                            metrics_payload["mesh_post_topk_size"] = int(
+                                mesh_post_topk_size_curr
+                            )
+                        if winner_in_mesh_pre_curr is not None:
+                            metrics_payload["winner_in_mesh_pre"] = int(
+                                winner_in_mesh_pre_curr
+                            )
+                        if winner_in_mesh_post_guardrails_curr is not None:
+                            metrics_payload["winner_in_mesh_post_guardrails"] = int(
+                                winner_in_mesh_post_guardrails_curr
+                            )
                     if prob_metrics:
                         metrics_payload.update(prob_metrics)
                     if baseline_metrics:
@@ -1124,6 +1313,7 @@ class BacktestEngine:
         tris_outlier_summary = None
         tris_universe_summary = None
         tris_positional_summary = None
+        tris_layered_mesh_summary = None
         baseline_compare_summary = None
         if is_tris_profile:
             tris_positional_summary = {
@@ -1244,6 +1434,97 @@ class BacktestEngine:
                                 compare_model_b_score_model or "random_topk"
                             ),
                         }
+                if tris_layered_mesh_draws > 0:
+                    tris_layered_mesh_summary = {
+                        "draws_with_layered_mesh": int(tris_layered_mesh_draws),
+                        "avg_pre_mesh_u": (
+                            float(np.mean(np.asarray(tris_mesh_pre_sizes, dtype=np.float64)))
+                            if tris_mesh_pre_sizes
+                            else None
+                        ),
+                        "avg_post_guardrails_u": (
+                            float(
+                                np.mean(
+                                    np.asarray(
+                                        tris_mesh_post_guardrails_sizes, dtype=np.float64
+                                    )
+                                )
+                            )
+                            if tris_mesh_post_guardrails_sizes
+                            else None
+                        ),
+                        "avg_post_topk_u": (
+                            float(
+                                np.mean(
+                                    np.asarray(tris_mesh_post_topk_sizes, dtype=np.float64)
+                                )
+                            )
+                            if tris_mesh_post_topk_sizes
+                            else None
+                        ),
+                        "recall_layer_1": (
+                            float(tris_mesh_pre_hits / tris_mesh_pre_hit_count)
+                            if tris_mesh_pre_hit_count > 0
+                            else None
+                        ),
+                        "recall_layer_2": (
+                            float(
+                                tris_mesh_post_guardrails_hits
+                                / tris_mesh_post_guardrails_hit_count
+                            )
+                            if tris_mesh_post_guardrails_hit_count > 0
+                            else None
+                        ),
+                        "recall_final": (
+                            float(tris_mesh_topk_hits / tris_mesh_topk_hit_count)
+                            if tris_mesh_topk_hit_count > 0
+                            else None
+                        ),
+                        "precision_conditional_selector": (
+                            float(
+                                tris_mesh_conditional_topk_num
+                                / tris_mesh_conditional_topk_den
+                            )
+                            if tris_mesh_conditional_topk_den > 0
+                            else None
+                        ),
+                        "attrition_pre_to_guardrails": (
+                            float(
+                                np.mean(
+                                    np.asarray(
+                                        tris_mesh_attrition_pre_to_guardrails,
+                                        dtype=np.float64,
+                                    )
+                                )
+                            )
+                            if tris_mesh_attrition_pre_to_guardrails
+                            else None
+                        ),
+                        "attrition_guardrails_to_topk": (
+                            float(
+                                np.mean(
+                                    np.asarray(
+                                        tris_mesh_attrition_guardrails_to_topk,
+                                        dtype=np.float64,
+                                    )
+                                )
+                            )
+                            if tris_mesh_attrition_guardrails_to_topk
+                            else None
+                        ),
+                        "attrition_total": (
+                            float(
+                                np.mean(
+                                    np.asarray(
+                                        tris_mesh_attrition_total,
+                                        dtype=np.float64,
+                                    )
+                                )
+                            )
+                            if tris_mesh_attrition_total
+                            else None
+                        ),
+                    }
             else:
                 tris_prob_summary = {
                     "logloss": (
@@ -1353,6 +1634,7 @@ class BacktestEngine:
                 tris_outlier_summary=tris_outlier_summary,
                 tris_universe_summary=tris_universe_summary,
                 tris_positional_summary=tris_positional_summary,
+                tris_layered_mesh_summary=tris_layered_mesh_summary,
                 baseline_prob_summary=baseline_prob_summary,
                 baseline_compare_summary=baseline_compare_summary,
             )
@@ -1581,6 +1863,7 @@ class BacktestEngine:
         tris_outlier_summary=None,
         tris_universe_summary=None,
         tris_positional_summary=None,
+        tris_layered_mesh_summary=None,
         baseline_prob_summary=None,
         baseline_compare_summary=None,
     ):
@@ -1761,6 +2044,78 @@ class BacktestEngine:
                     _fmt_rate(uv),
                 )
             self.console.print(pos_table)
+
+        if isinstance(tris_layered_mesh_summary, dict):
+            mesh_table = Table(
+                title="Layered Mesh Telemetry",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            mesh_table.add_column("Métrica", justify="left")
+            mesh_table.add_column("Valor", justify="right")
+
+            def _fmt_mesh_size(v):
+                if v is None:
+                    return "[bold yellow]N/A[/]"
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    return "[bold yellow]N/A[/]"
+                if not np.isfinite(fv):
+                    return "[bold yellow]N/A[/]"
+                return f"{fv:.2f}"
+
+            def _fmt_mesh_rate(v):
+                if v is None:
+                    return "[bold yellow]N/A[/]"
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    return "[bold yellow]N/A[/]"
+                if not np.isfinite(fv):
+                    return "[bold yellow]N/A[/]"
+                return f"{100.0 * fv:.2f}%"
+
+            mesh_table.add_row(
+                "Avg pre-mesh U",
+                _fmt_mesh_size(tris_layered_mesh_summary.get("avg_pre_mesh_u")),
+            )
+            mesh_table.add_row(
+                "Avg post-guardrails U",
+                _fmt_mesh_size(tris_layered_mesh_summary.get("avg_post_guardrails_u")),
+            )
+            mesh_table.add_row(
+                "Avg post-topK U",
+                _fmt_mesh_size(tris_layered_mesh_summary.get("avg_post_topk_u")),
+            )
+            mesh_table.add_row(
+                "Recall capa 1 (winner_in_mesh_pre)",
+                _fmt_mesh_rate(tris_layered_mesh_summary.get("recall_layer_1")),
+            )
+            mesh_table.add_row(
+                "Recall capa 2 (winner_in_mesh_post_guardrails)",
+                _fmt_mesh_rate(tris_layered_mesh_summary.get("recall_layer_2")),
+            )
+            mesh_table.add_row(
+                "Recall final (FS-pass)",
+                _fmt_mesh_rate(tris_layered_mesh_summary.get("recall_final")),
+            )
+            mesh_table.add_row(
+                "Precision condicional selector",
+                _fmt_mesh_rate(
+                    tris_layered_mesh_summary.get("precision_conditional_selector")
+                ),
+            )
+            attrition_line = (
+                f"L1->L2: {_fmt_mesh_rate(tris_layered_mesh_summary.get('attrition_pre_to_guardrails'))}, "
+                f"L2->TopK: {_fmt_mesh_rate(tris_layered_mesh_summary.get('attrition_guardrails_to_topk'))}, "
+                f"Total: {_fmt_mesh_rate(tris_layered_mesh_summary.get('attrition_total'))}"
+            )
+            mesh_table.add_row(
+                "Attrition por capa (% reducción de universo)",
+                attrition_line,
+            )
+            self.console.print(mesh_table)
 
         if isinstance(tris_prob_summary, dict):
             prob_table = Table(

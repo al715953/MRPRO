@@ -17,6 +17,7 @@ from src.strategies.tris.topk import beam_search, select_diverse
 from src.strategies.tris.uniform_baseline import TrisUniformBaselineStrategy
 from src.strategies.tris.universe_gate import should_use_topk
 from src.strategies.tris.positional_analyzers import PositionalAnalyzers
+from src.strategies.tris.layered_mesh_scorer import LayeredMeshScorer
 from src.strategies.tris.universe_5d import (
     get_universe_and_static_mask,
     get_universe_with_positional_mask,
@@ -216,7 +217,8 @@ class TrisForecastV1A:
         bypass_uniform_gate = (
             gate_choice == "uniform"
             and gate_universe_mode == "topk_scored_universe"
-            and gate_score_model in {"feature_lr", "random_topk", "camera_mech_v1"}
+            and gate_score_model
+            in {"feature_lr", "random_topk", "camera_mech_v1", "layered_mesh_v1"}
         )
         if gate_choice == "uniform" and not bypass_uniform_gate:
             baseline_pred = TrisUniformBaselineStrategy().predict(history, config)
@@ -275,6 +277,32 @@ class TrisForecastV1A:
         )
         camera_masked_universe = self._to_bool(
             self._get_override(overrides, "camera_masked_universe", True),
+            default=True,
+        )
+        layered_mask_mode = str(
+            self._get_override(overrides, "layered_mask_mode", "coverage")
+        ).lower()
+        if layered_mask_mode not in {"topm", "coverage"}:
+            layered_mask_mode = "coverage"
+        layered_target_coverage_per_position = float(
+            self._get_override(overrides, "layered_target_coverage_per_position", 0.70)
+        )
+        layered_min_digits_per_position = int(
+            self._get_override(overrides, "layered_min_digits_per_position", 4)
+        )
+        layered_max_digits_per_position = int(
+            self._get_override(overrides, "layered_max_digits_per_position", 8)
+        )
+        layered_use_hamming_memory = self._to_bool(
+            self._get_override(overrides, "layered_use_hamming_memory", True),
+            default=True,
+        )
+        layered_use_cross_turbulence = self._to_bool(
+            self._get_override(overrides, "layered_use_cross_turbulence", True),
+            default=True,
+        )
+        layered_use_camera_repeat_penalty = self._to_bool(
+            self._get_override(overrides, "layered_use_camera_repeat_penalty", True),
             default=True,
         )
 
@@ -428,6 +456,8 @@ class TrisForecastV1A:
             score_model = "random_topk"
         elif score_model_raw in {"camera_mech_v1", "positional_mech"}:
             score_model = "camera_mech_v1"
+        elif score_model_raw in {"layered_mesh_v1", "layered_mesh"}:
+            score_model = "layered_mesh_v1"
         else:
             score_model = "positional_logp"
         camera_debug_strict = self._to_bool(
@@ -440,7 +470,7 @@ class TrisForecastV1A:
             raise ValueError(
                 "camera_topm_per_position must be in [1..10] when score_model='camera_mech_v1'."
             )
-        valid_camera_mask_controls = {"camera_mech_v1", "random_topk"}
+        valid_camera_mask_controls = {"camera_mech_v1", "random_topk", "layered_mesh_v1"}
         if bool(camera_masked_universe) and score_model not in valid_camera_mask_controls:
             invalid_msg = (
                 "camera_masked_universe=True but "
@@ -453,6 +483,13 @@ class TrisForecastV1A:
                 f"camera_masked_universe_invalid::{score_model}",
                 f"[TRIS][CameraMask][WARN] {invalid_msg}",
             )
+        if score_model == "layered_mesh_v1" and universe_mode != "topk_scored_universe":
+            self._warn_once(
+                "layered_mesh_v1_force_topk_mode",
+                "[TRIS][LayeredMesh][WARN] forcing universe_mode='topk_scored_universe' "
+                f"for score_model='{score_model}'.",
+            )
+            universe_mode = "topk_scored_universe"
         universe_topk_k = int(self._get_override(overrides, "universe_topk_k", topk_k))
         universe_topk_k = max(0, universe_topk_k)
         use_topk_gate = bool(self._get_override(overrides, "use_topk_gate", False))
@@ -474,12 +511,73 @@ class TrisForecastV1A:
         if rank_score_mode not in {"positional_logp", "ticket_score"}:
             rank_score_mode = "positional_logp"
 
+        layered_weights_raw = self._get_override(overrides, "layered_weights", None)
+        layered_weights = (
+            dict(layered_weights_raw) if isinstance(layered_weights_raw, dict) else {}
+        )
+        def _get_layered_weight(legacy_key: str, alias_key: str, default: float) -> float:
+            if isinstance(overrides, dict) and legacy_key in overrides:
+                raw = overrides.get(legacy_key)
+            elif isinstance(overrides, dict) and alias_key in overrides:
+                raw = overrides.get(alias_key)
+            else:
+                raw = default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return float(default)
+
+        layered_weights["positional_logp"] = float(
+            _get_layered_weight(
+                "layered_weight_positional_logp",
+                "layered_w_positional_logp",
+                layered_weights.get("positional_logp", 1.0),
+            )
+        )
+        layered_weights["hamming_memory"] = float(
+            _get_layered_weight(
+                "layered_weight_hamming_memory",
+                "layered_w_hamming_memory",
+                layered_weights.get("hamming_memory", 0.25),
+            )
+        )
+        layered_weights["cross_turbulence"] = float(
+            _get_layered_weight(
+                "layered_weight_cross_turbulence",
+                "layered_w_cross_turbulence",
+                layered_weights.get("cross_turbulence", 0.10),
+            )
+        )
+        layered_weights["camera_repeat_penalty"] = float(
+            _get_layered_weight(
+                "layered_weight_camera_repeat_penalty",
+                "layered_w_camera_repeat_penalty",
+                layered_weights.get("camera_repeat_penalty", 0.35),
+            )
+        )
+        if not layered_use_hamming_memory:
+            layered_weights["hamming_memory"] = 0.0
+        if not layered_use_cross_turbulence:
+            layered_weights["cross_turbulence"] = 0.0
+        if not layered_use_camera_repeat_penalty:
+            layered_weights["camera_repeat_penalty"] = 0.0
+        if "camera_repeat_penalty_per_pos" not in layered_weights:
+            repeat_per_pos_raw = self._get_override(
+                overrides, "layered_camera_repeat_penalty_per_pos", None
+            )
+            if repeat_per_pos_raw is not None:
+                layered_weights["camera_repeat_penalty_per_pos"] = repeat_per_pos_raw
+
         pos_probs_v1a = np.asarray(pos_probs, dtype=np.float64).copy()
         camera_analyzer_out = None
         camera_pmf = None
         camera_positional_mask = None
         camera_diag_summary = {}
         camera_universe_diag = {}
+        camera_slot_context = None
+        layered_mesh_diag = {}
+        layered_component_scores = None
+        layered_score_component_stats = {}
         camera_debug = {
             "pre_mask_universe_size": None,
             "post_static_mask_size": None,
@@ -496,12 +594,13 @@ class TrisForecastV1A:
                 "immediate_repeat_mode": str(structural_cfg.immediate_repeat_mode),
             },
         }
-        if score_model == "camera_mech_v1":
+        if score_model in {"camera_mech_v1", "layered_mesh_v1"}:
             topm = int(max(1, min(10, camera_topm_per_position)))
             blend = float(np.clip(camera_mech_blend_with_v1a, 0.0, 1.0))
-            slot_context = None
             if camera_use_slot_context:
-                slot_context = self._get_override(overrides, "camera_slot_context", None)
+                camera_slot_context = self._get_override(
+                    overrides, "camera_slot_context", None
+                )
 
             camera_model = PositionalAnalyzers(
                 alpha=float(camera_alpha),
@@ -513,10 +612,16 @@ class TrisForecastV1A:
                 parity_bias_strength=float(camera_parity_bias_strength),
                 topm_per_position=int(topm),
                 pmf_floor=1e-6,
+                target_coverage_per_position=float(layered_target_coverage_per_position),
+                min_digits_per_position=int(layered_min_digits_per_position),
+                max_digits_per_position=int(layered_max_digits_per_position),
+                mask_mode=(
+                    layered_mask_mode if score_model == "layered_mesh_v1" else "topm"
+                ),
             ).fit(digits_list)
             camera_analyzer_out = camera_model.predict(
                 prev_digits=prev_digits,
-                slot_context=slot_context,
+                slot_context=camera_slot_context,
             )
 
             pmf_cam_raw = camera_analyzer_out.get("pmf_pos", camera_analyzer_out.get("pmf"))
@@ -553,13 +658,16 @@ class TrisForecastV1A:
                         "camera_masked_universe=True requires positional_digit_mask dtype bool."
                     )
 
-            combined_pos_probs = (1.0 - blend) * pos_probs_v1a + blend * pmf_cam
-            combined_pos_probs = combined_pos_probs / np.clip(
-                np.sum(combined_pos_probs, axis=1, keepdims=True),
-                1e-12,
-                None,
-            )
-            pos_probs = combined_pos_probs
+            if score_model == "camera_mech_v1":
+                combined_pos_probs = (1.0 - blend) * pos_probs_v1a + blend * pmf_cam
+                combined_pos_probs = combined_pos_probs / np.clip(
+                    np.sum(combined_pos_probs, axis=1, keepdims=True),
+                    1e-12,
+                    None,
+                )
+                pos_probs = combined_pos_probs
+            else:
+                pos_probs = pmf_cam
             entropy_pos = -np.sum(pos_probs * np.log(np.clip(pos_probs, 1e-12, None)), axis=1)
             entropy_mean = float(np.mean(entropy_pos))
             prob_guardrails = {
@@ -569,7 +677,7 @@ class TrisForecastV1A:
 
             camera_forbidden = camera_analyzer_out.get("forbidden_digits_by_pos")
             camera_favored = camera_analyzer_out.get("favored_digits_by_pos")
-            if isinstance(camera_forbidden, (list, tuple)):
+            if score_model == "camera_mech_v1" and isinstance(camera_forbidden, (list, tuple)):
                 limits_existing = structural_cfg.positional_limits
                 if not isinstance(limits_existing, list) or len(limits_existing) < 5:
                     limits_existing = [{} for _ in range(5)]
@@ -654,6 +762,9 @@ class TrisForecastV1A:
             and camera_masked_universe
             and camera_positional_mask is not None
         )
+        use_layered_masked_universe = bool(
+            score_model == "layered_mesh_v1" and camera_positional_mask is not None
+        )
         if score_model == "camera_mech_v1" and bool(camera_masked_universe):
             if camera_positional_mask is None:
                 raise RuntimeError(
@@ -663,8 +774,17 @@ class TrisForecastV1A:
                 raise RuntimeError(
                     "camera_masked_universe=True requires camera_positional_mask shape (5,10)."
                 )
+        if score_model == "layered_mesh_v1":
+            if camera_positional_mask is None:
+                raise RuntimeError(
+                    "layered_mesh_v1 requires positional_mask from PositionalAnalyzers."
+                )
+            if np.asarray(camera_positional_mask).shape != (5, 10):
+                raise RuntimeError(
+                    "layered_mesh_v1 requires positional_mask shape (5,10)."
+                )
         if used_full_filtered_universe:
-            if use_camera_masked_universe:
+            if use_camera_masked_universe or use_layered_masked_universe:
                 all_tickets, _, static_mask, camera_universe_diag = get_universe_with_positional_mask(
                     structural_cfg,
                     camera_positional_mask,
@@ -684,6 +804,10 @@ class TrisForecastV1A:
             camera_debug["pos_unique_digits_pre_topk"] = self._pos_unique_digits(universe_digits)
             final_universe_digits = universe_digits
             universe_size = int(universe_digits.shape[0])
+            if score_model == "layered_mesh_v1":
+                layered_mesh_diag["pre_mask_universe_size"] = int(all_tickets.shape[0])
+                layered_mesh_diag["post_guardrails_size"] = int(np.sum(final_mask))
+                layered_mesh_diag["post_topk_size"] = int(universe_size)
 
             static_accepted = int(np.sum(static_mask)) if structural_cfg.enabled else int(
                 all_tickets.shape[0]
@@ -766,7 +890,7 @@ class TrisForecastV1A:
             structural_diag["selection_mode"] = selection_mode
             camera_debug["post_topk_size"] = int(universe_size)
         elif used_topk_scored_universe:
-            if use_camera_masked_universe:
+            if use_camera_masked_universe or use_layered_masked_universe:
                 all_tickets, features_cache, static_mask, camera_universe_diag = (
                     get_universe_with_positional_mask(
                         structural_cfg,
@@ -791,6 +915,9 @@ class TrisForecastV1A:
             camera_debug["pos_unique_digits_pre_topk"] = self._pos_unique_digits(
                 base_universe_digits
             )
+            if score_model == "layered_mesh_v1":
+                layered_mesh_diag["pre_mask_universe_size"] = int(all_tickets.shape[0])
+                layered_mesh_diag["post_guardrails_size"] = int(base_count)
             K = int(self._get_override(overrides, "universe_topk_k", topk_k))
             K = max(0, min(K, base_count))
             universe_topk_k = int(K)
@@ -854,6 +981,25 @@ class TrisForecastV1A:
                 )
             elif score_model == "ticket_ngram" and ngram_model is not None:
                 scores_all = ngram_model.score_all(all_tickets)
+            elif score_model == "layered_mesh_v1":
+                layered_scorer = LayeredMeshScorer(weights=layered_weights)
+                layered_out = layered_scorer.score_all(
+                    tickets=all_tickets,
+                    pmf_pos=(
+                        np.asarray(camera_pmf, dtype=np.float64)
+                        if camera_pmf is not None
+                        else np.asarray(pos_probs, dtype=np.float64)
+                    ),
+                    prev_digits=prev_digits,
+                    camera_diag=(
+                        camera_analyzer_out.get("diagnostics", {})
+                        if isinstance(camera_analyzer_out, dict)
+                        else camera_diag_summary
+                    ),
+                    slot_context=camera_slot_context,
+                )
+                scores_all = np.asarray(layered_out.get("total_score"), dtype=np.float64)
+                layered_component_scores = layered_out.get("components", {})
             elif score_model == "camera_mech_v1":
                 eps = 1e-12
                 logits = np.log(np.clip(pos_probs, eps, None))
@@ -899,6 +1045,8 @@ class TrisForecastV1A:
             else:
                 final_universe_digits = universe_digits
             universe_size = int(universe_digits.shape[0])
+            if score_model == "layered_mesh_v1":
+                layered_mesh_diag["post_topk_size"] = int(universe_size)
 
             static_accepted = int(np.sum(static_mask)) if structural_cfg.enabled else int(
                 all_tickets.shape[0]
@@ -937,6 +1085,30 @@ class TrisForecastV1A:
                 score_stats_max = float(np.max(universe_scores))
             else:
                 universe_scores = np.zeros(0, dtype=np.float64)
+
+            if score_model == "layered_mesh_v1" and isinstance(
+                layered_component_scores, dict
+            ):
+                active_mask = np.asarray(base_mask, dtype=bool)
+                for comp_name, comp_values in layered_component_scores.items():
+                    comp_arr = np.asarray(comp_values, dtype=np.float64).reshape(-1)
+                    if comp_arr.shape[0] != all_tickets.shape[0]:
+                        continue
+                    comp_arr = comp_arr[active_mask]
+                    if comp_arr.size == 0:
+                        layered_score_component_stats[str(comp_name)] = {
+                            "mean": None,
+                            "std": None,
+                            "min": None,
+                            "max": None,
+                        }
+                    else:
+                        layered_score_component_stats[str(comp_name)] = {
+                            "mean": float(np.mean(comp_arr)),
+                            "std": float(np.std(comp_arr)),
+                            "min": float(np.min(comp_arr)),
+                            "max": float(np.max(comp_arr)),
+                        }
 
             if universe_size > 0:
                 if selection_mode == "random":
@@ -1165,6 +1337,77 @@ class TrisForecastV1A:
             )
             metadata["camera_debug"] = dict(camera_debug)
             metadata["camera_debug"]["strict"] = bool(camera_debug_strict)
+        if score_model == "layered_mesh_v1":
+            pmf_layered = (
+                np.asarray(camera_pmf, dtype=np.float64)
+                if camera_pmf is not None
+                else np.asarray(pos_probs, dtype=np.float64)
+            )
+            if pmf_layered.shape != (5, 10):
+                pmf_layered = np.asarray(self._uniform_probs(), dtype=np.float64)
+            mask_layered = (
+                np.asarray(camera_positional_mask, dtype=bool)
+                if camera_positional_mask is not None
+                else np.ones((5, 10), dtype=bool)
+            )
+            diag_payload = (
+                camera_analyzer_out.get("diagnostics", {})
+                if isinstance(camera_analyzer_out, dict)
+                else {}
+            )
+            mask_digits = np.asarray(
+                diag_payload.get(
+                    "mask_digits_per_pos",
+                    np.sum(mask_layered.astype(np.int32), axis=1, dtype=np.int32),
+                ),
+                dtype=np.int32,
+            ).reshape(-1)
+            if mask_digits.size < 5:
+                mask_digits = np.pad(mask_digits, (0, 5 - mask_digits.size), mode="constant")
+            mask_cov = np.asarray(
+                diag_payload.get(
+                    "mask_coverage_empirical_per_pos",
+                    np.sum(
+                        pmf_layered * mask_layered.astype(np.float64),
+                        axis=1,
+                        dtype=np.float64,
+                    ),
+                ),
+                dtype=np.float64,
+            ).reshape(-1)
+            if mask_cov.size < 5:
+                mask_cov = np.pad(mask_cov, (0, 5 - mask_cov.size), mode="constant")
+            metadata["score_model"] = "layered_mesh_v1"
+            metadata["score_model_effective"] = "layered_mesh_v1"
+            metadata["layered_mesh"] = {
+                "pmf_pos": pmf_layered.tolist(),
+                "positional_mask": mask_layered.astype(np.uint8).tolist(),
+                "mask_digits_per_pos": [int(v) for v in mask_digits[:5].tolist()],
+                "mask_coverage_empirical_per_pos": [
+                    float(v) for v in mask_cov[:5].tolist()
+                ],
+                "pre_mask_universe_size": int(
+                    layered_mesh_diag.get(
+                        "pre_mask_universe_size",
+                        camera_debug.get("pre_mask_universe_size")
+                        or camera_universe_diag.get("masked_universe_size_raw", 0)
+                        or 0,
+                    )
+                ),
+                "post_guardrails_size": int(
+                    layered_mesh_diag.get(
+                        "post_guardrails_size",
+                        camera_debug.get("post_static_mask_size") or 0,
+                    )
+                ),
+                "post_topk_size": int(
+                    layered_mesh_diag.get(
+                        "post_topk_size",
+                        camera_debug.get("post_topk_size") or 0,
+                    )
+                ),
+                "score_component_stats": dict(layered_score_component_stats),
+            }
         if structural_cfg.enabled or used_topk_scored_universe:
             metadata["structural_filters"] = structural_diag
         metadata["universe_size"] = int(structural_diag.get("accepted", len(filtered_ranked)))
