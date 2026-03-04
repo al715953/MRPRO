@@ -67,6 +67,19 @@ class _SelectorMissingMetadataStrategy:
         )
 
 
+class _HistoryEchoUniverseStrategy:
+    def predict(self, history, config):
+        if history.winning_numbers:
+            row = [int(v) for v in history.winning_numbers[-1][:5]]
+        else:
+            row = [0, 0, 0, 0, 0]
+        return PredictionResultDTO(
+            strategy_name="dummy_history_echo_universe",
+            tickets=[],
+            metadata={"raw_ndarray": [row]},
+        )
+
+
 def test_backtester_universe_strategy_uses_raw_ndarray_size_for_audit():
     draws = []
     concursos = []
@@ -301,3 +314,105 @@ def test_backtester_run_context_reflects_structural_repeat_mode(capsys):
     assert "TRIS RUN CONTEXT" in out
     assert out.count("TRIS RUN CONTEXT") == 1
     assert "structural_immediate_repeat_mode=per_position" in out
+
+
+def test_backtester_compare_models_emits_shared_context_timings():
+    rng = np.random.default_rng(20260304)
+    draws = []
+    concursos = []
+    dates = []
+    even_digits = np.array([0, 2, 4, 6, 8], dtype=np.int16)
+    for i in range(80):
+        row = rng.choice(even_digits, size=5, replace=True).tolist()
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), i % 2])
+        concursos.append(9450 + i)
+        dates.append(f"2026-02-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        backtest_size=4,
+        filter_overrides={
+            "tris_backtest_mode": "universe_strategy",
+            "compare_models": True,
+            "universe_mode": "topk_scored_universe",
+            "score_model": "feature_lr",
+            "universe_topk_k": 32,
+            "structural_enabled": False,
+            "run_baseline": False,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    engine = BacktestEngine(rules=_DummyRules())
+    engine.run(TrisForecastV1A(), history, config, verbose=False)
+
+    assert len(engine.forensic_data) == 4
+    for row in engine.forensic_data:
+        metrics = row.get("metrics_json", {})
+        assert "t_prepare_ctx_ms" in metrics
+        assert "t_model_main_ms" in metrics
+        assert "t_model_rand_ms" in metrics
+
+
+def test_backtester_incremental_history_matches_legacy_tris_universe_outputs():
+    draws = []
+    concursos = []
+    dates = []
+    pattern = [
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+        [2, 2, 2, 2, 2],
+        [3, 3, 3, 3, 3],
+        [3, 3, 3, 3, 3],
+        [4, 4, 4, 4, 4],
+    ]
+    for i in range(24):
+        row = pattern[i % len(pattern)]
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), 0])
+        concursos.append(9500 + i)
+        dates.append(f"2026-01-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    strategy = _HistoryEchoUniverseStrategy()
+
+    config_legacy = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        backtest_size=20,
+        filter_overrides={
+            "tris_backtest_mode": "universe_strategy",
+            "structural_enabled": False,
+            "backtest_incremental_history": False,
+        },
+    )
+    config_incremental = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        backtest_size=20,
+        filter_overrides={
+            "tris_backtest_mode": "universe_strategy",
+            "structural_enabled": False,
+            "backtest_incremental_history": True,
+        },
+    )
+
+    engine_legacy = BacktestEngine(rules=_DummyRules())
+    res_legacy = engine_legacy.run(strategy, history, config_legacy, verbose=False)
+
+    engine_incremental = BacktestEngine(rules=_DummyRules())
+    res_incremental = engine_incremental.run(
+        strategy, history, config_incremental, verbose=False
+    )
+
+    assert res_legacy.hit_distribution == res_incremental.hit_distribution
+    assert [
+        int(row.get("jackpot_coverage_universe", 0)) for row in engine_legacy.forensic_data
+    ] == [
+        int(row.get("jackpot_coverage_universe", 0))
+        for row in engine_incremental.forensic_data
+    ]

@@ -11,6 +11,8 @@ data/
 # --- Entornos y Temporales de Python ---
 venv/
 env/
+dist/
+build/
 __pycache__/
 *.pyc
 

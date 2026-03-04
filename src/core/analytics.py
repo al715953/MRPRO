@@ -148,7 +148,10 @@ class PerformanceTracker:
                     if col not in existing.columns:
                         existing[col] = ""
                 existing = existing[columns_order]
-                combined = pd.concat([existing, new_rows], ignore_index=True)
+                if existing.empty:
+                    combined = new_rows
+                else:
+                    combined = pd.concat([existing, new_rows], ignore_index=True)
             else:
                 combined = new_rows
 

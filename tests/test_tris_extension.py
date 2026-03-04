@@ -1,11 +1,14 @@
 import pandas as pd
 import numpy as np
 
+from src.core.backtester import BacktestEngine
 from src.core.rules import TrisMultiplicadorRules
 from src.data_access.loader import LotteryLoader
 from src.data_access.config import get_lottery_profile
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO
+from src.strategies.tris.feature_lr_model import FeatureLRModel
 from src.strategies.tris.tris_forecast import TrisForecastV1A
+from src.strategies.tris.universe_5d import get_universe_and_static_mask
 
 
 def test_tris_loader_reads_digit_columns():
@@ -232,6 +235,142 @@ def test_tris_forecast_topk_scored_universe_feature_lr_metadata_and_ranking():
     assert score_stats.get("min") is not None
     assert score_stats.get("mean") is not None
     assert score_stats.get("max") is not None
+    scoring_debug = pred.metadata.get("scoring_debug", {})
+    assert isinstance(scoring_debug, dict)
+    assert int(scoring_debug.get("pool_size_scored", -1)) == int(
+        scoring_debug.get("all_tickets_size", -2)
+    )
+    assert scoring_debug.get("scoring_mode") == "full_array"
+
+
+def test_tris_forecast_topk_scored_universe_feature_lr_matches_legacy_full_array_topk():
+    rng = np.random.default_rng(124)
+    even_digits = np.array([0, 2, 4, 6, 8], dtype=np.int16)
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(120):
+        row = rng.choice(even_digits, size=5, replace=True).tolist()
+        mult = 1 if i % 3 == 0 else 0
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), mult])
+        concursos.append(3100 + i)
+        dates.append(f"2025-03-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    overrides = {
+        "gate_margin": -1.0,
+        "universe_mode": "topk_scored_universe",
+        "score_model": "feature_lr",
+        "universe_topk_k": 150,
+        "selection_mode": "ranked",
+        "structural_enabled": False,
+        "diversity_min_hamming": 0,
+        "feature_lr_alpha": 1.0,
+        "feature_lr_short_window": 120,
+        "feature_lr_long_window": 120,
+        "feature_lr_mix_lambda": 0.7,
+        "feature_lr_use_mirror": True,
+        "feature_lr_shrink_c": 3000.0,
+    }
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides=overrides,
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    raw = np.asarray(pred.metadata.get("raw_ndarray"), dtype=np.uint8)
+
+    struct_cfg = BacktestEngine._build_tris_structural_config({"structural_enabled": False})
+    all_tickets, features_cache, _ = get_universe_and_static_mask(struct_cfg)
+    digits_list = [[int(d) for d in row[:5]] for row in history.winning_numbers]
+    prev_digits = [int(d) for d in history.winning_numbers[-1][:5]]
+    lr_model = FeatureLRModel(
+        alpha=1.0,
+        short_window=120,
+        long_window=120,
+        mix_lambda=0.7,
+        use_mirror=True,
+        shrink_c=3000.0,
+    ).fit(digits_list)
+    legacy_scores = lr_model.score_all(all_tickets, features_cache, prev_digits=prev_digits)
+    k = 150
+    top_idx = np.argpartition(legacy_scores, -k)[-k:].astype(np.int64, copy=False)
+    top_idx = top_idx[np.argsort(legacy_scores[top_idx])[::-1]]
+    legacy_mask = np.zeros(all_tickets.shape[0], dtype=bool)
+    legacy_mask[top_idx] = True
+    legacy_universe = np.asarray(all_tickets[legacy_mask], dtype=np.uint8)
+
+    assert raw.shape == legacy_universe.shape
+    assert {tuple(row) for row in raw.tolist()} == {
+        tuple(row) for row in legacy_universe.tolist()
+    }
+
+
+def test_tris_forecast_compare_context_reuses_main_and_random_topk_deterministically():
+    rng = np.random.default_rng(125)
+    even_digits = np.array([0, 2, 4, 6, 8], dtype=np.int16)
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(120):
+        row = rng.choice(even_digits, size=5, replace=True).tolist()
+        mult = 1 if i % 3 == 0 else 0
+        draws.append([int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]), mult])
+        concursos.append(3200 + i)
+        dates.append(f"2025-03-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    strategy = TrisForecastV1A()
+    main_overrides = {
+        "gate_margin": -1.0,
+        "universe_mode": "topk_scored_universe",
+        "score_model": "feature_lr",
+        "universe_topk_k": 111,
+        "random_topk_seed": 12345,
+        "selection_mode": "ranked",
+        "structural_enabled": False,
+        "diversity_min_hamming": 0,
+    }
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides=main_overrides,
+    )
+
+    ctx = strategy._prepare_tris_context(history, config, main_overrides)
+    out_main = strategy._run_score_model_on_context(ctx, "feature_lr", main_overrides)
+    out_rand = strategy._run_score_model_on_context(
+        ctx, "random_topk", {**main_overrides, "score_model": "random_topk"}
+    )
+
+    pred_main = strategy.predict(history, config)
+    pred_rand = strategy.predict(
+        history,
+        PredictionConfigDTO(
+            total_balls=10,
+            ticket_size=5,
+            num_tickets=1,
+            filter_overrides={**main_overrides, "score_model": "random_topk"},
+        ),
+    )
+
+    raw_main_ctx = np.asarray(out_main.get("raw_ndarray"), dtype=np.uint8)
+    raw_main_pred = np.asarray(pred_main.metadata.get("raw_ndarray"), dtype=np.uint8)
+    raw_rand_ctx = np.asarray(out_rand.get("raw_ndarray"), dtype=np.uint8)
+    raw_rand_pred = np.asarray(pred_rand.metadata.get("raw_ndarray"), dtype=np.uint8)
+
+    assert raw_main_ctx.shape == raw_main_pred.shape
+    assert raw_rand_ctx.shape == raw_rand_pred.shape
+    assert np.array_equal(raw_main_ctx, raw_main_pred)
+    assert np.array_equal(raw_rand_ctx, raw_rand_pred)
+    assert int(ctx.get("base_pool_size", -1)) >= int(raw_main_ctx.shape[0])
+    timings = pred_main.metadata.get("timings", {})
+    assert isinstance(timings, dict)
+    assert timings.get("t_prepare_ctx_ms") is not None
+    assert timings.get("t_model_main_ms") is not None
 
 
 def test_tris_forecast_topk_gate_false_falls_back_to_full_filtered_universe():
@@ -333,6 +472,49 @@ def test_tris_forecast_topk_scored_universe_size_respects_k():
 
     pred = TrisForecastV1A().predict(history, config)
     assert int(pred.metadata.get("universe_size", -1)) == 1000
+
+
+def test_tris_forecast_topk_scored_universe_emits_pool_only_scoring_debug_when_mask_reduces():
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(60):
+        draws.append([i % 10, (i + 1) % 10, 0, 0, 0, 1 if i % 2 == 0 else 0])
+        concursos.append(6050 + i)
+        dates.append(f"2025-06-{(i % 28) + 1:02d}")
+
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "universe_mode": "topk_scored_universe",
+            "score_model": "feature_lr",
+            "universe_topk_k": 25,
+            "selection_mode": "ranked",
+            "structural_enabled": True,
+            "structural_enable_global_sum_filter": True,
+            "structural_sum_min": 0,
+            "structural_sum_max": 5,
+            "structural_enable_global_parity_filter": False,
+            "structural_allowed_even_counts": [0, 1, 2, 3, 4, 5],
+            "structural_min_unique_digits": 1,
+            "structural_max_consecutive_run": 5,
+            "structural_max_positional_repeats_vs_prev": 5,
+            "diversity_min_hamming": 0,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+    scoring_debug = pred.metadata.get("scoring_debug", {})
+
+    assert isinstance(scoring_debug, dict)
+    assert scoring_debug.get("scoring_mode") == "pool_only"
+    assert int(scoring_debug.get("pool_size_scored", -1)) < int(
+        scoring_debug.get("all_tickets_size", -1)
+    )
 
 
 def test_tris_forecast_topk_scored_universe_random_topk_metadata_and_raw_universe():
@@ -587,6 +769,9 @@ def test_tris_forecast_layered_mesh_v1_topk_metadata_and_raw_universe():
     assert isinstance(raw, np.ndarray)
     assert raw.shape[1] == 5
     assert raw.shape[0] <= 32
+    weights = pred.metadata.get("camera_weights_effective", [])
+    assert len(weights) == 5
+    np.testing.assert_allclose(np.asarray(weights, dtype=np.float64), np.ones(5), atol=1e-12)
 
     assert isinstance(layered, dict)
     assert isinstance(layered.get("pmf_pos"), list)
@@ -617,3 +802,58 @@ def test_tris_forecast_layered_mesh_v1_topk_metadata_and_raw_universe():
         "camera_repeat_penalty",
     ):
         assert key in comp_stats
+
+
+def test_tris_forecast_layered_mesh_anti_noise_adjusts_weight_and_coverage():
+    rng = np.random.default_rng(20260303)
+    draws = []
+    concursos = []
+    dates = []
+    for i in range(180):
+        draws.append([1, 2, 3, 4, int(rng.integers(0, 10)), 1 if i % 4 == 0 else 0])
+        concursos.append(9000 + i)
+        dates.append(f"2025-09-{(i % 28) + 1:02d}")
+    history = DrawHistoryDTO(dates=dates, winning_numbers=draws, concursos=concursos)
+
+    config = PredictionConfigDTO(
+        total_balls=10,
+        ticket_size=5,
+        num_tickets=1,
+        filter_overrides={
+            "gate_margin": -1.0,
+            "score_model": "layered_mesh_v1",
+            "universe_mode": "topk_scored_universe",
+            "universe_topk_k": 64,
+            "structural_enabled": False,
+            "diversity_min_hamming": 0,
+            "layered_mask_mode": "coverage",
+            "layered_target_coverage_per_position": 0.60,
+            "layered_min_digits_per_position": 1,
+            "layered_max_digits_per_position": 10,
+            "camera_anti_noise_enabled": True,
+            "camera_weights_mode": "inverse_entropy",
+            "camera_adaptive_coverage_enabled": True,
+            "camera_adaptive_coverage_base": 0.60,
+            "camera_adaptive_coverage_min": 0.55,
+            "camera_adaptive_coverage_max": 0.90,
+            "camera_adaptive_coverage_volatility_gain": 0.30,
+        },
+    )
+
+    pred = TrisForecastV1A().predict(history, config)
+
+    weights = np.asarray(pred.metadata.get("camera_weights_effective", []), dtype=np.float64)
+    target_cov = np.asarray(
+        pred.metadata.get("target_coverage_per_pos_effective", []), dtype=np.float64
+    )
+    volatility = np.asarray(pred.metadata.get("camera_volatility_pos", []), dtype=np.float64)
+    layered = pred.metadata.get("layered_mesh", {})
+
+    assert weights.shape == (5,)
+    assert target_cov.shape == (5,)
+    assert volatility.shape == (5,)
+    assert abs(float(np.mean(weights)) - 1.0) < 1e-6
+    assert float(weights[4]) < float(weights[0])
+    assert float(target_cov[4]) > float(target_cov[0])
+    assert float(volatility[4]) > float(volatility[0])
+    assert layered.get("anti_noise_enabled") is True

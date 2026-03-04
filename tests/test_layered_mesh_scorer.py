@@ -100,3 +100,39 @@ def test_hamming_memory_uses_empirical_distribution_when_available():
     )
     ham = np.asarray(out["components"]["hamming_memory"], dtype=np.float64)
     assert float(ham[0]) > float(ham[1])
+
+
+def test_inverse_entropy_camera_weights_normalize_to_mean_one():
+    scorer = LayeredMeshScorer(
+        weights={
+            "camera_weights_mode": "inverse_entropy",
+            "camera_weights_floor": 0.5,
+            "camera_weights_ceiling": 1.5,
+        }
+    )
+    weights = scorer.compute_camera_weights(
+        {"entropy_pos": [0.2, 0.8, 1.2, 1.8, 2.2]}
+    )
+
+    assert weights.shape == (5,)
+    assert abs(float(np.mean(weights)) - 1.0) < 1e-6
+    assert float(weights[0]) > float(weights[-1])
+    assert np.all(weights >= 0.5)
+    assert np.all(weights <= 1.5)
+
+
+def test_rolling_top1_camera_weights_downweight_worst_camera():
+    scorer = LayeredMeshScorer(
+        weights={
+            "camera_weights_mode": "rolling_top1",
+            "camera_weights_floor": 0.5,
+            "camera_weights_ceiling": 1.5,
+        }
+    )
+    weights = scorer.compute_camera_weights(
+        camera_diag=None,
+        history_metrics={"rolling_top1_by_pos": [0.40, 0.38, 0.41, 0.39, 0.10]},
+    )
+
+    assert abs(float(np.mean(weights)) - 1.0) < 1e-6
+    assert float(weights[4]) < float(weights[0])

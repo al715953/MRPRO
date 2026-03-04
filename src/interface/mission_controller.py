@@ -12,6 +12,7 @@ from src.domain.dtos import PredictionConfigDTO
 from src.data_access.config import (
     BEST_SETTINGS,
     BEST_SETTINGS_TRIS,
+    BEST_SETTINGS_TRIS_CAMERA_LAB,
     TOTAL_BALLS,
     TICKET_SIZE,
     VERSION_TAG,
@@ -269,6 +270,7 @@ class MissionController:
             tris_backtest_mode = "universe"
             n_tickets = int(settings.get("num_tickets", 200))
         elif mode_in == "3":
+            settings = BEST_SETTINGS_TRIS_CAMERA_LAB.copy()
             tris_backtest_mode = "universe_strategy"
             n_tickets = int(settings.get("num_tickets", 200))
             try:
@@ -311,7 +313,7 @@ class MissionController:
             total_balls=self.profile.total_balls,
             ticket_size=self.profile.ticket_size,
             num_tickets=int(max(1, n_tickets)),
-            backtest_size=int(settings["backtest_size"]),
+            backtest_size=int(settings.get("backtest_size", 500)),
             filter_overrides=settings.copy(),
         )
 
@@ -333,8 +335,8 @@ class MissionController:
         config = PredictionConfigDTO(
             total_balls=self.profile.total_balls,
             ticket_size=self.profile.ticket_size,
-            num_tickets=int(settings["num_tickets"]),
-            backtest_size=int(settings["backtest_size"]),
+            num_tickets=int(settings.get("num_tickets", 200)),
+            backtest_size=int(settings.get("backtest_size", 500)),
             filter_overrides=settings.copy(),
         )
 
@@ -377,7 +379,7 @@ class MissionController:
         )
         self._pause()
 
-    def _retrain_model(self):
+    def _retrain_model_bk(self):
         """Módulo de Calibración de Neuronas V15."""
         self.ui.clear_screen()
         # Corregido: Fore para color, Style para efectos (DIM)
@@ -400,6 +402,35 @@ class MissionController:
                 f"\n{Fore.GREEN}✅ MODELO ACTUALIZADO: Los pesos han sido sincronizados.{Style.RESET_ALL}"
             )
         except Exception as e:
+            print(
+                f"\n{Fore.RED}❌ ERROR CRÍTICO EN ENTRENAMIENTO: {e}{Style.RESET_ALL}"
+            )
+
+        input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+
+    def _retrain_model(self):
+        """Módulo de Calibración de Neuronas V15."""
+        self.ui.clear_screen()
+        # Estética de consola conservada
+        print(
+            f"\n{Fore.MAGENTA}☢️  PROTOCOLO DE RECALIBRACIÓN CEREBRAL V8{Style.RESET_ALL}"
+        )
+        print(
+            f"{Style.DIM}Iniciando XGBoost Engine sobre hardware detectado...{Style.RESET_ALL}\n"
+        )
+
+        try:
+            # Importación dinámica para evitar dependencias circulares al inicio
+            from src.core.train_static_model import train_master_brain
+
+            # Ejecución directa de la función del 'Cerebro'
+            train_master_brain()
+
+            print(
+                f"\n{Fore.GREEN}✅ MODELO ACTUALIZADO: Los pesos han sido sincronizados.{Style.RESET_ALL}"
+            )
+        except Exception as e:
+            # Captura cualquier error de rutas o librerías durante el entrenamiento
             print(
                 f"\n{Fore.RED}❌ ERROR CRÍTICO EN ENTRENAMIENTO: {e}{Style.RESET_ALL}"
             )

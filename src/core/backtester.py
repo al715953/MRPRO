@@ -346,6 +346,12 @@ class BacktestEngine:
         tris_pos_mask_total = 0
         tris_pos_universe_hits = np.zeros(5, dtype=int)
         tris_pos_universe_total = 0
+        tris_pos_weight_sum = np.zeros(5, dtype=np.float64)
+        tris_pos_weight_count = np.zeros(5, dtype=np.int32)
+        tris_pos_target_cov_sum = np.zeros(5, dtype=np.float64)
+        tris_pos_target_cov_count = np.zeros(5, dtype=np.int32)
+        tris_pos_volatility_sum = np.zeros(5, dtype=np.float64)
+        tris_pos_volatility_count = np.zeros(5, dtype=np.int32)
         camera_mask_missing_warned = False
         camera_full_support_draws = 0
         camera_support_checks = 0
@@ -369,6 +375,95 @@ class BacktestEngine:
         tris_struct_cfg_effective = (
             self._build_tris_structural_config(overrides) if is_tris_profile else None
         )
+        fast_flags_enabled = bool(is_tris_profile)
+        fast_mode_enabled = bool(
+            fast_flags_enabled
+            and self._coerce_bool(overrides.get("backtest_fast_mode", False), False)
+        )
+        skip_forensics = bool(
+            fast_flags_enabled
+            and (
+                fast_mode_enabled
+                or self._coerce_bool(
+                    overrides.get("backtest_skip_forensics", False), False
+                )
+            )
+        )
+        skip_prob_metrics = bool(
+            fast_flags_enabled
+            and (
+                fast_mode_enabled
+                or self._coerce_bool(
+                    overrides.get("backtest_skip_prob_metrics", False), False
+                )
+            )
+        )
+        skip_baseline_probs = bool(
+            fast_flags_enabled
+            and (
+                fast_mode_enabled
+                or self._coerce_bool(
+                    overrides.get("backtest_skip_baseline_probs", False), False
+                )
+            )
+        )
+        skip_outlier_csv = bool(
+            fast_flags_enabled
+            and (
+                fast_mode_enabled
+                or self._coerce_bool(
+                    overrides.get("backtest_skip_outlier_csv", False), False
+                )
+            )
+        )
+        skip_bootstrap_ci = bool(
+            fast_flags_enabled
+            and (
+                fast_mode_enabled
+                or self._coerce_bool(
+                    overrides.get("backtest_skip_bootstrap_ci", False), False
+                )
+            )
+        )
+        if fast_flags_enabled:
+            try:
+                render_every_n = max(1, int(overrides.get("backtest_render_every_n", 1)))
+            except (TypeError, ValueError):
+                render_every_n = 1
+            try:
+                gpu_pool_cleanup_every_n = max(
+                    1, int(overrides.get("gpu_pool_cleanup_every_n", 1))
+                )
+            except (TypeError, ValueError):
+                gpu_pool_cleanup_every_n = 1
+        else:
+            render_every_n = 1
+            gpu_pool_cleanup_every_n = 1
+        fast_mode_summary = None
+        fast_mode_omissions = []
+        if skip_forensics:
+            fast_mode_omissions.append("forensics")
+        if skip_prob_metrics:
+            fast_mode_omissions.append("prob_metrics")
+        if skip_baseline_probs:
+            fast_mode_omissions.append("baseline_probs")
+        if skip_outlier_csv:
+            fast_mode_omissions.append("outlier_csv")
+        if skip_bootstrap_ci:
+            fast_mode_omissions.append("bootstrap_ci")
+        if fast_mode_enabled or fast_mode_omissions or render_every_n > 1:
+            fast_mode_summary = {
+                "enabled": bool(fast_mode_enabled),
+                "omitted_modules": list(fast_mode_omissions),
+                "render_every_n": int(render_every_n),
+                "gpu_pool_cleanup_every_n": int(gpu_pool_cleanup_every_n),
+            }
+        if isinstance(overrides, dict) and "backtest_incremental_history" in overrides:
+            use_incremental_history = self._coerce_bool(
+                overrides.get("backtest_incremental_history", False), False
+            )
+        else:
+            use_incremental_history = bool(is_tris_profile)
         tris_run_context = {}
         if is_tris_profile and isinstance(tris_struct_cfg_effective, StructuralFilterConfig):
             tris_run_context = {
@@ -455,6 +550,24 @@ class BacktestEngine:
             except Exception:
                 return None
 
+        def _accumulate_optional_pos_metric(values, sums, counts):
+            if values is None:
+                return
+            try:
+                arr = np.asarray(values, dtype=np.float64).reshape(-1)
+            except Exception:
+                return
+            if arr.size == 0:
+                return
+            if arr.size < 5:
+                arr = np.pad(arr, (0, 5 - arr.size), mode="edge")
+            arr = arr[:5]
+            finite = np.isfinite(arr)
+            if not np.any(finite):
+                return
+            sums[finite] += arr[finite]
+            counts[finite] += 1
+
         def _predict_snapshot(curr_history, local_overrides):
             base_overrides = (
                 dict(config.filter_overrides)
@@ -485,6 +598,15 @@ class BacktestEngine:
             f"\n[bold magenta]🚀 INICIANDO MISIÓN ALPHA GLOBAL ({VERSION_TAG})[/bold magenta]"
         )
 
+        hist_dates = []
+        hist_nums = []
+        hist_ids = []
+        if use_incremental_history and start_idx > 0:
+            for past_date, past_numbers, past_id in full_h[:start_idx]:
+                hist_dates.append(past_date)
+                hist_nums.append(past_numbers)
+                hist_ids.append(past_id)
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]📡 Sniper Lab:[/][white] Analizando Malla...[/]"),
@@ -497,12 +619,17 @@ class BacktestEngine:
             task = progress.add_task("Misión", total=test_size)
 
             for i in range(start_idx, len(full_h)):
+                draw_idx = (i - start_idx) + 1
                 t_start = time.time()
                 _, target, t_id = full_h[i]
+                used_cupy_this_draw = False
 
-                past = full_h[:i]
-                d_past, n_past, ids_past = zip(*past)
-                curr_h = DrawHistoryDTO(list(d_past), list(n_past), list(ids_past))
+                if use_incremental_history:
+                    curr_h = DrawHistoryDTO(hist_dates, hist_nums, hist_ids)
+                else:
+                    past = full_h[:i]
+                    d_past, n_past, ids_past = zip(*past)
+                    curr_h = DrawHistoryDTO(list(d_past), list(n_past), list(ids_past))
 
                 # --- FASE 1: REDUCCIÓN ---
                 sniper_msg = ""
@@ -530,6 +657,8 @@ class BacktestEngine:
                             if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
                             else np
                         )
+                        if HAS_CUPY and xp is cp:
+                            used_cupy_this_draw = True
                         universe_ptr = config.raw_universe_ptr[:, : config.ticket_size]
                         target_slice = target[: config.ticket_size]
 
@@ -600,21 +729,88 @@ class BacktestEngine:
                                 "universe_mode": "topk_scored_universe",
                                 "universe_topk_k": compare_k,
                             }
+                            shared_compare_used = False
+                            t_prepare_ctx_ms = None
+                            t_model_main_ms = None
+                            t_model_rand_ms = None
+                            compare_a_overrides = {
+                                **compare_base,
+                                **compare_common,
+                                "score_model": compare_model_a_score_model,
+                            }
+                            compare_b_overrides = {
+                                **compare_base,
+                                **compare_common,
+                                "score_model": compare_model_b_score_model,
+                            }
 
-                            _, snap_a, universe_a, has_a_raw = _predict_snapshot(
-                                curr_h,
-                                {
-                                    **compare_common,
-                                    "score_model": compare_model_a_score_model,
-                                },
-                            )
-                            _, snap_b, universe_b, has_b_raw = _predict_snapshot(
-                                curr_h,
-                                {
-                                    **compare_common,
-                                    "score_model": compare_model_b_score_model,
-                                },
-                            )
+                            if (
+                                hasattr(strategy, "_prepare_tris_context")
+                                and hasattr(strategy, "_run_score_model_on_context")
+                                and str(compare_model_b_score_model).lower()
+                                == "random_topk"
+                            ):
+                                try:
+                                    t_ctx_start = time.perf_counter()
+                                    shared_ctx = strategy._prepare_tris_context(
+                                        curr_h,
+                                        config,
+                                        compare_a_overrides,
+                                    )
+                                    if isinstance(shared_ctx, dict):
+                                        out_a = strategy._run_score_model_on_context(
+                                            shared_ctx,
+                                            compare_model_a_score_model,
+                                            compare_a_overrides,
+                                        )
+                                        t_rand_start = time.perf_counter()
+                                        out_b = strategy._run_score_model_on_context(
+                                            shared_ctx,
+                                            compare_model_b_score_model,
+                                            compare_b_overrides,
+                                        )
+                                        t_model_rand_ms = float(
+                                            (time.perf_counter() - t_rand_start) * 1000.0
+                                        )
+                                        if isinstance(out_a, dict) and isinstance(out_b, dict):
+                                            snap_a = dict(out_a.get("metadata", {}) or {})
+                                            snap_b = dict(out_b.get("metadata", {}) or {})
+                                            universe_a = _coerce_universe_ptr(
+                                                out_a.get("raw_ndarray")
+                                            )
+                                            universe_b = _coerce_universe_ptr(
+                                                out_b.get("raw_ndarray")
+                                            )
+                                            has_a_raw = bool(out_a.get("has_raw_universe", False))
+                                            has_b_raw = bool(out_b.get("has_raw_universe", False))
+                                            timing_payload = (
+                                                snap_a.get("timings", {})
+                                                if isinstance(snap_a.get("timings"), dict)
+                                                else {}
+                                            )
+                                            t_prepare_ctx_ms = timing_payload.get(
+                                                "t_prepare_ctx_ms"
+                                            )
+                                            t_model_main_ms = timing_payload.get(
+                                                "t_model_main_ms"
+                                            )
+                                            if t_prepare_ctx_ms is None:
+                                                t_prepare_ctx_ms = float(
+                                                    (time.perf_counter() - t_ctx_start) * 1000.0
+                                                )
+                                            shared_compare_used = True
+                                except Exception:
+                                    shared_compare_used = False
+
+                            if not shared_compare_used:
+                                _, snap_a, universe_a, has_a_raw = _predict_snapshot(
+                                    curr_h,
+                                    compare_a_overrides,
+                                )
+                                _, snap_b, universe_b, has_b_raw = _predict_snapshot(
+                                    curr_h,
+                                    compare_b_overrides,
+                                )
                             snapshot = (
                                 dict(snap_a)
                                 if isinstance(snap_a, dict)
@@ -667,6 +863,31 @@ class BacktestEngine:
                                     "model_a_name": str(compare_model_a_name),
                                     "model_b_name": str(compare_model_b_name),
                                 }
+                                if t_prepare_ctx_ms is not None:
+                                    compare_metrics_curr["t_prepare_ctx_ms"] = float(
+                                        t_prepare_ctx_ms
+                                    )
+                                if t_model_main_ms is not None:
+                                    compare_metrics_curr["t_model_main_ms"] = float(
+                                        t_model_main_ms
+                                    )
+                                if t_model_rand_ms is not None:
+                                    compare_metrics_curr["t_model_rand_ms"] = float(
+                                        t_model_rand_ms
+                                    )
+                                if compare_metrics_curr:
+                                    snapshot["compare_model_timings"] = {
+                                        "t_prepare_ctx_ms": compare_metrics_curr.get(
+                                            "t_prepare_ctx_ms"
+                                        ),
+                                        "t_model_main_ms": compare_metrics_curr.get(
+                                            "t_model_main_ms"
+                                        ),
+                                        "t_model_rand_ms": compare_metrics_curr.get(
+                                            "t_model_rand_ms"
+                                        ),
+                                        "shared_ctx_reused": bool(shared_compare_used),
+                                    }
                                 tris_compare_in_lr.append(int(in_a))
                                 tris_compare_in_rand.append(int(in_b))
                                 tris_compare_u_lr.append(int(u_a))
@@ -790,6 +1011,34 @@ class BacktestEngine:
                                 tris_pos_top1_total += 1
                         except Exception:
                             pass
+
+                    layered_meta = snapshot.get("layered_mesh")
+                    if not isinstance(layered_meta, dict):
+                        layered_meta = {}
+                    _accumulate_optional_pos_metric(
+                        snapshot.get(
+                            "camera_weights_effective",
+                            layered_meta.get("camera_weights_effective"),
+                        ),
+                        tris_pos_weight_sum,
+                        tris_pos_weight_count,
+                    )
+                    _accumulate_optional_pos_metric(
+                        snapshot.get(
+                            "target_coverage_per_pos_effective",
+                            layered_meta.get("target_coverage_per_pos_effective"),
+                        ),
+                        tris_pos_target_cov_sum,
+                        tris_pos_target_cov_count,
+                    )
+                    _accumulate_optional_pos_metric(
+                        snapshot.get(
+                            "camera_volatility_pos",
+                            layered_meta.get("camera_volatility_pos"),
+                        ),
+                        tris_pos_volatility_sum,
+                        tris_pos_volatility_count,
+                    )
 
                     score_model_snapshot = str(
                         snapshot.get("score_model", tris_score_model_raw)
@@ -984,7 +1233,7 @@ class BacktestEngine:
 
                 prob_metrics = {}
                 baseline_metrics = {}
-                if is_tris_profile and not is_tris_universe_mode:
+                if is_tris_profile and not is_tris_universe_mode and not skip_prob_metrics:
                     y_digits = [int(d) for d in target[:5]]
                     if isinstance(snapshot, dict) and "pos_probs" in snapshot:
                         try:
@@ -1041,7 +1290,7 @@ class BacktestEngine:
                         except Exception:
                             prob_metrics = {}
 
-                    if baseline_strategy is not None:
+                    if baseline_strategy is not None and not skip_baseline_probs:
                         try:
                             base_pred = baseline_strategy.predict(curr_h, config)
                             base_probs = (
@@ -1086,21 +1335,26 @@ class BacktestEngine:
                 elif is_reduction_only:
                     audit = None
                 else:
-                    audit_snapshot = dict(snapshot) if snapshot else {}
-                    audit_snapshot["_pred_tickets"] = [
-                        [int(x) for x in t]
-                        for t in prediction.tickets
-                    ]
-                    xp_audit = (
-                        cp
-                        if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
-                        else np
-                    )
-                    audit = LotteryForensics.audit_winner(
-                        audit_snapshot, target, xp_audit
-                    )
+                    if skip_forensics:
+                        audit = None
+                    else:
+                        audit_snapshot = dict(snapshot) if snapshot else {}
+                        audit_snapshot["_pred_tickets"] = [
+                            [int(x) for x in t]
+                            for t in prediction.tickets
+                        ]
+                        xp_audit = (
+                            cp
+                            if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
+                            else np
+                        )
+                        if HAS_CUPY and xp_audit is cp:
+                            used_cupy_this_draw = True
+                        audit = LotteryForensics.audit_winner(
+                            audit_snapshot, target, xp_audit
+                        )
 
-                if audit:
+                if audit and not skip_forensics:
                     audit["draw_id"] = int(t_id)
 
                     # 1. Guardamos el Tamaño del Universo
@@ -1261,7 +1515,34 @@ class BacktestEngine:
                 if is_reduction_only and max_hit_this_draw in max_hits_by_draw:
                     max_hits_by_draw[max_hit_this_draw] += 1
 
-                if verbose and is_reduction_only:
+                audit_for_render = audit
+                if (
+                    skip_forensics
+                    and not is_reduction_only
+                    and audit_for_render is None
+                ):
+                    audit_for_render = {
+                        "hits": int(max_hit_this_draw),
+                        "rank": int(1 if max_hit_this_draw == max_hits else 0),
+                        "proximity": int(0 if max_hit_this_draw == max_hits else 999),
+                        "ai_score": 0.0,
+                        "geo_score": 0.0,
+                        "univ_size": int(
+                            univ_size_curr
+                            if is_tris_universe_mode
+                            else (
+                                len(config.raw_universe_ptr)
+                                if config.raw_universe_ptr is not None
+                                else len(prediction.tickets)
+                            )
+                        ),
+                    }
+
+                if (
+                    verbose
+                    and is_reduction_only
+                    and (draw_idx % render_every_n == 0 or draw_idx == test_size)
+                ):
                     self._render_reduction_telemetry(
                         t_id=t_id,
                         univ_size=reduced_sizes[-1] if reduced_sizes else 0,
@@ -1272,14 +1553,28 @@ class BacktestEngine:
                         elapsed=time.time() - t_start,
                     )
 
-                if verbose and audit and not is_reduction_only:
+                if (
+                    verbose
+                    and audit_for_render
+                    and not is_reduction_only
+                    and (draw_idx % render_every_n == 0 or draw_idx == test_size)
+                ):
                     # <- log por sorteo apagado (solo se imprimió 1 vez arriba)
                     self._render_telemetry(
-                        audit, t_id, t_start, max_hits, sniper_msg_for_line
+                        audit_for_render, t_id, t_start, max_hits, sniper_msg_for_line
                     )
 
-                if HAS_CUPY:
+                if (
+                    HAS_CUPY
+                    and used_cupy_this_draw
+                    and (draw_idx % gpu_pool_cleanup_every_n == 0)
+                ):
                     cp.get_default_memory_pool().free_all_blocks()
+
+                if use_incremental_history:
+                    hist_dates.append(full_h[i][0])
+                    hist_nums.append(full_h[i][1])
+                    hist_ids.append(full_h[i][2])
 
                 progress.advance(task)
 
@@ -1347,6 +1642,34 @@ class BacktestEngine:
                     )
                     for pos in range(5)
                 ],
+                "camera_weight_avg_by_pos": [
+                    (
+                        float(tris_pos_weight_sum[pos] / tris_pos_weight_count[pos])
+                        if int(tris_pos_weight_count[pos]) > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
+                "camera_target_coverage_avg_by_pos": [
+                    (
+                        float(
+                            tris_pos_target_cov_sum[pos] / tris_pos_target_cov_count[pos]
+                        )
+                        if int(tris_pos_target_cov_count[pos]) > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
+                "camera_volatility_avg_by_pos": [
+                    (
+                        float(
+                            tris_pos_volatility_sum[pos] / tris_pos_volatility_count[pos]
+                        )
+                        if int(tris_pos_volatility_count[pos]) > 0
+                        else None
+                    )
+                    for pos in range(5)
+                ],
                 "camera_mask_present_draws": int(camera_mask_present_draws),
                 "run_context": dict(tris_run_context),
             }
@@ -1408,12 +1731,14 @@ class BacktestEngine:
                         mcnemar_chi2 = (
                             float(((abs(b - c) - 1.0) ** 2) / bc) if bc > 0 else None
                         )
-                        block_size = max(2, int(np.sqrt(max(1, int(delta_arr.size)))))
-                        delta_ci = self._bootstrap_block_mean_ci(
-                            delta_arr,
-                            block_size=block_size,
-                            n_resamples=2000,
-                        )
+                        delta_ci = None
+                        if not skip_bootstrap_ci:
+                            block_size = max(2, int(np.sqrt(max(1, int(delta_arr.size)))))
+                            delta_ci = self._bootstrap_block_mean_ci(
+                                delta_arr,
+                                block_size=block_size,
+                                n_resamples=2000,
+                            )
                         tris_universe_summary["compare_models"] = {
                             "draws": int(delta_arr.size),
                             "fs_lr": fs_lr,
@@ -1544,30 +1869,37 @@ class BacktestEngine:
                     ),
                     "count": prob_metric_count,
                 }
-                ll_delta_stats = self._bootstrap_mean_ci(delta_ll_values, n_resamples=2000)
-                br_delta_stats = self._bootstrap_mean_ci(delta_br_values, n_resamples=2000)
-                ll_delta_debug = self._delta_distribution_debug(
-                    delta_ll_values, draw_ids=delta_ll_draw_ids, top_k=10
-                )
-                if ll_delta_stats is not None and ll_delta_debug is not None:
-                    ll_delta_stats.update(ll_delta_debug)
-                if ll_delta_stats or br_delta_stats:
-                    top_positive_outliers = sorted(
-                        (
-                            row
-                            for row in delta_ll_details
-                            if float(row.get("delta_ll", 0.0)) > 0.0
-                        ),
-                        key=lambda x: float(x["delta_ll"]),
-                        reverse=True,
-                    )[:10]
-                    csv_path = self._dump_tris_outliers_csv(
-                        tracking_ctx.get("event_id", "unknown"), top_positive_outliers
-                    )
+                top_positive_outliers = sorted(
+                    (
+                        row
+                        for row in delta_ll_details
+                        if float(row.get("delta_ll", 0.0)) > 0.0
+                    ),
+                    key=lambda x: float(x["delta_ll"]),
+                    reverse=True,
+                )[:10]
+                if top_positive_outliers:
+                    csv_path = ""
+                    if not skip_outlier_csv:
+                        csv_path = self._dump_tris_outliers_csv(
+                            tracking_ctx.get("event_id", "unknown"), top_positive_outliers
+                        )
                     tris_outlier_summary = {
                         "rows": top_positive_outliers,
                         "csv_path": csv_path,
                     }
+                if not skip_bootstrap_ci:
+                    ll_delta_stats = self._bootstrap_mean_ci(
+                        delta_ll_values, n_resamples=2000
+                    )
+                    br_delta_stats = self._bootstrap_mean_ci(
+                        delta_br_values, n_resamples=2000
+                    )
+                    ll_delta_debug = self._delta_distribution_debug(
+                        delta_ll_values, draw_ids=delta_ll_draw_ids, top_k=10
+                    )
+                    if ll_delta_stats is not None and ll_delta_debug is not None:
+                        ll_delta_stats.update(ll_delta_debug)
                     tris_delta_summary = {
                         "logloss": ll_delta_stats,
                         "brier": br_delta_stats,
@@ -1637,6 +1969,7 @@ class BacktestEngine:
                 tris_layered_mesh_summary=tris_layered_mesh_summary,
                 baseline_prob_summary=baseline_prob_summary,
                 baseline_compare_summary=baseline_compare_summary,
+                fast_mode_summary=fast_mode_summary,
             )
         self.tracker.log_run(res, VERSION_TAG, self.forensic_data)
         return res
@@ -1866,6 +2199,7 @@ class BacktestEngine:
         tris_layered_mesh_summary=None,
         baseline_prob_summary=None,
         baseline_compare_summary=None,
+        fast_mode_summary=None,
     ):
         self.console.print("\n[bold green]📊 REPORTE FINAL DE MISIÓN[/bold green]")
         summary = Table(show_header=True, header_style="bold magenta")
@@ -1884,6 +2218,18 @@ class BacktestEngine:
             jackpot_value = "[bold yellow]0[/]"
         summary.add_row("Jackpots en Universo", jackpot_value)
         self.console.print(summary)
+        if isinstance(fast_mode_summary, dict):
+            omitted = fast_mode_summary.get("omitted_modules", [])
+            if omitted or bool(fast_mode_summary.get("enabled", False)):
+                omitted_text = ", ".join(str(v) for v in omitted) if omitted else "none"
+                self.console.print(
+                    "[yellow]Fast Mode:[/] "
+                    f"enabled={bool(fast_mode_summary.get('enabled', False))} | "
+                    f"omitted={omitted_text} | "
+                    f"render_every_n={int(fast_mode_summary.get('render_every_n', 1))} | "
+                    "gpu_cleanup_every_n="
+                    f"{int(fast_mode_summary.get('gpu_pool_cleanup_every_n', 1))}"
+                )
 
         dist_table = Table(
             title="Distribución de Aciertos",
@@ -2021,6 +2367,22 @@ class BacktestEngine:
             univ_rates = tris_positional_summary.get(
                 "universe_position_coverage_rate_by_pos", []
             )
+            weight_rates = tris_positional_summary.get("camera_weight_avg_by_pos", [])
+            target_cov_rates = tris_positional_summary.get(
+                "camera_target_coverage_avg_by_pos", []
+            )
+            volatility_rates = tris_positional_summary.get(
+                "camera_volatility_avg_by_pos", []
+            )
+            has_weight = any(v is not None for v in weight_rates)
+            has_target_cov = any(v is not None for v in target_cov_rates)
+            has_volatility = any(v is not None for v in volatility_rates)
+            if has_weight:
+                pos_table.add_column("Weight", justify="right")
+            if has_target_cov:
+                pos_table.add_column("Target coverage", justify="right")
+            if has_volatility:
+                pos_table.add_column("Volatility", justify="right")
 
             def _fmt_rate(v):
                 if v is None:
@@ -2037,12 +2399,22 @@ class BacktestEngine:
                 t1 = top1_rates[pos] if pos < len(top1_rates) else None
                 mk = mask_rates[pos] if pos < len(mask_rates) else None
                 uv = univ_rates[pos] if pos < len(univ_rates) else None
-                pos_table.add_row(
+                row = [
                     f"Camara {pos + 1}",
                     _fmt_rate(t1),
                     _fmt_rate(mk),
                     _fmt_rate(uv),
-                )
+                ]
+                if has_weight:
+                    wt = weight_rates[pos] if pos < len(weight_rates) else None
+                    row.append(self._fmt_metric(wt))
+                if has_target_cov:
+                    tc = target_cov_rates[pos] if pos < len(target_cov_rates) else None
+                    row.append(_fmt_rate(tc))
+                if has_volatility:
+                    vol = volatility_rates[pos] if pos < len(volatility_rates) else None
+                    row.append(self._fmt_metric(vol))
+                pos_table.add_row(*row)
             self.console.print(pos_table)
 
         if isinstance(tris_layered_mesh_summary, dict):

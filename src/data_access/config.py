@@ -233,6 +233,8 @@ BEST_SETTINGS_TRISbk = {
 BEST_SETTINGS_TRIS = {
     # --- ejecución ---
     "tris_backtest_mode": "universe_strategy",
+    "num_tickets": 200,
+    "backtest_size": 500,
     "compare_models": True,
     "compare_models_random_seeds": 30,
     # --- universo / estrategia ---

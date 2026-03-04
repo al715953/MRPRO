@@ -115,6 +115,62 @@ def test_coverage_mask_concentrated_can_use_fewer_digits_respecting_min_digits()
     assert np.all(np.asarray(diag["mask_coverage_empirical_per_pos"]) >= 0.70)
 
 
+def test_coverage_mask_accepts_per_position_targets():
+    targets = [0.55, 0.60, 0.65, 0.70, 0.75]
+    model = PositionalAnalyzers(
+        mask_mode="coverage",
+        target_coverage_per_position=targets,
+        min_digits_per_position=1,
+        max_digits_per_position=10,
+    ).fit([])
+
+    out = model.predict()
+    diag = out["diagnostics"]
+
+    np.testing.assert_allclose(
+        np.asarray(diag["target_coverage_per_pos_effective"], dtype=np.float64),
+        np.asarray(targets, dtype=np.float64),
+        atol=1e-12,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(diag["mask_digits_per_pos"], dtype=np.int32),
+        np.array([6, 6, 7, 7, 8], dtype=np.int32),
+    )
+
+
+def test_adaptive_coverage_expands_more_for_volatile_camera():
+    rng = np.random.default_rng(20260302)
+    history = []
+    for _ in range(240):
+        history.append([1, 2, 3, 4, int(rng.integers(0, 10))])
+
+    model = PositionalAnalyzers(
+        alpha=0.5,
+        short_window=60,
+        long_window=240,
+        mix_lambda=0.5,
+        mask_mode="coverage",
+        target_coverage_per_position=0.60,
+        adaptive_coverage_enabled=True,
+        adaptive_coverage_base=0.60,
+        adaptive_coverage_min=0.55,
+        adaptive_coverage_max=0.90,
+        adaptive_coverage_volatility_gain=0.30,
+        min_digits_per_position=1,
+        max_digits_per_position=10,
+    ).fit(history)
+
+    out = model.predict()
+    diag = out["diagnostics"]
+    target_cov = np.asarray(diag["target_coverage_per_pos_effective"], dtype=np.float64)
+    volatility = np.asarray(diag["volatility_pos"], dtype=np.float64)
+    mask_digits = np.asarray(diag["mask_digits_per_pos"], dtype=np.int32)
+
+    assert float(volatility[4]) > float(volatility[0])
+    assert float(target_cov[4]) > float(target_cov[0])
+    assert int(mask_digits[4]) >= int(mask_digits[0])
+
+
 def test_coverage_outputs_valid_pmf_mask_and_diagnostics_shapes():
     rng = np.random.default_rng(101)
     history = rng.integers(0, 10, size=(180, 5), endpoint=False).tolist()

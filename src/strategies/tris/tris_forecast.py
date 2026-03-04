@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -39,6 +40,178 @@ class TrisForecastV1A:
     @staticmethod
     def _uniform_probs() -> np.ndarray:
         return np.full((5, 10), 0.1, dtype=np.float64)
+
+    @staticmethod
+    def _normalize_score_model_name(raw) -> str:
+        token = str(raw or "positional_logp").lower()
+        if token in {"v1a_positional", "positional_logp"}:
+            return "positional_logp"
+        if token == "feature_lr":
+            return "feature_lr"
+        if token == "ticket_ngram":
+            return "ticket_ngram"
+        if token == "random_topk":
+            return "random_topk"
+        if token in {"camera_mech_v1", "positional_mech"}:
+            return "camera_mech_v1"
+        if token in {"layered_mesh_v1", "layered_mesh"}:
+            return "layered_mesh_v1"
+        return "positional_logp"
+
+    def _clone_config_with_overrides(
+        self, config: PredictionConfigDTO, overrides: Dict | None
+    ) -> PredictionConfigDTO:
+        merged = dict(overrides or {})
+        cloned = PredictionConfigDTO(
+            total_balls=int(config.total_balls),
+            ticket_size=int(config.ticket_size),
+            num_tickets=int(config.num_tickets),
+            backtest_size=int(config.backtest_size),
+            filter_overrides=merged,
+        )
+        cloned.raw_universe_ptr = config.raw_universe_ptr
+        return cloned
+
+    def _prepare_tris_context(
+        self, history: DrawHistoryDTO, config: PredictionConfigDTO, overrides: Dict | None
+    ) -> dict | None:
+        local_overrides = dict(overrides or {})
+        if (
+            str(local_overrides.get("universe_mode", "full_filtered_universe")).lower()
+            != "topk_scored_universe"
+        ):
+            return None
+
+        local_config = self._clone_config_with_overrides(config, local_overrides)
+        pred = self.predict(history, local_config)
+        metadata = dict(pred.metadata or {})
+        base_pool_raw = metadata.get("topk_base_pool_raw_ndarray")
+        base_pool = (
+            np.asarray(base_pool_raw, dtype=np.uint8)
+            if base_pool_raw is not None
+            else np.empty((0, 5), dtype=np.uint8)
+        )
+        digits_list, _ = _extract_tris_series(history)
+        shared_keys = (
+            "gate",
+            "topk_gate",
+            "universe_mode",
+            "selection_mode",
+            "universe_topk_k",
+            "scoring_debug",
+            "structural_filters",
+            "camera_debug",
+            "camera_analyzer_diag",
+        )
+        shared_metadata = {
+            str(k): metadata[k] for k in shared_keys if k in metadata
+        }
+        return {
+            "prediction": pred,
+            "metadata": metadata,
+            "base_pool_raw_ndarray": base_pool,
+            "base_pool_size": int(base_pool.shape[0]),
+            "main_score_model": self._normalize_score_model_name(
+                metadata.get(
+                    "score_model_effective",
+                    local_overrides.get("score_model", "positional_logp"),
+                )
+            ),
+            "shared_metadata": shared_metadata,
+            "n_draws": int(len(digits_list)),
+            "config": local_config,
+        }
+
+    def _run_score_model_on_context(
+        self, ctx: dict | None, score_model, overrides: Dict | None
+    ) -> dict | None:
+        if not isinstance(ctx, dict):
+            return None
+
+        normalized = self._normalize_score_model_name(score_model)
+        local_overrides = dict(overrides or {})
+        if normalized == str(ctx.get("main_score_model", "")):
+            metadata = dict(ctx.get("metadata", {}))
+            raw = metadata.get("raw_ndarray")
+            return {
+                "prediction": ctx.get("prediction"),
+                "metadata": metadata,
+                "raw_ndarray": raw,
+                "has_raw_universe": raw is not None,
+            }
+
+        if normalized != "random_topk":
+            return None
+
+        base_pool = np.asarray(
+            ctx.get("base_pool_raw_ndarray", np.empty((0, 5), dtype=np.uint8)),
+            dtype=np.uint8,
+        )
+        try:
+            k = int(local_overrides.get("universe_topk_k", local_overrides.get("topk_k", 0)))
+        except (TypeError, ValueError):
+            k = 0
+        k = max(0, min(int(k), int(base_pool.shape[0])))
+
+        seed_raw = local_overrides.get("random_topk_seed", 12345)
+        try:
+            random_topk_seed = int(seed_raw)
+        except (TypeError, ValueError):
+            random_topk_seed = 12345
+        rng_topk = np.random.default_rng(
+            int(random_topk_seed) + int(ctx.get("n_draws", 0))
+        )
+
+        if k > 0 and base_pool.shape[0] > 0:
+            idx_pool = np.arange(base_pool.shape[0], dtype=np.int64)
+            if idx_pool.size >= k:
+                top_idx = rng_topk.choice(idx_pool, size=k, replace=False).astype(
+                    np.int64, copy=False
+                )
+            else:
+                top_idx = idx_pool
+            top_idx = np.sort(top_idx)
+            raw = base_pool[top_idx].astype(np.uint8, copy=False)
+        else:
+            raw = np.empty((0, 5), dtype=np.uint8)
+
+        metadata = dict(ctx.get("shared_metadata", {}))
+        metadata.update(
+            {
+                "score_model": "random_topk",
+                "score_model_requested": "random_topk",
+                "score_model_effective": "random_topk",
+                "universe_mode": str(
+                    metadata.get("universe_mode", "topk_scored_universe")
+                ),
+                "selection_mode": str(
+                    metadata.get("selection_mode", local_overrides.get("selection_mode", "ranked"))
+                ),
+                "universe_topk_k": int(k),
+                "universe_size": int(raw.shape[0]),
+                "raw_ndarray": raw,
+                "score_stats": {
+                    "min": 0.0 if raw.shape[0] > 0 else None,
+                    "mean": 0.0 if raw.shape[0] > 0 else None,
+                    "max": 0.0 if raw.shape[0] > 0 else None,
+                },
+                "scoring_debug": {
+                    "pool_size_scored": int(ctx.get("base_pool_size", 0)),
+                    "all_tickets_size": int(
+                        dict(ctx.get("metadata", {}))
+                        .get("scoring_debug", {})
+                        .get("all_tickets_size", ctx.get("base_pool_size", 0))
+                    ),
+                    "scoring_mode": "pool_only",
+                },
+            }
+        )
+        return {
+            "prediction": None,
+            "metadata": metadata,
+            "raw_ndarray": raw,
+            "has_raw_universe": True,
+        }
 
     def _get_structural_override(self, overrides: Dict, key: str, default):
         fallback = BEST_SETTINGS_TRIS.get(key, default)
@@ -284,8 +457,8 @@ class TrisForecastV1A:
         ).lower()
         if layered_mask_mode not in {"topm", "coverage"}:
             layered_mask_mode = "coverage"
-        layered_target_coverage_per_position = float(
-            self._get_override(overrides, "layered_target_coverage_per_position", 0.70)
+        layered_target_coverage_per_position = self._get_override(
+            overrides, "layered_target_coverage_per_position", 0.70
         )
         layered_min_digits_per_position = int(
             self._get_override(overrides, "layered_min_digits_per_position", 4)
@@ -304,6 +477,39 @@ class TrisForecastV1A:
         layered_use_camera_repeat_penalty = self._to_bool(
             self._get_override(overrides, "layered_use_camera_repeat_penalty", True),
             default=True,
+        )
+        camera_anti_noise_enabled = self._to_bool(
+            self._get_override(overrides, "camera_anti_noise_enabled", False),
+            default=False,
+        )
+        camera_weights_mode = str(
+            self._get_override(overrides, "camera_weights_mode", "uniform")
+        ).lower()
+        if camera_weights_mode not in {"uniform", "inverse_entropy", "rolling_top1"}:
+            camera_weights_mode = "uniform"
+        camera_weights_floor = float(
+            self._get_override(overrides, "camera_weights_floor", 0.5)
+        )
+        camera_weights_ceiling = float(
+            self._get_override(overrides, "camera_weights_ceiling", 1.5)
+        )
+        camera_adaptive_coverage_enabled = self._to_bool(
+            self._get_override(overrides, "camera_adaptive_coverage_enabled", False),
+            default=False,
+        )
+        camera_adaptive_coverage_base = float(
+            self._get_override(overrides, "camera_adaptive_coverage_base", 0.70)
+        )
+        camera_adaptive_coverage_min = float(
+            self._get_override(overrides, "camera_adaptive_coverage_min", 0.55)
+        )
+        camera_adaptive_coverage_max = float(
+            self._get_override(overrides, "camera_adaptive_coverage_max", 0.90)
+        )
+        camera_adaptive_coverage_volatility_gain = float(
+            self._get_override(
+                overrides, "camera_adaptive_coverage_volatility_gain", 0.20
+            )
         )
 
         digits_list, mult_list = _extract_tris_series(history)
@@ -578,6 +784,12 @@ class TrisForecastV1A:
         layered_mesh_diag = {}
         layered_component_scores = None
         layered_score_component_stats = {}
+        t_prepare_ctx_ms = None
+        t_model_main_ms = None
+        topk_base_pool_raw_ndarray = None
+        camera_weights_effective = None
+        target_coverage_per_pos_effective = None
+        camera_volatility_pos = None
         camera_debug = {
             "pre_mask_universe_size": None,
             "post_static_mask_size": None,
@@ -595,6 +807,9 @@ class TrisForecastV1A:
             },
         }
         if score_model in {"camera_mech_v1", "layered_mesh_v1"}:
+            anti_noise_active = bool(
+                score_model == "layered_mesh_v1" and camera_anti_noise_enabled
+            )
             topm = int(max(1, min(10, camera_topm_per_position)))
             blend = float(np.clip(camera_mech_blend_with_v1a, 0.0, 1.0))
             if camera_use_slot_context:
@@ -612,7 +827,16 @@ class TrisForecastV1A:
                 parity_bias_strength=float(camera_parity_bias_strength),
                 topm_per_position=int(topm),
                 pmf_floor=1e-6,
-                target_coverage_per_position=float(layered_target_coverage_per_position),
+                target_coverage_per_position=layered_target_coverage_per_position,
+                adaptive_coverage_enabled=bool(
+                    anti_noise_active and camera_adaptive_coverage_enabled
+                ),
+                adaptive_coverage_base=float(camera_adaptive_coverage_base),
+                adaptive_coverage_min=float(camera_adaptive_coverage_min),
+                adaptive_coverage_max=float(camera_adaptive_coverage_max),
+                adaptive_coverage_volatility_gain=float(
+                    camera_adaptive_coverage_volatility_gain
+                ),
                 min_digits_per_position=int(layered_min_digits_per_position),
                 max_digits_per_position=int(layered_max_digits_per_position),
                 mask_mode=(
@@ -702,6 +926,25 @@ class TrisForecastV1A:
             cam_latency = np.asarray(camera_diag.get("latency", np.zeros((5, 10), dtype=np.int32)))
             cam_parity = np.asarray(camera_diag.get("parity_local_prob", np.full((5, 2), 0.5)))
             cam_entropy = np.asarray(camera_diag.get("entropy_pos", entropy_pos), dtype=np.float64)
+            cam_target_cov = np.asarray(
+                camera_diag.get(
+                    "target_coverage_per_pos_effective",
+                    np.ones(5, dtype=np.float64),
+                ),
+                dtype=np.float64,
+            ).reshape(-1)
+            if cam_target_cov.size < 5:
+                cam_target_cov = np.pad(cam_target_cov, (0, 5 - cam_target_cov.size), mode="edge")
+            cam_volatility = np.asarray(
+                camera_diag.get("volatility_pos", np.zeros(5, dtype=np.float64)),
+                dtype=np.float64,
+            ).reshape(-1)
+            if cam_volatility.size < 5:
+                cam_volatility = np.pad(cam_volatility, (0, 5 - cam_volatility.size), mode="constant")
+            target_coverage_per_pos_effective = np.asarray(
+                cam_target_cov[:5], dtype=np.float64
+            )
+            camera_volatility_pos = np.asarray(cam_volatility[:5], dtype=np.float64)
             camera_diag_summary = {
                 "latency_mean_by_pos": np.mean(cam_latency, axis=1).astype(float).tolist()
                 if cam_latency.shape == (5, 10)
@@ -715,6 +958,8 @@ class TrisForecastV1A:
                 "entropy_pos": cam_entropy.tolist()
                 if cam_entropy.shape == (5,)
                 else [],
+                "target_coverage_per_pos_effective": target_coverage_per_pos_effective.tolist(),
+                "volatility_pos": camera_volatility_pos.tolist(),
             }
             if pmf_cam.shape == (5, 10):
                 camera_diag_summary["pmf_row_sums"] = pmf_row_sums.astype(float).tolist()
@@ -890,6 +1135,7 @@ class TrisForecastV1A:
             structural_diag["selection_mode"] = selection_mode
             camera_debug["post_topk_size"] = int(universe_size)
         elif used_topk_scored_universe:
+            t_prepare_ctx_start = time.perf_counter()
             if use_camera_masked_universe or use_layered_masked_universe:
                 all_tickets, features_cache, static_mask, camera_universe_diag = (
                     get_universe_with_positional_mask(
@@ -911,6 +1157,7 @@ class TrisForecastV1A:
                 base_mask = np.ones(all_tickets.shape[0], dtype=bool)
             base_count = int(np.sum(base_mask))
             base_universe_digits = all_tickets[base_mask]
+            topk_base_pool_raw_ndarray = np.asarray(base_universe_digits, dtype=np.uint8)
             camera_debug["post_static_mask_size"] = int(base_count)
             camera_debug["pos_unique_digits_pre_topk"] = self._pos_unique_digits(
                 base_universe_digits
@@ -922,6 +1169,18 @@ class TrisForecastV1A:
             K = max(0, min(K, base_count))
             universe_topk_k = int(K)
             top_idx = np.empty(0, dtype=np.int64)
+            top_idx_local = np.empty(0, dtype=np.int64)
+            idx_pool = np.flatnonzero(base_mask).astype(np.int64, copy=False)
+            pool_tickets = all_tickets[idx_pool]
+            pool_size_scored = int(pool_tickets.shape[0])
+            all_tickets_size = int(all_tickets.shape[0])
+            scoring_mode = (
+                "pool_only" if pool_size_scored < all_tickets_size else "full_array"
+            )
+            scores_pool = np.zeros(0, dtype=np.float64)
+            universe_scores = np.zeros(0, dtype=np.float64)
+            t_prepare_ctx_ms = float((time.perf_counter() - t_prepare_ctx_start) * 1000.0)
+            t_model_main_start = time.perf_counter()
 
             if score_model == "random_topk":
                 seed_raw = self._get_override(overrides, "random_topk_seed", 12345)
@@ -930,7 +1189,6 @@ class TrisForecastV1A:
                 except (TypeError, ValueError):
                     random_topk_seed = 12345
                 rng_topk = np.random.default_rng(int(random_topk_seed) + int(n_draws))
-                idx_pool = np.flatnonzero(base_mask).astype(np.int64, copy=False)
                 if K > 0 and idx_pool.size > 0:
                     if idx_pool.size >= K:
                         top_idx = rng_topk.choice(idx_pool, size=K, replace=False).astype(
@@ -939,9 +1197,10 @@ class TrisForecastV1A:
                     else:
                         top_idx = idx_pool
                     top_idx = np.sort(top_idx)
-                scores_all = np.full(all_tickets.shape[0], -np.inf, dtype=np.float64)
                 if top_idx.size > 0:
-                    scores_all[top_idx] = rng_topk.random(top_idx.size)
+                    universe_scores = rng_topk.random(top_idx.size).astype(
+                        np.float64, copy=False
+                    )
             elif score_model == "feature_lr":
                 lr_alpha = float(self._get_override(overrides, "feature_lr_alpha", 1.0))
                 lr_short = int(
@@ -976,69 +1235,98 @@ class TrisForecastV1A:
                     use_mirror=lr_use_mirror,
                     shrink_c=lr_shrink_c,
                 ).fit(digits_list)
-                scores_all = lr_model.score_all(
-                    all_tickets, features_cache, prev_digits=prev_digits
+                if isinstance(features_cache, dict):
+                    features_pool = {
+                        str(k): np.asarray(v)[idx_pool]
+                        for k, v in features_cache.items()
+                    }
+                else:
+                    features_pool = features_cache
+                scores_pool = lr_model.score_all(
+                    pool_tickets, features_pool, prev_digits=prev_digits
                 )
             elif score_model == "ticket_ngram" and ngram_model is not None:
-                scores_all = ngram_model.score_all(all_tickets)
+                scores_pool = ngram_model.score_all(pool_tickets)
             elif score_model == "layered_mesh_v1":
-                layered_scorer = LayeredMeshScorer(weights=layered_weights)
+                layered_weights_cfg = dict(layered_weights)
+                layered_weights_cfg["camera_weights_mode"] = (
+                    camera_weights_mode if camera_anti_noise_enabled else "uniform"
+                )
+                layered_weights_cfg["camera_weights_floor"] = float(camera_weights_floor)
+                layered_weights_cfg["camera_weights_ceiling"] = float(
+                    camera_weights_ceiling
+                )
+                layered_scorer = LayeredMeshScorer(weights=layered_weights_cfg)
+                layered_camera_diag = (
+                    camera_analyzer_out.get("diagnostics", {})
+                    if isinstance(camera_analyzer_out, dict)
+                    else camera_diag_summary
+                )
+                camera_weights_effective = (
+                    layered_scorer.compute_camera_weights(layered_camera_diag)
+                    if camera_anti_noise_enabled
+                    else np.ones(5, dtype=np.float64)
+                )
                 layered_out = layered_scorer.score_all(
-                    tickets=all_tickets,
+                    tickets=pool_tickets,
                     pmf_pos=(
                         np.asarray(camera_pmf, dtype=np.float64)
                         if camera_pmf is not None
                         else np.asarray(pos_probs, dtype=np.float64)
                     ),
                     prev_digits=prev_digits,
-                    camera_diag=(
-                        camera_analyzer_out.get("diagnostics", {})
-                        if isinstance(camera_analyzer_out, dict)
-                        else camera_diag_summary
-                    ),
+                    camera_diag=layered_camera_diag,
                     slot_context=camera_slot_context,
+                    camera_weights=camera_weights_effective,
                 )
-                scores_all = np.asarray(layered_out.get("total_score"), dtype=np.float64)
+                scores_pool = np.asarray(
+                    layered_out.get("total_score"), dtype=np.float64
+                )
                 layered_component_scores = layered_out.get("components", {})
             elif score_model == "camera_mech_v1":
                 eps = 1e-12
                 logits = np.log(np.clip(pos_probs, eps, None))
-                scores_all = (
-                    logits[0, all_tickets[:, 0]]
-                    + logits[1, all_tickets[:, 1]]
-                    + logits[2, all_tickets[:, 2]]
-                    + logits[3, all_tickets[:, 3]]
-                    + logits[4, all_tickets[:, 4]]
+                scores_pool = (
+                    logits[0, pool_tickets[:, 0]]
+                    + logits[1, pool_tickets[:, 1]]
+                    + logits[2, pool_tickets[:, 2]]
+                    + logits[3, pool_tickets[:, 3]]
+                    + logits[4, pool_tickets[:, 4]]
                 )
             else:
                 eps = 1e-12
                 logits = np.log(np.clip(pos_probs, eps, None))
-                scores_all = (
-                    logits[0, all_tickets[:, 0]]
-                    + logits[1, all_tickets[:, 1]]
-                    + logits[2, all_tickets[:, 2]]
-                    + logits[3, all_tickets[:, 3]]
-                    + logits[4, all_tickets[:, 4]]
+                scores_pool = (
+                    logits[0, pool_tickets[:, 0]]
+                    + logits[1, pool_tickets[:, 1]]
+                    + logits[2, pool_tickets[:, 2]]
+                    + logits[3, pool_tickets[:, 3]]
+                    + logits[4, pool_tickets[:, 4]]
                 )
 
             if score_model != "random_topk":
-                scores_all = np.asarray(scores_all, dtype=np.float64).copy()
-                scores_all[~base_mask] = -np.inf
-
-                valid_idx = np.flatnonzero(np.isfinite(scores_all))
+                scores_pool = np.asarray(scores_pool, dtype=np.float64).reshape(-1)
+                valid_idx = np.flatnonzero(np.isfinite(scores_pool))
                 k_eff = int(min(K, valid_idx.size))
                 if k_eff > 0:
                     if k_eff == valid_idx.size:
-                        top_idx = valid_idx.astype(np.int64, copy=False)
+                        top_idx_local = valid_idx.astype(np.int64, copy=False)
                     else:
-                        top_idx = np.argpartition(scores_all, -k_eff)[-k_eff:].astype(
+                        top_idx_local = valid_idx[
+                            np.argpartition(scores_pool[valid_idx], -k_eff)[-k_eff:]
+                        ].astype(
                             np.int64, copy=False
                         )
-                    top_idx = top_idx[np.argsort(scores_all[top_idx])[::-1]]
+                    top_idx_local = top_idx_local[
+                        np.argsort(scores_pool[top_idx_local])[::-1]
+                    ]
+                    top_idx = idx_pool[top_idx_local]
+            t_model_main_ms = float((time.perf_counter() - t_model_main_start) * 1000.0)
 
             final_mask = np.zeros(all_tickets.shape[0], dtype=bool)
             if top_idx.size > 0:
                 final_mask[top_idx] = True
+            selected_global_idx = np.flatnonzero(final_mask).astype(np.int64, copy=False)
             universe_digits = all_tickets[final_mask]
             if score_model == "random_topk":
                 final_universe_digits = all_tickets[top_idx]
@@ -1066,6 +1354,9 @@ class TrisForecastV1A:
                         if int(all_tickets.shape[0]) > 0
                         else 0.0
                     ),
+                    "pool_size_scored": int(pool_size_scored),
+                    "all_tickets_size": int(all_tickets_size),
+                    "scoring_mode": str(scoring_mode),
                     "static_accepted": int(static_accepted),
                     "mirror_rejected": int(mirror_rejected),
                 }
@@ -1079,7 +1370,13 @@ class TrisForecastV1A:
             }
 
             if universe_size > 0:
-                universe_scores = scores_all[final_mask]
+                if score_model != "random_topk":
+                    selected_local_idx = np.searchsorted(idx_pool, selected_global_idx)
+                    universe_scores = np.asarray(
+                        scores_pool[selected_local_idx], dtype=np.float64
+                    )
+                if score_model == "random_topk" and universe_scores.size != universe_size:
+                    universe_scores = np.zeros(universe_size, dtype=np.float64)
                 score_stats_min = float(np.min(universe_scores))
                 score_stats_mean = float(np.mean(universe_scores))
                 score_stats_max = float(np.max(universe_scores))
@@ -1089,12 +1386,14 @@ class TrisForecastV1A:
             if score_model == "layered_mesh_v1" and isinstance(
                 layered_component_scores, dict
             ):
-                active_mask = np.asarray(base_mask, dtype=bool)
                 for comp_name, comp_values in layered_component_scores.items():
                     comp_arr = np.asarray(comp_values, dtype=np.float64).reshape(-1)
-                    if comp_arr.shape[0] != all_tickets.shape[0]:
+                    if comp_arr.shape[0] == pool_tickets.shape[0]:
+                        pass
+                    elif comp_arr.shape[0] == all_tickets.shape[0]:
+                        comp_arr = comp_arr[np.asarray(base_mask, dtype=bool)]
+                    else:
                         continue
-                    comp_arr = comp_arr[active_mask]
                     if comp_arr.size == 0:
                         layered_score_component_stats[str(comp_name)] = {
                             "mean": None,
@@ -1308,7 +1607,22 @@ class TrisForecastV1A:
                 "alpha": float(topk_gate_alpha),
                 "threshold_z": float(topk_gate_threshold_z),
             },
+            "timings": {
+                "t_prepare_ctx_ms": t_prepare_ctx_ms,
+                "t_model_main_ms": t_model_main_ms,
+            },
         }
+        if used_topk_scored_universe and "pool_size_scored" in structural_diag:
+            metadata["scoring_debug"] = {
+                "pool_size_scored": int(structural_diag.get("pool_size_scored", 0)),
+                "all_tickets_size": int(structural_diag.get("all_tickets_size", 0)),
+                "scoring_mode": str(structural_diag.get("scoring_mode", "full_array")),
+            }
+            if topk_base_pool_raw_ndarray is not None:
+                metadata["topk_base_pool_raw_ndarray"] = np.asarray(
+                    topk_base_pool_raw_ndarray, dtype=np.uint8
+                )
+                metadata["topk_base_pool_size"] = int(topk_base_pool_raw_ndarray.shape[0])
         if score_model == "feature_lr":
             metadata["feature_lr"] = structural_diag.get("feature_lr", {})
         if score_model == "camera_mech_v1":
@@ -1377,8 +1691,53 @@ class TrisForecastV1A:
             ).reshape(-1)
             if mask_cov.size < 5:
                 mask_cov = np.pad(mask_cov, (0, 5 - mask_cov.size), mode="constant")
+            if target_coverage_per_pos_effective is None:
+                target_coverage_per_pos_effective = np.asarray(
+                    diag_payload.get(
+                        "target_coverage_per_pos_effective",
+                        np.ones(5, dtype=np.float64),
+                    ),
+                    dtype=np.float64,
+                ).reshape(-1)
+                if target_coverage_per_pos_effective.size < 5:
+                    target_coverage_per_pos_effective = np.pad(
+                        target_coverage_per_pos_effective,
+                        (0, 5 - target_coverage_per_pos_effective.size),
+                        mode="edge",
+                    )
+            if camera_volatility_pos is None:
+                camera_volatility_pos = np.asarray(
+                    diag_payload.get("volatility_pos", np.zeros(5, dtype=np.float64)),
+                    dtype=np.float64,
+                ).reshape(-1)
+                if camera_volatility_pos.size < 5:
+                    camera_volatility_pos = np.pad(
+                        camera_volatility_pos,
+                        (0, 5 - camera_volatility_pos.size),
+                        mode="constant",
+                    )
+            if camera_weights_effective is None:
+                camera_weights_effective = np.ones(5, dtype=np.float64)
             metadata["score_model"] = "layered_mesh_v1"
             metadata["score_model_effective"] = "layered_mesh_v1"
+            metadata["camera_weights_effective"] = [
+                float(v) for v in np.asarray(camera_weights_effective, dtype=np.float64)[:5].tolist()
+            ]
+            metadata["target_coverage_per_pos_effective"] = [
+                float(v)
+                for v in np.asarray(target_coverage_per_pos_effective, dtype=np.float64)[
+                    :5
+                ].tolist()
+            ]
+            metadata["camera_volatility_pos"] = [
+                float(v)
+                for v in np.asarray(camera_volatility_pos, dtype=np.float64)[:5].tolist()
+            ]
+            metadata["camera_analyzer_diag"] = dict(camera_diag_summary)
+            if camera_universe_diag:
+                metadata["camera_analyzer_diag"]["universe_mask_diag"] = dict(
+                    camera_universe_diag
+                )
             metadata["layered_mesh"] = {
                 "pmf_pos": pmf_layered.tolist(),
                 "positional_mask": mask_layered.astype(np.uint8).tolist(),
@@ -1386,6 +1745,25 @@ class TrisForecastV1A:
                 "mask_coverage_empirical_per_pos": [
                     float(v) for v in mask_cov[:5].tolist()
                 ],
+                "camera_weights_effective": [
+                    float(v)
+                    for v in np.asarray(camera_weights_effective, dtype=np.float64)[
+                        :5
+                    ].tolist()
+                ],
+                "target_coverage_per_pos_effective": [
+                    float(v)
+                    for v in np.asarray(
+                        target_coverage_per_pos_effective, dtype=np.float64
+                    )[:5].tolist()
+                ],
+                "camera_volatility_pos": [
+                    float(v)
+                    for v in np.asarray(camera_volatility_pos, dtype=np.float64)[
+                        :5
+                    ].tolist()
+                ],
+                "anti_noise_enabled": bool(camera_anti_noise_enabled),
                 "pre_mask_universe_size": int(
                     layered_mesh_diag.get(
                         "pre_mask_universe_size",

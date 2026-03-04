@@ -58,7 +58,12 @@ class PositionalAnalyzers:
         parity_bias_strength: float = 0.0,
         topm_per_position: int | None = None,
         pmf_floor: float = 1e-6,
-        target_coverage_per_position: float | None = None,
+        target_coverage_per_position: float | list[float] | None = None,
+        adaptive_coverage_enabled: bool = False,
+        adaptive_coverage_base: float = 0.70,
+        adaptive_coverage_min: float = 0.55,
+        adaptive_coverage_max: float = 0.90,
+        adaptive_coverage_volatility_gain: float = 0.20,
         min_digits_per_position: int = 1,
         max_digits_per_position: int = 10,
         mask_mode: str = "topm",
@@ -73,11 +78,17 @@ class PositionalAnalyzers:
         self.parity_bias_strength = float(parity_bias_strength)
         self.topm_per_position = None if topm_per_position is None else int(topm_per_position)
         self.pmf_floor = float(pmf_floor)
-        self.target_coverage_per_position = (
-            None
-            if target_coverage_per_position is None
-            else float(target_coverage_per_position)
+        self.target_coverage_per_position = self._normalize_target_coverage_config(
+            target_coverage_per_position
         )
+        self._target_coverage_vector = self._coerce_target_coverage_vector(
+            self.target_coverage_per_position
+        )
+        self.adaptive_coverage_enabled = bool(adaptive_coverage_enabled)
+        self.adaptive_coverage_base = float(adaptive_coverage_base)
+        self.adaptive_coverage_min = float(adaptive_coverage_min)
+        self.adaptive_coverage_max = float(adaptive_coverage_max)
+        self.adaptive_coverage_volatility_gain = float(adaptive_coverage_volatility_gain)
         self.min_digits_per_position = int(min_digits_per_position)
         self.max_digits_per_position = int(max_digits_per_position)
         self.mask_mode = str(mask_mode or "topm").strip().lower()
@@ -104,6 +115,48 @@ class PositionalAnalyzers:
         self.slot_sample_size_short: dict[str, int] = {}
         self.slot_sample_size_long: dict[str, int] = {}
         self.n_rows = 0
+
+    @staticmethod
+    def _normalize_target_coverage_config(
+        values: float | list[float] | None,
+    ) -> float | list[float] | None:
+        if values is None:
+            return None
+        if isinstance(values, (list, tuple, np.ndarray)):
+            try:
+                arr = np.asarray(values, dtype=np.float64).reshape(-1)
+            except Exception:
+                return None
+            if arr.size == 0:
+                return None
+            arr = np.clip(arr, 0.0, 1.0)
+            if arr.size == 1:
+                return float(arr[0])
+            if arr.size < _N_POS:
+                arr = np.pad(arr, (0, _N_POS - arr.size), mode="edge")
+            return [float(v) for v in arr[:_N_POS].tolist()]
+        try:
+            return float(np.clip(float(values), 0.0, 1.0))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_target_coverage_vector(
+        values: float | list[float] | None,
+    ) -> np.ndarray | None:
+        if values is None:
+            return None
+        try:
+            arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        if arr.size == 1:
+            arr = np.full(_N_POS, float(arr[0]), dtype=np.float64)
+        elif arr.size < _N_POS:
+            arr = np.pad(arr, (0, _N_POS - arr.size), mode="edge")
+        return np.clip(arr[:_N_POS], 0.0, 1.0).astype(np.float64, copy=False)
 
     @staticmethod
     def _count_positions(rows: np.ndarray) -> np.ndarray:
@@ -214,20 +267,18 @@ class PositionalAnalyzers:
     def _smoothed_mix_pmf_from_counts(
         self, counts_short: np.ndarray, counts_long: np.ndarray
     ) -> np.ndarray:
-        alpha = max(self.alpha, 1e-12)
-        sum_short = np.sum(counts_short, axis=1, keepdims=True)
-        sum_long = np.sum(counts_long, axis=1, keepdims=True)
-        short_p = (counts_short + alpha) / np.clip(
-            sum_short + alpha * _N_DIGITS, 1e-12, None
-        )
-        long_p = (counts_long + alpha) / np.clip(
-            sum_long + alpha * _N_DIGITS, 1e-12, None
-        )
+        short_p = self._smoothed_pmf_from_counts(counts_short)
+        long_p = self._smoothed_pmf_from_counts(counts_long)
         mix_w = float(np.clip(self.mix_lambda, 0.0, 1.0))
         return mix_w * short_p + (1.0 - mix_w) * long_p
 
     def _smoothed_mix_pmf(self) -> np.ndarray:
         return self._smoothed_mix_pmf_from_counts(self.counts_short, self.counts_long)
+
+    def _smoothed_pmf_from_counts(self, counts: np.ndarray) -> np.ndarray:
+        alpha = max(self.alpha, 1e-12)
+        totals = np.sum(counts, axis=1, keepdims=True)
+        return (counts + alpha) / np.clip(totals + alpha * _N_DIGITS, 1e-12, None)
 
     def _slot_conditioned_pmf(
         self, pmf_global: np.ndarray, slot_context: str | None
@@ -319,9 +370,44 @@ class PositionalAnalyzers:
             mask[pos, order[:m]] = True
         return mask
 
-    def _coverage_mask(self, pmf: np.ndarray) -> np.ndarray:
-        target = self.target_coverage_per_position
-        target_cov = 1.0 if target is None else float(np.clip(target, 0.0, 1.0))
+    def _compute_volatility_per_position(self) -> np.ndarray:
+        if int(self.n_rows) <= 0:
+            return np.zeros(_N_POS, dtype=np.float64)
+
+        short_totals = np.sum(self.counts_short, axis=1)
+        long_totals = np.sum(self.counts_long, axis=1)
+        short_p = self._smoothed_pmf_from_counts(self.counts_short)
+        long_p = self._smoothed_pmf_from_counts(self.counts_long)
+
+        entropy_norm = self._entropy_rows(short_p) / np.log(float(_N_DIGITS))
+        entropy_norm = np.clip(entropy_norm, 0.0, 1.0)
+        entropy_norm = np.where(short_totals > 0.0, entropy_norm, 0.0)
+
+        shift = 0.5 * np.sum(np.abs(short_p - long_p), axis=1)
+        shift = np.clip(shift, 0.0, 1.0)
+        shift = np.where((short_totals > 0.0) & (long_totals > 0.0), shift, 0.0)
+
+        return np.clip(0.5 * (entropy_norm + shift), 0.0, 1.0).astype(
+            np.float64, copy=False
+        )
+
+    def _resolve_target_coverage_per_position(
+        self, volatility_pos: np.ndarray
+    ) -> np.ndarray:
+        configured = self._target_coverage_vector
+        if configured is None:
+            configured = np.ones(_N_POS, dtype=np.float64)
+        if not self.adaptive_coverage_enabled:
+            return np.clip(configured, 0.0, 1.0).astype(np.float64, copy=False)
+
+        lower = min(self.adaptive_coverage_min, self.adaptive_coverage_max)
+        upper = max(self.adaptive_coverage_min, self.adaptive_coverage_max)
+        derived = self.adaptive_coverage_base + (
+            self.adaptive_coverage_volatility_gain * np.asarray(volatility_pos, dtype=np.float64)
+        )
+        return np.clip(derived, lower, upper).astype(np.float64, copy=False)
+
+    def _coverage_mask(self, pmf: np.ndarray, target_cov_by_pos: np.ndarray) -> np.ndarray:
         min_d = int(np.clip(self.min_digits_per_position, 1, _N_DIGITS))
         max_d = int(np.clip(self.max_digits_per_position, 1, _N_DIGITS))
         if max_d < min_d:
@@ -330,6 +416,7 @@ class PositionalAnalyzers:
         digits = np.arange(_N_DIGITS, dtype=np.int32)
         mask = np.zeros_like(pmf, dtype=bool)
         for pos in range(pmf.shape[0]):
+            target_cov = float(np.clip(target_cov_by_pos[pos], 0.0, 1.0))
             # Deterministic tie-break: pmf desc, digit asc.
             order = np.lexsort((digits, -pmf[pos]))
             chosen = np.zeros(_N_DIGITS, dtype=bool)
@@ -369,9 +456,13 @@ class PositionalAnalyzers:
 
         pmf = np.clip(pmf, max(self.pmf_floor, 1e-12), None)
         pmf = pmf / np.clip(np.sum(pmf, axis=1, keepdims=True), 1e-12, None)
+        volatility_pos = self._compute_volatility_per_position()
+        target_coverage_effective = self._resolve_target_coverage_per_position(
+            volatility_pos
+        )
 
         if self.mask_mode == "coverage":
-            positional_mask = self._coverage_mask(pmf)
+            positional_mask = self._coverage_mask(pmf, target_coverage_effective)
             favored_digits_by_pos = [
                 [int(d) for d in np.where(positional_mask[pos])[0].tolist()]
                 for pos in range(_N_POS)
@@ -415,6 +506,8 @@ class PositionalAnalyzers:
             "slot_vs_global_l1_by_pos": slot_diag["slot_vs_global_l1_by_pos"].copy(),
             "parity_streak_len": self.parity_streak_len.copy(),
             "parity_streak_value": self.parity_streak_value.copy(),
+            "volatility_pos": volatility_pos.copy(),
+            "target_coverage_per_pos_effective": target_coverage_effective.copy(),
             "mask_digits_per_pos": mask_digits_per_pos.copy(),
             "mask_coverage_empirical_per_pos": mask_coverage_empirical_per_pos.copy(),
             "positional_mask_mode": str(self.mask_mode),

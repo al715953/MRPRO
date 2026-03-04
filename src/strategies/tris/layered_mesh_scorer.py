@@ -93,6 +93,17 @@ class LayeredMeshScorer:
         self.hamming_alpha = float(cfg.get("hamming_alpha", 1e-3))
         self.cross_min_history = int(cfg.get("cross_min_history", 30))
         self.cross_alpha = float(cfg.get("cross_alpha", 1e-3))
+        self.camera_weights_mode = str(cfg.get("camera_weights_mode", "uniform")).lower()
+        if self.camera_weights_mode not in {"uniform", "inverse_entropy", "rolling_top1"}:
+            self.camera_weights_mode = "uniform"
+        camera_weights_raw = cfg.get("camera_weights", None)
+        self.camera_weights = (
+            self._coerce_pos_array(camera_weights_raw, default=1.0)
+            if camera_weights_raw is not None
+            else None
+        )
+        self.camera_weights_floor = float(cfg.get("camera_weights_floor", 0.5))
+        self.camera_weights_ceiling = float(cfg.get("camera_weights_ceiling", 1.5))
 
     @staticmethod
     def _coerce_pos_array(values: Any, default: float = 0.0) -> np.ndarray:
@@ -139,14 +150,108 @@ class LayeredMeshScorer:
         prev = np.mod(prev[:_N_POS], _N_DIGITS)
         return prev.astype(np.int16, copy=False)
 
-    def _component_positional_logp(self, tickets: np.ndarray, pmf: np.ndarray) -> np.ndarray:
-        return (
-            np.log(np.clip(pmf[0, tickets[:, 0]], 1e-12, None))
-            + np.log(np.clip(pmf[1, tickets[:, 1]], 1e-12, None))
-            + np.log(np.clip(pmf[2, tickets[:, 2]], 1e-12, None))
-            + np.log(np.clip(pmf[3, tickets[:, 3]], 1e-12, None))
-            + np.log(np.clip(pmf[4, tickets[:, 4]], 1e-12, None))
-        ).astype(np.float64, copy=False)
+    def _normalize_camera_weights(self, values: Any) -> np.ndarray:
+        arr = self._coerce_pos_array(values, default=1.0)
+        arr = np.where(np.isfinite(arr), arr, 1.0)
+        arr = np.clip(arr, 1e-12, None)
+
+        lower = min(self.camera_weights_floor, self.camera_weights_ceiling)
+        upper = max(self.camera_weights_floor, self.camera_weights_ceiling)
+        target_sum = float(_N_POS)
+        if lower * _N_POS > target_sum or upper * _N_POS < target_sum:
+            return np.ones(_N_POS, dtype=np.float64)
+
+        arr_sum = float(np.sum(arr))
+        if arr_sum <= 0.0 or not np.isfinite(arr_sum):
+            return np.ones(_N_POS, dtype=np.float64)
+        raw = arr / arr_sum * target_sum
+
+        out = np.zeros(_N_POS, dtype=np.float64)
+        free = np.ones(_N_POS, dtype=bool)
+        remaining = float(target_sum)
+
+        for _ in range(_N_POS + 2):
+            if not np.any(free):
+                break
+            raw_free = raw[free]
+            raw_free_sum = float(np.sum(raw_free))
+            if raw_free_sum <= 0.0 or not np.isfinite(raw_free_sum):
+                out[free] = remaining / float(np.sum(free))
+            else:
+                out[free] = raw_free * (remaining / raw_free_sum)
+
+            low = free & (out < lower)
+            high = free & (out > upper)
+            if not np.any(low) and not np.any(high):
+                break
+
+            if np.any(low):
+                out[low] = lower
+            if np.any(high):
+                out[high] = upper
+            free &= ~(low | high)
+            remaining = float(target_sum - np.sum(out[~free]))
+
+        if np.any(free):
+            raw_free = raw[free]
+            raw_free_sum = float(np.sum(raw_free))
+            if raw_free_sum <= 0.0 or not np.isfinite(raw_free_sum):
+                out[free] = remaining / float(np.sum(free))
+            else:
+                out[free] = raw_free * (remaining / raw_free_sum)
+
+        out = np.clip(out, lower, upper)
+        diff = float(target_sum - np.sum(out))
+        if abs(diff) > 1e-12:
+            if diff > 0.0:
+                candidates = np.where(out < (upper - 1e-12))[0]
+            else:
+                candidates = np.where(out > (lower + 1e-12))[0]
+            if candidates.size == 0:
+                return np.ones(_N_POS, dtype=np.float64)
+            idx = int(candidates[0])
+            out[idx] = float(np.clip(out[idx] + diff, lower, upper))
+        return out.astype(np.float64, copy=False)
+
+    def compute_camera_weights(
+        self, camera_diag: dict | None, history_metrics: dict | None = None
+    ) -> np.ndarray:
+        if self.camera_weights is not None:
+            return self._normalize_camera_weights(self.camera_weights)
+
+        if self.camera_weights_mode == "inverse_entropy" and isinstance(camera_diag, dict):
+            entropy = self._coerce_pos_array(camera_diag.get("entropy_pos"), default=np.log(10.0))
+            max_entropy = np.log(float(_N_DIGITS))
+            raw = max_entropy / np.clip(entropy, 1e-6, None)
+            return self._normalize_camera_weights(raw)
+
+        if self.camera_weights_mode == "rolling_top1":
+            rates = None
+            if isinstance(history_metrics, dict):
+                rates = history_metrics.get("rolling_top1_by_pos")
+                if rates is None:
+                    rates = history_metrics.get("camera_top1_hit_rate_by_pos")
+            if rates is None and isinstance(camera_diag, dict):
+                rates = camera_diag.get("rolling_top1_hit_rate_by_pos")
+            if rates is not None:
+                return self._normalize_camera_weights(rates)
+
+        return np.ones(_N_POS, dtype=np.float64)
+
+    def _component_positional_logp(
+        self, tickets: np.ndarray, pmf: np.ndarray, camera_weights: np.ndarray
+    ) -> np.ndarray:
+        logp = np.column_stack(
+            [
+                np.log(np.clip(pmf[pos, tickets[:, pos]], 1e-12, None))
+                for pos in range(_N_POS)
+            ]
+        )
+        return np.sum(
+            logp * np.asarray(camera_weights, dtype=np.float64)[None, :],
+            axis=1,
+            dtype=np.float64,
+        )
 
     def _component_camera_repeat_penalty(
         self,
@@ -260,6 +365,8 @@ class LayeredMeshScorer:
         prev_digits: list[int] | None = None,
         camera_diag: dict | None = None,
         slot_context: str | None = None,
+        history_metrics: dict | None = None,
+        camera_weights: np.ndarray | None = None,
     ) -> dict:
         """
         Returns:
@@ -289,8 +396,13 @@ class LayeredMeshScorer:
                 },
             }
 
+        weights_effective = (
+            self._normalize_camera_weights(camera_weights)
+            if camera_weights is not None
+            else self.compute_camera_weights(camera_diag, history_metrics=history_metrics)
+        )
         components = {
-            "positional_logp": self._component_positional_logp(t, pmf),
+            "positional_logp": self._component_positional_logp(t, pmf, weights_effective),
             "hamming_memory": self._component_hamming_memory(t, prev, camera_diag),
             "cross_turbulence": self._component_cross_turbulence(
                 t, camera_diag, slot_context
