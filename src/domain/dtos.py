@@ -13,6 +13,27 @@ class DrawHistoryDTO:
     concursos: List[int]
 
 
+def sort_history_chronologically(history: DrawHistoryDTO) -> DrawHistoryDTO:
+    """Return a copy ordered from the oldest to the newest ``CONCURSO``."""
+
+    def concurso_key(value: Any) -> Tuple[int, Any]:
+        try:
+            return 0, int(value)
+        except (TypeError, ValueError):
+            return 1, str(value)
+
+    ordered = sorted(
+        zip(history.concursos, history.dates, history.winning_numbers),
+        key=lambda row: concurso_key(row[0]),
+    )
+
+    return DrawHistoryDTO(
+        concursos=[concurso for concurso, _, _ in ordered],
+        dates=[date for _, date, _ in ordered],
+        winning_numbers=[numbers for _, _, numbers in ordered],
+    )
+
+
 @dataclass
 class PredictionConfigDTO:
     total_balls: int

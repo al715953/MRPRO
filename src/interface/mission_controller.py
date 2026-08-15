@@ -8,7 +8,7 @@ import sys
 from colorama import Fore, Style
 from rich.panel import Panel
 from rich.table import Table
-from src.domain.dtos import PredictionConfigDTO
+from src.domain.dtos import PredictionConfigDTO, sort_history_chronologically
 from src.data_access.config import (
     BEST_SETTINGS,
     BEST_SETTINGS_TRIS,
@@ -209,13 +209,14 @@ class MissionController:
         config = PredictionConfigDTO(
             TOTAL_BALLS, TICKET_SIZE, n_prod, filter_overrides=BEST_SETTINGS
         )
+        production_history = sort_history_chronologically(self.history)
 
         print(f"   {Fore.YELLOW}⏳ Paso 1: Filtrado Titanium...{Style.RESET_ALL}")
-        univ_res = UniverseReductionStrategy().predict(self.history, config)
+        univ_res = UniverseReductionStrategy().predict(production_history, config)
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
         print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
-        pred = GeneticSelectorStrategy().predict(self.history, config)
+        pred = GeneticSelectorStrategy().predict(production_history, config)
 
         if pred.tickets:
             report.guardar_prediccion(pred.tickets, proximo_id)
@@ -341,7 +342,8 @@ class MissionController:
         )
 
         predictor = TrisForecastV1A()
-        pred = predictor.predict(self.history, config)
+        production_history = sort_history_chronologically(self.history)
+        pred = predictor.predict(production_history, config)
 
         preview_n = min(10, len(pred.tickets))
         self.ui.console.print(

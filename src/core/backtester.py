@@ -22,7 +22,11 @@ try:
 except ImportError:
     HAS_CUPY = False
 
-from src.domain.dtos import DrawHistoryDTO, BacktestResultDTO
+from src.domain.dtos import (
+    BacktestResultDTO,
+    DrawHistoryDTO,
+    sort_history_chronologically,
+)
 from src.core.rules import MelateRetroRules
 from src.core.analytics import PerformanceTracker
 from src.core.forensics import LotteryForensics
@@ -216,9 +220,13 @@ class BacktestEngine:
             and strategy.__class__.__name__ == "UniverseReductionStrategy"
         )
 
-        full_h = sorted(
-            zip(history.dates, history.winning_numbers, history.concursos),
-            key=lambda x: x[2],
+        chronological_history = sort_history_chronologically(history)
+        full_h = list(
+            zip(
+                chronological_history.dates,
+                chronological_history.winning_numbers,
+                chronological_history.concursos,
+            )
         )
         test_size = min(config.backtest_size, len(full_h))
         start_idx = len(full_h) - test_size
