@@ -13,6 +13,7 @@ from src.data_access.config import (
     BEST_SETTINGS,
     BEST_SETTINGS_TRIS,
     BEST_SETTINGS_TRIS_CAMERA_LAB,
+    BACKTEST_MODEL_FILE_PATH,
     TOTAL_BALLS,
     TICKET_SIZE,
     VERSION_TAG,
@@ -170,8 +171,15 @@ class MissionController:
         if sub_op == "1":
             engine.run(UniverseReductionStrategy(), self.history, config, verbose=True)
         elif sub_op == "2":
+            if not Path(BACKTEST_MODEL_FILE_PATH).exists():
+                self.ui.console.print(
+                    "[bold red]❌ Falta el modelo temporal de backtest.[/] "
+                    "Ejecuta primero la opción 4 para reentrenar el cerebro."
+                )
+                input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
+                return
             engine.run(
-                GeneticSelectorStrategy(),
+                GeneticSelectorStrategy(model_path=BACKTEST_MODEL_FILE_PATH),
                 self.history,
                 config,
                 True,
@@ -217,6 +225,14 @@ class MissionController:
 
         print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
         pred = GeneticSelectorStrategy().predict(production_history, config)
+
+        if pred.metadata.get("ai_signal_validated") is False:
+            auc = pred.metadata.get("temporal_holdout_auc")
+            auc_text = f" (AUC temporal: {float(auc):.4f})" if auc is not None else ""
+            self.ui.console.print(
+                "[yellow]⚠ Señal de IA activa, pero todavía no validada fuera de muestra"
+                f"{auc_text}. Su score sí participa en la selección.[/]"
+            )
 
         if pred.tickets:
             report.guardar_prediccion(pred.tickets, proximo_id)

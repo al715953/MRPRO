@@ -14,9 +14,9 @@ class ResonanceEngine:
     - Fallback a Random inteligente si el cerebro falla, para no detener la simulación.
     """
 
-    def __init__(self):
+    def __init__(self, model_path=None):
         # 1. Búsqueda de Modelo (Ruta Absoluta Dinámica)
-        self.model_path = MODEL_FILE_PATH
+        self.model_path = model_path or MODEL_FILE_PATH
         self.bst = None
         self._matrix_cache = {"cluster_matrix": None}
 
@@ -36,6 +36,38 @@ class ResonanceEngine:
                 self.bst.load_model("mrpro_model_v8_static.json")
             else:
                 print(f"❌ FATAL: Model not found at {self.model_path} or local.")
+
+    @property
+    def training_cutoff_contest(self):
+        """Last contest visible during training, when the model records it."""
+        if self.bst is None:
+            return None
+        raw = self.bst.attr("trained_through_concurso")
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def temporal_holdout_auc(self):
+        if self.bst is None:
+            return None
+        raw = self.bst.attr("temporal_holdout_auc")
+        try:
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def ai_signal_enabled(self):
+        """A loaded model remains active; validation is reported separately."""
+        return self.bst is not None
+
+    @property
+    def ai_signal_validated(self):
+        """Whether the model beat the minimum out-of-sample ranking threshold."""
+        auc = self.temporal_holdout_auc
+        return auc is None or auc >= 0.51
 
     def calculate_resonance(self, u_xp, history, config, xp):
         # 0. Validación Básica
@@ -59,6 +91,7 @@ class ResonanceEngine:
         # 4. AI Score (Con Red de Seguridad para Ceros)
         n_candidates = len(u_xp)
 
+        ai_prediction_ok = False
         if self.bst:
             try:
                 # Conversión segura a CPU uint8
@@ -70,6 +103,7 @@ class ResonanceEngine:
                 dtest = xgb.DMatrix(candidates_cpu)
                 ai_scores_cpu = self.bst.predict(dtest)
                 ai_scores = xp.asarray(ai_scores_cpu)
+                ai_prediction_ok = True
             except Exception as e:
                 print(f"⚠️ AI Prediction Failed: {e}")
                 ai_scores = xp.zeros(n_candidates, dtype=xp.float32)
@@ -83,9 +117,11 @@ class ResonanceEngine:
         if div == 0:
             div = 1.0
         ai_norm = (ai_scores - ai_min) / div
+        ai_active = bool(ai_prediction_ok and self.ai_signal_enabled)
+        ai_effective = ai_norm if ai_active else xp.zeros_like(ai_norm)
 
         # 6. Lógica V8.1 (Safety Net + Hybrid Cutoff)
-        hybrid_signal = (ai_norm + geo_scores) / 2.0
+        hybrid_signal = (ai_effective + geo_scores) / 2.0
 
         # CORRECCIÓN V8.2: Si todo es cero (Hybrid=0), inyectamos ruido minúsculo
         # para que el sorteo tenga orden y no Rank #0
@@ -102,7 +138,7 @@ class ResonanceEngine:
             radar_indices = xp.argsort(hybrid_signal)[-100:]  # Top 100 forzoso
 
         u_reduced = u_xp[radar_indices]
-        ai_subset = ai_norm[radar_indices]
+        ai_subset = ai_effective[radar_indices]
         geo_subset = geo_scores[radar_indices]
 
         # Safety Net Logic (Si AI < 0.15, Geo manda 90%)
@@ -130,6 +166,9 @@ class ResonanceEngine:
             "geo_scores": geo_scores,
             "geo_matrix_xp": geo_matrix_xp,
             "thermal_numbers": thermal_numbers,
+            "ai_signal_enabled": ai_active,
+            "ai_signal_validated": self.ai_signal_validated,
+            "temporal_holdout_auc": self.temporal_holdout_auc,
         }
 
     def _build_nexus_matrix(self, history, n_balls):

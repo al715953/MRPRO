@@ -101,5 +101,8 @@ class LotteryForensics:
             "hybrid_score": float(scores_cpu[idx_best]),
             "ai_score": float(snapshot.get("ai_scores", [0])[idx_best]),
             "geo_score": float(snapshot.get("geo_scores", [0])[idx_best]),
+            "ai_signal_enabled": bool(snapshot.get("ai_signal_enabled", True)),
+            "ai_signal_validated": bool(snapshot.get("ai_signal_validated", True)),
+            "temporal_holdout_auc": snapshot.get("temporal_holdout_auc"),
             "sniper_log": snapshot.get("sniper_msg", "N/A"),
         }

@@ -230,6 +230,41 @@ class BacktestEngine:
         )
         test_size = min(config.backtest_size, len(full_h))
         start_idx = len(full_h) - test_size
+        training_cutoff = getattr(strategy, "training_cutoff_contest", None)
+        temporal_auc = getattr(strategy, "temporal_holdout_auc", None)
+        model_ai_enabled = getattr(strategy, "ai_signal_enabled", True)
+        model_ai_validated = getattr(strategy, "ai_signal_validated", True)
+        if verbose and temporal_auc is not None:
+            ai_status = "ON" if model_ai_enabled else "OFF"
+            validation_status = "VALIDADA" if model_ai_validated else "NO VALIDADA"
+            status_color = "green" if model_ai_validated else "yellow"
+            self.console.print(
+                f"[{status_color}]AI temporal: {ai_status} ({validation_status})[/] | "
+                f"AUC fuera de muestra: {float(temporal_auc):.4f} | "
+                "umbral: 0.5100"
+            )
+        if training_cutoff is not None:
+            unseen_start_idx = next(
+                (
+                    idx
+                    for idx, (_, _, contest) in enumerate(full_h)
+                    if int(contest) > int(training_cutoff)
+                ),
+                len(full_h),
+            )
+            start_idx = max(start_idx, unseen_start_idx)
+            test_size = len(full_h) - start_idx
+            if test_size <= 0:
+                raise ValueError(
+                    "El modelo ya fue entrenado con todos los sorteos solicitados. "
+                    "Reentrena para generar el modelo temporal de backtest."
+                )
+            if verbose and unseen_start_idx > len(full_h) - config.backtest_size:
+                self.console.print(
+                    "[yellow]⚠ Backtest temporal:[/] se evaluarán solo "
+                    f"{test_size} sorteos posteriores al concurso "
+                    f"#{int(training_cutoff)}."
+                )
         tracking_ctx = self._build_tracking_context(config, history, test_size)
         strategy_model_version = getattr(strategy, "model_version", "")
         is_tris_profile = tracking_ctx["profile_code"] == "tris_multiplicador" or (
@@ -1989,6 +2024,7 @@ class BacktestEngine:
             audit.get("hits", 0),
         )
         ai_s = audit.get("ai_score", 0.0)
+        ai_enabled = bool(audit.get("ai_signal_enabled", True))
         geo_s = audit.get("geo_score", 0.0)
         u_s = audit.get("univ_size", 0)
 
@@ -2005,11 +2041,12 @@ class BacktestEngine:
         d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
         status = "🎯 HIT" if d == 0 else "❌"
 
+        ai_cell = f"{ai_s:.4f}" if ai_enabled else "OFF"
         line = (
             f"[bold blue]#{t_id}[/] | "
             f"U: {u_s:>6,d} | "
             f"[{h_c}]{h}/{max_hits}[/] | "
-            f"AI: [bold yellow]{ai_s:.4f}[/] | "
+            f"AI: [bold yellow]{ai_cell:>6}[/] | "
             f"Geo: [bold cyan]{geo_s:.4f}[/] | "
             f"Rank: #{r:<5} | "
             f"Dist: [{d_c}]{d:<4}[/] | "

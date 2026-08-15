@@ -38,8 +38,24 @@ class GeneticSelectorStrategy:
     - Next 10: STRIDE 2 (12, 14, 16... 30). Cubre hasta el Rank 30.
     """
 
-    def __init__(self):
-        self.resonance_engine = ResonanceEngine()
+    def __init__(self, model_path=None):
+        self.resonance_engine = ResonanceEngine(model_path=model_path)
+
+    @property
+    def training_cutoff_contest(self):
+        return self.resonance_engine.training_cutoff_contest
+
+    @property
+    def temporal_holdout_auc(self):
+        return self.resonance_engine.temporal_holdout_auc
+
+    @property
+    def ai_signal_enabled(self):
+        return self.resonance_engine.ai_signal_enabled
+
+    @property
+    def ai_signal_validated(self):
+        return self.resonance_engine.ai_signal_validated
 
     def apply_omega_stride(self, u_pool, scores_pool, n_tickets, xp):
         if len(u_pool) == 0:
@@ -169,5 +185,8 @@ class GeneticSelectorStrategy:
                 "geo_scores": geo_raw.get() if hasattr(geo_raw, "get") else geo_raw,
                 "hybrid_scores": full_hybrid_map,
                 "tickets": final_tickets,
+                "ai_signal_enabled": res.get("ai_signal_enabled", True),
+                "ai_signal_validated": res.get("ai_signal_validated", True),
+                "temporal_holdout_auc": res.get("temporal_holdout_auc"),
             },
         )
