@@ -17,6 +17,7 @@ from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.universe_reduction import UniverseReductionStrategy
 
 from .baselines import (
+    iter_random_same_size,
     random_coverage_distribution,
     random_same_size_indices,
     score_against_random,
@@ -34,6 +35,10 @@ from .covering import CombinatorialProblem
 from .greedy import DesignSolution, greedy_maximum_coverage
 from .local_search import improve_by_local_search
 from .metrics import coverage_metrics, max_ticket_hits, validate_ticket_matrix
+from .multiobjective import (
+    improve_weighted_local_search,
+    weighted_greedy_maximum_coverage,
+)
 from .statistics import (
     exact_mcnemar,
     paired_block_bootstrap_ci,
@@ -53,10 +58,12 @@ METHOD_CURRENT_RESTRICTED = "CURRENT_MRPRO_RESTRICTED"
 @dataclass(frozen=True)
 class DesignBundle:
     problem: CombinatorialProblem
+    problems_by_t: dict[int, CombinatorialProblem]
     greedy: DesignSolution
     local: DesignSolution
     metrics: dict[str, dict[str, Any]]
     random: dict[str, Any]
+    multiobjective: dict[str, Any] | None = None
 
 
 def build_design_bundle(
@@ -80,23 +87,71 @@ def build_design_bundle(
         max_target_subsets=config.max_target_subsets,
         max_incidences=config.max_incidences,
     )
-    greedy = greedy_maximum_coverage(
-        problem,
-        config.ticket_budget,
-        config.coverage_target,
-    )
-    local = improve_by_local_search(
-        problem,
-        greedy,
-        max_iterations=config.local_search_iterations,
-        coverage_target=config.coverage_target,
-    )
+    problems_by_t = {int(t): problem}
+    secondary_t = config.secondary_target_subset_size
+    weights = {int(t): 1.0}
+    mixed_greedy = None
+    mixed_local = None
+    if secondary_t is not None:
+        secondary_t = int(secondary_t)
+        problems_by_t[secondary_t] = CombinatorialProblem.build(
+            canonical_numbers,
+            ticket_size,
+            secondary_t,
+            max_candidate_tickets=config.max_candidate_tickets,
+            max_target_subsets=config.max_target_subsets,
+            max_incidences=config.max_incidences,
+        )
+        weight_total = float(
+            config.primary_target_weight + config.secondary_target_weight
+        )
+        weights = {
+            int(t): float(config.primary_target_weight / weight_total),
+            secondary_t: float(config.secondary_target_weight / weight_total),
+        }
+        mixed_greedy = weighted_greedy_maximum_coverage(
+            problems_by_t,
+            weights,
+            config.ticket_budget,
+            config.coverage_target,
+        )
+        mixed_local = improve_weighted_local_search(
+            problems_by_t,
+            weights,
+            mixed_greedy,
+            max_iterations=config.local_search_iterations,
+        )
+        greedy = mixed_greedy.solution
+        local = mixed_local.solution
+    else:
+        greedy = greedy_maximum_coverage(
+            problem,
+            config.ticket_budget,
+            config.coverage_target,
+        )
+        local = improve_by_local_search(
+            problem,
+            greedy,
+            max_iterations=config.local_search_iterations,
+            coverage_target=config.coverage_target,
+        )
+
+    def metrics_for(indices) -> dict[str, Any]:
+        primary = coverage_metrics(problem, indices)
+        coverage_by_t = {
+            str(target_size): coverage_metrics(target_problem, indices)["coverage_t"]
+            for target_size, target_problem in problems_by_t.items()
+        }
+        primary["coverage_by_t"] = coverage_by_t
+        primary["weighted_coverage"] = float(
+            sum(weights[target_size] * coverage_by_t[str(target_size)] for target_size in problems_by_t)
+        )
+        return primary
+
     metrics = {
-        METHOD_GREEDY: coverage_metrics(problem, greedy.ticket_indices),
-        METHOD_LOCAL: coverage_metrics(problem, local.ticket_indices),
-        METHOD_EXHAUSTIVE: coverage_metrics(
-            problem, np.arange(problem.n_tickets, dtype=np.int64)
-        ),
+        METHOD_GREEDY: metrics_for(greedy.ticket_indices),
+        METHOD_LOCAL: metrics_for(local.ticket_indices),
+        METHOD_EXHAUSTIVE: metrics_for(np.arange(problem.n_tickets, dtype=np.int64)),
     }
     random = {}
     for method in (METHOD_GREEDY, METHOD_LOCAL):
@@ -107,6 +162,39 @@ def build_design_bundle(
             config.random_trials,
             config.random_seed + (0 if method == METHOD_GREEDY else 1),
         )
+        if len(problems_by_t) > 1:
+            raw_by_t = {str(target_size): [] for target_size in problems_by_t}
+            raw_weighted = []
+            for indices in iter_random_same_size(
+                problem.n_tickets,
+                ticket_count,
+                config.random_trials,
+                config.random_seed + (0 if method == METHOD_GREEDY else 1),
+            ):
+                coverage_by_t = {
+                    target_size: coverage_metrics(target_problem, indices)["coverage_t"]
+                    for target_size, target_problem in problems_by_t.items()
+                }
+                for target_size, value in coverage_by_t.items():
+                    raw_by_t[str(target_size)].append(float(value))
+                raw_weighted.append(
+                    float(
+                        sum(
+                            weights[target_size] * coverage_by_t[target_size]
+                            for target_size in problems_by_t
+                        )
+                    )
+                )
+            distribution["coverage_by_t"] = {
+                target_size: summarize_distribution(values)
+                for target_size, values in raw_by_t.items()
+            }
+            distribution["raw_coverage_by_t"] = raw_by_t
+            distribution["weighted_coverage"] = summarize_distribution(raw_weighted)
+            distribution["raw_weighted_coverage"] = raw_weighted
+            distribution["optimized_comparison_weighted"] = score_against_random(
+                metrics[method]["weighted_coverage"], raw_weighted
+            )
         optimized_coverage = metrics[method]["coverage_t"]
         random_mean = distribution["coverage"]["mean"] or 0.0
         distribution["optimized_comparison"] = {
@@ -120,7 +208,24 @@ def build_design_bundle(
             ),
         }
         random[method] = distribution
-    return DesignBundle(problem, greedy, local, metrics, random)
+    multiobjective = None
+    if mixed_greedy is not None and mixed_local is not None:
+        multiobjective = {
+            "target_weights": {str(key): value for key, value in weights.items()},
+            "greedy_weighted_coverage": mixed_greedy.weighted_coverage,
+            "local_weighted_coverage": mixed_local.weighted_coverage,
+            "greedy_objective_trace": list(mixed_greedy.objective_trace),
+            "local_objective_trace": list(mixed_local.objective_trace),
+        }
+    return DesignBundle(
+        problem,
+        problems_by_t,
+        greedy,
+        local,
+        metrics,
+        random,
+        multiobjective,
+    )
 
 
 def _map_solution_tickets(
@@ -364,6 +469,70 @@ def _statistical_comparisons(
     return comparisons
 
 
+def _temporal_fold_summaries(
+    *,
+    per_draw: list[dict[str, Any]],
+    candidate_hits: np.ndarray,
+    deterministic: dict[str, np.ndarray],
+    method_counts: dict[str, list[int]],
+    random_matrix: np.ndarray,
+    folds: int,
+    ticket_size: int,
+) -> list[dict[str, Any]]:
+    """Summarize contiguous evaluation folds without retuning on any fold."""
+
+    if not per_draw:
+        return []
+    split_count = min(max(1, int(folds)), len(per_draw))
+    output = []
+    for fold_idx, indices in enumerate(np.array_split(np.arange(len(per_draw)), split_count)):
+        if indices.size == 0:
+            continue
+        fold_methods = {}
+        for method, values in deterministic.items():
+            counts = np.asarray(method_counts[method], dtype=np.int32)[indices]
+            fold_methods[method] = _summarize_max_hits(
+                values[indices],
+                ticket_count=int(round(float(np.mean(counts)))),
+                ticket_size=ticket_size,
+            )
+        fold_candidate_hits = candidate_hits[indices]
+        output.append(
+            {
+                "fold": int(fold_idx + 1),
+                "role": (
+                    "holdout_test" if fold_idx == split_count - 1 else "walk_forward_evaluation"
+                ),
+                "draw_range": [
+                    int(per_draw[int(indices[0])]["draw_id"]),
+                    int(per_draw[int(indices[-1])]["draw_id"]),
+                ],
+                "draws": int(indices.size),
+                "candidate_hit_distribution": {
+                    str(hit): int(np.sum(fold_candidate_hits == hit))
+                    for hit in range(ticket_size + 1)
+                },
+                "methods": fold_methods,
+                "random_same_size": _random_historical_summary(
+                    random_matrix[:, indices],
+                    ticket_count=int(
+                        round(
+                            float(
+                                np.mean(
+                                    np.asarray(method_counts[METHOD_GREEDY], dtype=np.int32)[
+                                        indices
+                                    ]
+                                )
+                            )
+                        )
+                    ),
+                    ticket_size=ticket_size,
+                ),
+            }
+        )
+    return output
+
+
 def run_historical_experiment(
     history: DrawHistoryDTO,
     config: CoveringExperimentConfig,
@@ -573,6 +742,16 @@ def run_historical_experiment(
     }
     dataset = compute_dataset_version(CSV_FILE_PATH)
 
+    temporal_folds = _temporal_fold_summaries(
+        per_draw=per_draw,
+        candidate_hits=candidate_array,
+        deterministic=deterministic_arrays,
+        method_counts=method_counts_values,
+        random_matrix=random_matrix,
+        folds=config.temporal_folds,
+        ticket_size=ticket_size,
+    )
+
     return {
         "candidate_method": config.candidate_method,
         "predictive_claim_allowed": config.candidate_method not in {
@@ -602,12 +781,17 @@ def run_historical_experiment(
             config,
             ticket_size,
         ),
+        "temporal_folds": temporal_folds,
+        "temporal_fold_warning": (
+            "Folds contiguos de evaluación; no se ajustaron pesos ni hiperparámetros "
+            "con sus resultados."
+        ),
         "per_draw": per_draw,
     }
 
 
 def design_bundle_to_dict(bundle: DesignBundle) -> dict[str, Any]:
-    return {
+    payload = {
         "problem": bundle.problem.estimate.to_dict(),
         "methods": bundle.metrics,
         "local_search": {
@@ -622,3 +806,10 @@ def design_bundle_to_dict(bundle: DesignBundle) -> dict[str, Any]:
         "greedy_coverage_trace": [int(value) for value in bundle.greedy.coverage_trace],
         "random_same_size": bundle.random,
     }
+    if bundle.multiobjective is not None:
+        payload["multiobjective"] = bundle.multiobjective
+        payload["problems_by_t"] = {
+            str(target_size): problem.estimate.to_dict()
+            for target_size, problem in bundle.problems_by_t.items()
+        }
+    return payload

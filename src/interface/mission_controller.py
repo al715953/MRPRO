@@ -21,6 +21,7 @@ from src.data_access.config import (
 )
 from src.strategies.universe_reduction import UniverseReductionStrategy
 from src.strategies.genetic_selector import GeneticSelectorStrategy
+from src.strategies.combinatorial.shadow import build_promoted_covering_shadows
 from src.strategies.tris.tris_forecast import TrisForecastV1A
 from src.core.backtester import BacktestEngine
 from src.core.optimizer import StrategyOptimizer
@@ -315,6 +316,21 @@ class MissionController:
                     }
                 )
 
+            covering_shadow_count = 0
+            try:
+                covering_variants = build_promoted_covering_shadows(
+                    pred.metadata,
+                    total_balls=TOTAL_BALLS,
+                    ticket_size=TICKET_SIZE,
+                )
+                shadow_variants.extend(covering_variants)
+                covering_shadow_count = len(covering_variants)
+            except Exception as exc:
+                self.ui.console.print(
+                    "[bold yellow]⚠ Las sombras covering no pudieron generarse; "
+                    f"producción y sombras existentes continúan:[/] {exc}"
+                )
+
             report.guardar_prediccion(pred.tickets, proximo_id)
             report.generar_ticket_limpio(pred.tickets, proximo_id)
             try:
@@ -326,7 +342,13 @@ class MissionController:
                 if saved:
                     self.ui.console.print(
                         "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 10/90 + "
-                        "Geo guardados sin inversión adicional."
+                        "Geo"
+                        + (
+                            f" + {covering_shadow_count} covering"
+                            if covering_shadow_count
+                            else ""
+                        )
+                        + " guardados sin inversión adicional."
                     )
                 else:
                     self.ui.console.print(

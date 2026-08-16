@@ -79,6 +79,10 @@ def test_shadow_liquidation_is_simulated_and_idempotent(tmp_path):
     assert control["hits_4"] == 1
     assert control["simulated_prize"] == 150.0
     assert second["variants"] == first["variants"]
+    assert principal["tickets_per_contest"] == 2.0
+    assert principal["avg_max_hits"] == 6.0
+    assert principal["contest_rate_ge_4"] == 1.0
+    assert principal["high_hit_tickets_per_1000"] == 500.0
 
 
 def test_shadow_liquidation_keeps_future_contest_pending(tmp_path):

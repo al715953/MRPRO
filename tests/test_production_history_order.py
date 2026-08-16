@@ -70,6 +70,28 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
 
     monkeypatch.setattr(mission_module, "UniverseReductionStrategy", ReducerStub)
     monkeypatch.setattr(mission_module, "GeneticSelectorStrategy", SelectorStub)
+    monkeypatch.setattr(
+        mission_module,
+        "build_promoted_covering_shadows",
+        lambda *_args, **_kwargs: [
+            {
+                "key": "cover_mixed_v20_m300",
+                "label": "Cover V20",
+                "official": False,
+                "settings": {"shadow_family": "combinatorial_covering"},
+                "tickets": [[1, 2, 3, 4, 5, 6]],
+                "metadata": {"candidate_pool_size": 20},
+            },
+            {
+                "key": "cover_mixed_v18_m300",
+                "label": "Cover V18",
+                "official": False,
+                "settings": {"shadow_family": "combinatorial_covering"},
+                "tickets": [[1, 2, 3, 4, 5, 6]],
+                "metadata": {"candidate_pool_size": 18},
+            },
+        ],
+    )
     monkeypatch.setattr(mission_module.report, "tiene_apuestas_pendientes", lambda _: False)
     monkeypatch.setattr(mission_module.report, "guardar_prediccion", lambda *_: None)
     monkeypatch.setattr(mission_module.report, "generar_ticket_limpio", lambda *_: None)
@@ -94,8 +116,16 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         "principal_ai_adaptive",
         "challenger_ai10_geo90",
         "control_geo_only",
+        "cover_mixed_v20_m300",
+        "cover_mixed_v18_m300",
     ]
-    assert [variant["official"] for variant in variants] == [True, False, False]
+    assert [variant["official"] for variant in variants] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
     assert variants[1]["settings"]["hybrid_alpha"] == 0.10
     assert variants[2]["settings"]["hybrid_alpha"] == 0.0
 

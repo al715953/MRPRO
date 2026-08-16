@@ -55,6 +55,9 @@ def execute_sweep(
     *,
     v_values: list[int],
     t_values: list[int],
+    secondary_t: int | None,
+    primary_weight: float,
+    secondary_weight: float,
     budgets: list[int],
     candidate_method: str,
     random_trials: int,
@@ -64,6 +67,8 @@ def execute_sweep(
     backtest_draws: int,
     include_current: bool,
     current_tickets: int,
+    temporal_folds: int,
+    candidate_rank_depth: int,
     explicit_candidates: list[int] | None,
     mode: str,
 ) -> dict:
@@ -85,6 +90,11 @@ def execute_sweep(
         config = CoveringExperimentConfig(
             candidate_pool_size=int(v),
             target_subset_size=int(t),
+            secondary_target_subset_size=(
+                int(secondary_t) if secondary_t is not None else None
+            ),
+            primary_target_weight=float(primary_weight),
+            secondary_target_weight=float(secondary_weight),
             ticket_budget=int(budget),
             random_trials=int(random_trials),
             random_seed=int(seed),
@@ -95,6 +105,8 @@ def execute_sweep(
             backtest_draws=int(backtest_draws),
             include_current_mrpro=bool(include_current),
             current_mrpro_ticket_count=int(current_tickets),
+            temporal_folds=int(temporal_folds),
+            candidate_rank_depth=int(candidate_rank_depth),
         )
         row = {
             "status": "pending",
@@ -141,6 +153,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--v", default="15", help="Lista: 10,12,15,18,20")
     parser.add_argument("--t", default="k-1", help="Lista: k-1,k-2")
+    parser.add_argument(
+        "--secondary-t",
+        default="",
+        help="Segundo objetivo opcional, por ejemplo k-2",
+    )
+    parser.add_argument("--primary-weight", type=float, default=0.5)
+    parser.add_argument("--secondary-weight", type=float, default=0.5)
     parser.add_argument("--budget", default="300", help="Lista: 50,100,200,300")
     parser.add_argument(
         "--candidate-method",
@@ -158,6 +177,8 @@ def main() -> None:
     parser.add_argument("--local-iterations", type=int, default=100)
     parser.add_argument("--coverage-target", type=float, default=1.0)
     parser.add_argument("--draws", type=int, default=108)
+    parser.add_argument("--temporal-folds", type=int, default=3)
+    parser.add_argument("--candidate-rank-depth", type=int, default=500)
     parser.add_argument("--no-current", action="store_true")
     parser.add_argument("--current-tickets", type=int, default=24)
     parser.add_argument("--mode", choices=("math", "historical", "both"), default="both")
@@ -166,11 +187,18 @@ def main() -> None:
 
     v_values = _parse_int_list(args.v)
     t_values = _resolve_t_values(args.t, TICKET_SIZE)
+    secondary_values = _resolve_t_values(args.secondary_t, TICKET_SIZE)
+    if len(secondary_values) > 1:
+        parser.error("--secondary-t acepta un solo valor")
+    secondary_t = secondary_values[0] if secondary_values else None
     budgets = _parse_int_list(args.budget)
     explicit = _parse_int_list(args.explicit) if args.explicit else None
     payload = execute_sweep(
         v_values=v_values,
         t_values=t_values,
+        secondary_t=secondary_t,
+        primary_weight=args.primary_weight,
+        secondary_weight=args.secondary_weight,
         budgets=budgets,
         candidate_method=args.candidate_method,
         random_trials=args.random_trials,
@@ -180,6 +208,8 @@ def main() -> None:
         backtest_draws=args.draws,
         include_current=not args.no_current,
         current_tickets=args.current_tickets,
+        temporal_folds=args.temporal_folds,
+        candidate_rank_depth=args.candidate_rank_depth,
         explicit_candidates=explicit,
         mode=args.mode,
     )

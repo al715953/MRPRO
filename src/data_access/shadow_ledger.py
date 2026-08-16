@@ -71,6 +71,19 @@ def _compact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         "hybrid_alpha",
         "hybrid_beta",
         "selected_ranks",
+        "shadow_family",
+        "candidate_method",
+        "candidate_pool_size",
+        "candidate_rank_depth",
+        "candidate_numbers",
+        "ticket_budget",
+        "ticket_count",
+        "coverage_algorithm",
+        "target_subset_sizes",
+        "target_weights",
+        "local_search_iterations",
+        "coverage_by_t",
+        "weighted_coverage",
     )
     compact = {}
     for key in keys:
@@ -180,6 +193,10 @@ def _aggregate(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     "hits_4": 0,
                     "hits_5": 0,
                     "hits_6": 0,
+                    "max_hits_sum": 0,
+                    "contests_ge_4": 0,
+                    "contests_ge_5": 0,
+                    "contests_eq_6": 0,
                     "simulated_investment": 0.0,
                     "simulated_prize": 0.0,
                     "simulated_net": 0.0,
@@ -191,11 +208,35 @@ def _aggregate(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
             row["hits_4"] += int(distribution.get("4", 0))
             row["hits_5"] += int(distribution.get("5", 0))
             row["hits_6"] += int(distribution.get("6", 0))
+            max_hits = int(validation.get("max_hits", 0))
+            row["max_hits_sum"] += max_hits
+            row["contests_ge_4"] += int(max_hits >= 4)
+            row["contests_ge_5"] += int(max_hits >= 5)
+            row["contests_eq_6"] += int(max_hits == 6)
             row["simulated_investment"] += float(
                 validation.get("simulated_investment", 0.0)
             )
             row["simulated_prize"] += float(validation.get("simulated_prize", 0.0))
             row["simulated_net"] += float(validation.get("simulated_net", 0.0))
+    for row in summary.values():
+        contests = int(row["contests"])
+        tickets = int(row["tickets"])
+        high_hit_tickets = int(row["hits_4"] + row["hits_5"] + row["hits_6"])
+        row["tickets_per_contest"] = (
+            float(tickets / contests) if contests else 0.0
+        )
+        row["avg_max_hits"] = (
+            float(row["max_hits_sum"] / contests) if contests else 0.0
+        )
+        row["contest_rate_ge_4"] = (
+            float(row["contests_ge_4"] / contests) if contests else 0.0
+        )
+        row["contest_rate_ge_5"] = (
+            float(row["contests_ge_5"] / contests) if contests else 0.0
+        )
+        row["high_hit_tickets_per_1000"] = (
+            float(1000.0 * high_hit_tickets / tickets) if tickets else 0.0
+        )
     return summary
 
 
@@ -269,9 +310,12 @@ def mostrar_resumen_sombra(summary: dict[str, Any] | None) -> None:
     )
     table.add_column("Variante", style="cyan")
     table.add_column("Sorteos", justify="right")
-    table.add_column("4/6", justify="right")
-    table.add_column("5/6", justify="right")
+    table.add_column("M/S", justify="right")
+    table.add_column("Max prom.", justify="right")
+    table.add_column("S≥4", justify="right")
+    table.add_column("S≥5", justify="right")
     table.add_column("6/6", justify="right")
+    table.add_column("≥4/1k", justify="right")
     table.add_column("Premio sim.", justify="right")
     table.add_column("Neto sim.", justify="right")
 
@@ -280,9 +324,12 @@ def mostrar_resumen_sombra(summary: dict[str, Any] | None) -> None:
         table.add_row(
             label,
             f"{row['contests']}/{summary.get('target_draws', VALIDATION_TARGET_DRAWS)}",
-            str(row["hits_4"]),
-            str(row["hits_5"]),
-            str(row["hits_6"]),
+            f"{row['tickets_per_contest']:.0f}",
+            f"{row['avg_max_hits']:.2f}",
+            f"{row['contests_ge_4']} ({row['contest_rate_ge_4']:.1%})",
+            f"{row['contests_ge_5']} ({row['contest_rate_ge_5']:.1%})",
+            str(row["contests_eq_6"]),
+            f"{row['high_hit_tickets_per_1000']:.2f}",
             f"${row['simulated_prize']:,.2f}",
             f"${row['simulated_net']:,.2f}",
         )

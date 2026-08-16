@@ -65,6 +65,35 @@ def test_oracle_historical_experiment_is_explicit_and_walk_forward():
     )
     assert result["methods"][METHOD_EXHAUSTIVE]["hit_rate_eq_4"] == 1.0
     assert result["random_same_size"]["trials"] == 12
+    assert len(result["temporal_folds"]) == 3
+    assert result["temporal_folds"][-1]["role"] == "holdout_test"
+
+
+def test_multiobjective_bundle_reports_both_target_coverages():
+    config = CoveringExperimentConfig(
+        candidate_pool_size=8,
+        target_subset_size=3,
+        secondary_target_subset_size=2,
+        primary_target_weight=0.6,
+        secondary_target_weight=0.4,
+        ticket_budget=12,
+        random_trials=5,
+        random_seed=17,
+        local_search_iterations=5,
+        candidate_method="random_candidate_set",
+        include_current_mrpro=False,
+    )
+
+    bundle = build_design_bundle(config, ticket_size=4)
+    metrics = bundle.metrics[METHOD_GREEDY]
+
+    assert set(metrics["coverage_by_t"]) == {"2", "3"}
+    np.testing.assert_allclose(
+        metrics["weighted_coverage"],
+        0.6 * metrics["coverage_by_t"]["3"]
+        + 0.4 * metrics["coverage_by_t"]["2"],
+    )
+    assert "weighted_coverage" in bundle.random[METHOD_GREEDY]
 
 
 def test_random_candidates_covering_and_random_use_same_ticket_count():

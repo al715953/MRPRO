@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
+
+_matplotlib_cache = Path(tempfile.gettempdir()) / "mrpro_matplotlib"
+_matplotlib_cache.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_matplotlib_cache))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -53,6 +59,8 @@ def _method_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
     for method in sorted(method_names):
         math_row = math_methods.get(method, {})
         history_row = history_methods.get(method, {})
+        coverage_by_t = math_row.get("coverage_by_t", {})
+        secondary_t = config.get("secondary_target_subset_size")
         rows.append(
             {
                 "candidate_method": config["candidate_method"],
@@ -63,6 +71,12 @@ def _method_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
                 "method": method,
                 "m": history_row.get("ticket_count", math_row.get("ticket_count")),
                 "coverage_t": math_row.get("coverage_t"),
+                "coverage_secondary": (
+                    coverage_by_t.get(str(secondary_t))
+                    if secondary_t is not None
+                    else None
+                ),
+                "weighted_coverage": math_row.get("weighted_coverage"),
                 "avg_max_hits": history_row.get("avg_max_hits"),
                 "hit_rate_ge_4": history_row.get("hit_rate_ge_4"),
                 "hit_rate_ge_5": history_row.get("hit_rate_ge_5"),
@@ -73,6 +87,11 @@ def _method_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
     random_history = historical.get("random_same_size", {})
     if random_math or random_history:
         distributions = random_history.get("metric_distributions", {})
+        secondary_t = config.get("secondary_target_subset_size")
+        random_secondary = random_math.get("coverage_by_t", {}).get(
+            str(secondary_t), {}
+        )
+        random_weighted = random_math.get("weighted_coverage", {})
         rows.append(
             {
                 "candidate_method": config["candidate_method"],
@@ -83,6 +102,8 @@ def _method_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
                 "method": "RANDOM_MEAN",
                 "m": random_history.get("ticket_count", random_math.get("ticket_count")),
                 "coverage_t": random_math.get("coverage", {}).get("mean"),
+                "coverage_secondary": random_secondary.get("mean"),
+                "weighted_coverage": random_weighted.get("mean"),
                 "avg_max_hits": distributions.get("avg_max_hits", {}).get("mean"),
                 "hit_rate_ge_4": distributions.get("hit_rate_ge_4", {}).get("mean"),
                 "hit_rate_ge_5": distributions.get("hit_rate_ge_5", {}).get("mean"),
@@ -99,6 +120,8 @@ def _method_rows(experiment: dict[str, Any]) -> list[dict[str, Any]]:
                 "method": "RANDOM_P95",
                 "m": random_history.get("ticket_count", random_math.get("ticket_count")),
                 "coverage_t": random_math.get("coverage", {}).get("p95"),
+                "coverage_secondary": random_secondary.get("p95"),
+                "weighted_coverage": random_weighted.get("p95"),
                 "avg_max_hits": distributions.get("avg_max_hits", {}).get("p95"),
                 "hit_rate_ge_4": distributions.get("hit_rate_ge_4", {}).get("p95"),
                 "hit_rate_ge_5": distributions.get("hit_rate_ge_5", {}).get("p95"),
@@ -287,6 +310,74 @@ def generate_plots(payload: dict[str, Any], output_prefix: Path) -> list[str]:
         fig.savefig(coverage_path, dpi=160)
         plt.close(fig)
         generated.append(str(coverage_path))
+
+        secondary_targets = sorted(
+            {
+                int(target_size)
+                for experiment in group
+                for metrics in (experiment.get("mathematical") or {})
+                .get("methods", {})
+                .values()
+                for target_size in metrics.get("coverage_by_t", {})
+            }
+        )
+        if len(secondary_targets) > 1:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = {secondary_targets[0]: "#2ca02c", secondary_targets[-1]: "#00a6d6"}
+            for target_size in secondary_targets:
+                optimized_points = []
+                random_mean_points = []
+                for experiment in group:
+                    mathematical = experiment.get("mathematical") or {}
+                    optimized = mathematical.get("methods", {}).get(METHOD_LOCAL, {})
+                    random = mathematical.get("random_same_size", {}).get(
+                        METHOD_LOCAL, {}
+                    )
+                    if str(target_size) in optimized.get("coverage_by_t", {}):
+                        optimized_points.append(
+                            (
+                                optimized["ticket_count"],
+                                optimized["coverage_by_t"][str(target_size)],
+                            )
+                        )
+                    random_target = random.get("coverage_by_t", {}).get(
+                        str(target_size), {}
+                    )
+                    if random_target:
+                        random_mean_points.append(
+                            (random["ticket_count"], random_target["mean"])
+                        )
+                if optimized_points:
+                    optimized_points.sort()
+                    ax.plot(
+                        *zip(*optimized_points),
+                        marker="o",
+                        color=colors[target_size],
+                        label=f"MIXED t={target_size}",
+                    )
+                if random_mean_points:
+                    random_mean_points.sort()
+                    ax.plot(
+                        *zip(*random_mean_points),
+                        marker=".",
+                        linestyle="--",
+                        color=colors[target_size],
+                        alpha=0.65,
+                        label=f"RANDOM t={target_size}",
+                    )
+            ax.set_xlabel("Número de boletos")
+            ax.set_ylabel("Coverage por objetivo")
+            ax.set_ylim(0, 1.02)
+            ax.grid(alpha=0.25)
+            ax.legend()
+            ax.set_title(f"Objetivo mixto v={v}, candidatos={candidate_method}")
+            fig.tight_layout()
+            multi_path = output_prefix.with_name(
+                output_prefix.name + f"_coverage_multi_v{v}.png"
+            )
+            fig.savefig(multi_path, dpi=160)
+            plt.close(fig)
+            generated.append(str(multi_path))
 
         historical_group = [row for row in group if row.get("historical")]
         if historical_group:

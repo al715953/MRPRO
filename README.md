@@ -17,7 +17,7 @@ sola vez y nunca reemplazan datos persistentes.
 El menú Melate incluye la opción `C`, y también puede ejecutarse directamente:
 
 ```bash
-python run_covering_experiment.py \
+python3 run_covering_experiment.py \
   --v 15 \
   --t k-1 \
   --budget 300 \
@@ -29,12 +29,40 @@ python run_covering_experiment.py \
 Para barridos matemáticos sin backtest:
 
 ```bash
-python run_covering_experiment.py \
+python3 run_covering_experiment.py \
   --mode math \
   --v 10,12,15,18,20 \
   --t k-1,k-2 \
   --budget 50,100,200,300,500,1000
 ```
+
+Objetivo mixto reproducible `t=5 + t=4`, con tres ventanas temporales:
+
+```bash
+python3 run_covering_experiment.py \
+  --v 15 --t k-1 --secondary-t k-2 \
+  --primary-weight 0.5 --secondary-weight 0.5 \
+  --budget 300 --candidate-method mrpro_candidate_set \
+  --draws 108 --temporal-folds 3 \
+  --output data/covering_mixed_mrpro_v15_m300.json
+```
+
+Los pesos se fijan antes del backtest. Las ventanas son resúmenes walk-forward
+contiguos y no deben utilizarse para reajustar el modelo que después se evalúa
+en la última ventana, etiquetada `holdout_test`.
+
+### Sombras covering prospectivas
+
+La opción de producción registra, sin inversión real y sin cambiar los boletos
+oficiales, dos carteras adicionales de 300 boletos:
+
+- `cover_mixed_v20_m300`: objetivo mixto 50/50 para `t=5` y `t=4`.
+- `cover_mixed_v18_m300`: control conservador con el mismo objetivo y presupuesto.
+
+Ambas usan el snapshot MRPRO generado antes del sorteo, `candidate_rank_depth=500`
+y se liquidan desde la opción 8 junto con las demás carteras sombra. El resumen
+normaliza resultados por sorteo y por 1,000 boletos para comparar presupuestos
+distintos sin confundir volumen con calidad.
 
 `oracle_candidate_set` inserta deliberadamente el resultado ganador dentro del
 conjunto candidato. Es un control matemático, no una estrategia predictiva. Los

@@ -19,6 +19,10 @@ from src.strategies.combinatorial.metrics import (
     coverage_metrics,
     validate_ticket_matrix,
 )
+from src.strategies.combinatorial.multiobjective import (
+    improve_weighted_local_search,
+    weighted_greedy_maximum_coverage,
+)
 
 
 @pytest.fixture(scope="module")
@@ -123,3 +127,33 @@ def test_guardrail_rejects_problem_before_enumeration():
             t=4,
             max_candidate_tickets=1_000,
         )
+
+
+def test_weighted_covering_is_monotonic_valid_and_fixed_size():
+    problems = {
+        3: CombinatorialProblem.build(range(1, 9), k=4, t=3),
+        2: CombinatorialProblem.build(range(1, 9), k=4, t=2),
+    }
+    weights = {3: 0.5, 2: 0.5}
+
+    greedy = weighted_greedy_maximum_coverage(problems, weights, ticket_budget=12)
+    local = improve_weighted_local_search(
+        problems,
+        weights,
+        greedy,
+        max_iterations=10,
+    )
+
+    assert len(greedy.solution.ticket_indices) == 12
+    assert len(local.solution.ticket_indices) == 12
+    assert len(set(local.solution.ticket_indices)) == 12
+    assert all(
+        right >= left
+        for left, right in zip(
+            greedy.objective_trace, greedy.objective_trace[1:]
+        )
+    )
+    assert local.weighted_coverage >= greedy.weighted_coverage
+    assert local.weighted_coverage == pytest.approx(
+        0.5 * local.coverage_by_t[3] + 0.5 * local.coverage_by_t[2]
+    )
