@@ -234,6 +234,7 @@ class BacktestEngine:
         temporal_auc = getattr(strategy, "temporal_holdout_auc", None)
         model_ai_enabled = getattr(strategy, "ai_signal_enabled", True)
         model_ai_validated = getattr(strategy, "ai_signal_validated", True)
+        number_temporal_auc = getattr(strategy, "number_temporal_holdout_auc", None)
         if verbose and temporal_auc is not None:
             ai_status = "ON" if model_ai_enabled else "OFF"
             validation_status = "VALIDADA" if model_ai_validated else "NO VALIDADA"
@@ -242,6 +243,15 @@ class BacktestEngine:
                 f"[{status_color}]AI temporal: {ai_status} ({validation_status})[/] | "
                 f"AUC fuera de muestra: {float(temporal_auc):.4f} | "
                 "umbral: 0.5100"
+            )
+        if verbose and number_temporal_auc is not None:
+            model_overrides = getattr(config, "filter_overrides", None) or {}
+            context_weight = float(model_overrides.get("ai_context_weight", 1.0))
+            number_weight = float(model_overrides.get("ai_number_weight", 0.0))
+            self.console.print(
+                "[cyan]AI ensemble:[/] "
+                f"contexto={context_weight:.2f}, números={number_weight:.2f} | "
+                f"AUC números={float(number_temporal_auc):.4f}"
             )
         if training_cutoff is not None:
             unseen_start_idx = next(

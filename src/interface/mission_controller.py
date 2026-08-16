@@ -3,6 +3,7 @@
 from pathlib import Path
 import src.data_access.report as report
 import src.data_access.scraper as scraper
+import src.data_access.shadow_ledger as shadow_ledger
 import subprocess
 import sys
 from colorama import Fore, Style
@@ -214,8 +215,13 @@ class MissionController:
         except:
             n_prod = 24
 
+        principal_settings = dict(BEST_SETTINGS)
+        principal_settings["resonance_blend_mode"] = "adaptive"
         config = PredictionConfigDTO(
-            TOTAL_BALLS, TICKET_SIZE, n_prod, filter_overrides=BEST_SETTINGS
+            TOTAL_BALLS,
+            TICKET_SIZE,
+            n_prod,
+            filter_overrides=principal_settings,
         )
         production_history = sort_history_chronologically(self.history)
 
@@ -224,7 +230,16 @@ class MissionController:
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
         print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
-        pred = GeneticSelectorStrategy().predict(production_history, config)
+        selector = GeneticSelectorStrategy()
+        pred = selector.predict(production_history, config)
+
+        if pred.metadata.get("ai_signal_enabled") is False:
+            self.ui.console.print(
+                "[bold red]❌ Producción cancelada:[/] el modelo principal de IA "
+                "no está disponible. No se guardaron apuestas ni carteras sombra."
+            )
+            input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
+            return
 
         if pred.metadata.get("ai_signal_validated") is False:
             auc = pred.metadata.get("temporal_holdout_auc")
@@ -235,8 +250,91 @@ class MissionController:
             )
 
         if pred.tickets:
+            shadow_specs = (
+                {
+                    "key": "principal_ai_adaptive",
+                    "label": "Principal IA adaptativa",
+                    "official": True,
+                    "settings": {
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                    },
+                    "prediction": pred,
+                },
+                {
+                    "key": "challenger_ai10_geo90",
+                    "label": "Sombra IA 10% / Geo 90%",
+                    "official": False,
+                    "settings": {
+                        "resonance_blend_mode": "fixed",
+                        "hybrid_alpha": 0.10,
+                        "hybrid_beta": 0.90,
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                    },
+                },
+                {
+                    "key": "control_geo_only",
+                    "label": "Control Geo puro",
+                    "official": False,
+                    "settings": {
+                        "resonance_blend_mode": "fixed",
+                        "hybrid_alpha": 0.0,
+                        "hybrid_beta": 1.0,
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                    },
+                },
+            )
+
+            shadow_variants = []
+            for spec in shadow_specs:
+                variant_pred = spec.get("prediction")
+                if variant_pred is None:
+                    variant_settings = dict(BEST_SETTINGS)
+                    variant_settings.update(spec["settings"])
+                    variant_config = PredictionConfigDTO(
+                        TOTAL_BALLS,
+                        TICKET_SIZE,
+                        n_prod,
+                        filter_overrides=variant_settings,
+                    )
+                    variant_config.raw_universe_ptr = config.raw_universe_ptr
+                    variant_pred = selector.predict(production_history, variant_config)
+                shadow_variants.append(
+                    {
+                        "key": spec["key"],
+                        "label": spec["label"],
+                        "official": spec["official"],
+                        "settings": spec["settings"],
+                        "tickets": variant_pred.tickets,
+                        "metadata": variant_pred.metadata,
+                    }
+                )
+
             report.guardar_prediccion(pred.tickets, proximo_id)
             report.generar_ticket_limpio(pred.tickets, proximo_id)
+            try:
+                saved = shadow_ledger.guardar_carteras_sombra(
+                    concurso_id=proximo_id,
+                    variants=shadow_variants,
+                    dataset_through_concurso=ultimo_id,
+                )
+                if saved:
+                    self.ui.console.print(
+                        "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 10/90 + "
+                        "Geo guardados sin inversión adicional."
+                    )
+                else:
+                    self.ui.console.print(
+                        f"[yellow]La comparación sombra del sorteo #{proximo_id} "
+                        "ya estaba registrada.[/]"
+                    )
+            except Exception as exc:
+                self.ui.console.print(
+                    f"[bold yellow]⚠ Apuestas guardadas, pero falló el ledger sombra:[/] {exc}"
+                )
             self.ui.show_prediction_results(pred)
             print(
                 f"\n{Fore.GREEN}🍀 Tickets bloqueados y listos en archivo .txt{Style.RESET_ALL}"
@@ -257,6 +355,13 @@ class MissionController:
         totales = report.liquidar_cartera(self.history)
         if totales:
             report.mostrar_resumen_roi(totales)
+        try:
+            shadow_summary = shadow_ledger.liquidar_carteras_sombra(self.history)
+            shadow_ledger.mostrar_resumen_sombra(shadow_summary)
+        except Exception as exc:
+            self.ui.console.print(
+                f"[bold yellow]⚠ No se pudo liquidar el ledger sombra:[/] {exc}"
+            )
         input(f"\n{Fore.YELLOW}>> Presiona ENTER para volver...{Style.RESET_ALL}")
 
     def _run_forensic_plot(self):

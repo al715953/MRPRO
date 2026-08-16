@@ -20,10 +20,15 @@ if not os.path.exists(DATA_FOLDER):
 # Archivos de Datos
 CSV_FILE_PATH = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
 FILE_APUESTAS = os.path.join(DATA_FOLDER, "Mis_Apuestas.csv")
+FILE_CARTERAS_SOMBRA = os.path.join(DATA_FOLDER, "Carteras_Sombra.json")
 MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
 MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
 BACKTEST_MODEL_FILE_PATH = os.path.join(
     DATA_FOLDER, "mrpro_model_v8_temporal_backtest.json"
+)
+NUMBER_MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_number_model.json")
+BACKTEST_NUMBER_MODEL_FILE_PATH = os.path.join(
+    DATA_FOLDER, "mrpro_number_model_temporal_backtest.json"
 )
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
@@ -120,6 +125,9 @@ BEST_SETTINGS = {
     # Malla Híbrida
     "hybrid_alpha": 0.5,  # Peso para AI_Score
     "hybrid_beta": 0.5,  # Peso para Geo_Resonance
+    # El modelo por número queda en observación hasta superar el baseline temporal.
+    "ai_context_weight": 1.00,
+    "ai_number_weight": 0.00,
     "threshold_ai_override": 0.85,  # Elevamos la vara para el Top 20
     "geo_floor_percentile": 50.0,
     # 3. Malla Cuántica (Fase 3: Genetic Selector)

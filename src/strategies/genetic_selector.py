@@ -38,8 +38,11 @@ class GeneticSelectorStrategy:
     - Next 10: STRIDE 2 (12, 14, 16... 30). Cubre hasta el Rank 30.
     """
 
-    def __init__(self, model_path=None):
-        self.resonance_engine = ResonanceEngine(model_path=model_path)
+    def __init__(self, model_path=None, number_model_path=None):
+        self.resonance_engine = ResonanceEngine(
+            model_path=model_path,
+            number_model_path=number_model_path,
+        )
 
     @property
     def training_cutoff_contest(self):
@@ -56,6 +59,10 @@ class GeneticSelectorStrategy:
     @property
     def ai_signal_validated(self):
         return self.resonance_engine.ai_signal_validated
+
+    @property
+    def number_temporal_holdout_auc(self):
+        return self.resonance_engine.number_temporal_holdout_auc
 
     def apply_omega_stride(self, u_pool, scores_pool, n_tickets, xp):
         if len(u_pool) == 0:
@@ -188,5 +195,17 @@ class GeneticSelectorStrategy:
                 "ai_signal_enabled": res.get("ai_signal_enabled", True),
                 "ai_signal_validated": res.get("ai_signal_validated", True),
                 "temporal_holdout_auc": res.get("temporal_holdout_auc"),
+                "feature_schema": res.get("feature_schema"),
+                "number_ai_scores": res.get("number_ai_scores"),
+                "number_model_enabled": res.get("number_model_enabled", False),
+                "number_model_applied": res.get("number_model_applied", False),
+                "number_temporal_holdout_auc": res.get(
+                    "number_temporal_holdout_auc"
+                ),
+                "ai_context_weight": res.get("ai_context_weight"),
+                "ai_number_weight": res.get("ai_number_weight"),
+                "resonance_blend_mode": res.get("resonance_blend_mode"),
+                "hybrid_alpha": res.get("hybrid_alpha"),
+                "hybrid_beta": res.get("hybrid_beta"),
             },
         )

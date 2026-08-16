@@ -49,6 +49,7 @@ def test_sort_history_chronologically_returns_aligned_copy():
 
 def test_melate_production_passes_chronological_history_to_both_stages(monkeypatch):
     received = []
+    saved_shadow = []
 
     class ReducerStub:
         def predict(self, history, config):
@@ -62,11 +63,21 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     class SelectorStub:
         def predict(self, history, config):
             received.append(("selector", list(history.concursos)))
-            return PredictionResultDTO(strategy_name="selector", tickets=[])
+            return PredictionResultDTO(
+                strategy_name="selector",
+                tickets=[[1, 2, 3, 4, 5, 6]],
+            )
 
     monkeypatch.setattr(mission_module, "UniverseReductionStrategy", ReducerStub)
     monkeypatch.setattr(mission_module, "GeneticSelectorStrategy", SelectorStub)
     monkeypatch.setattr(mission_module.report, "tiene_apuestas_pendientes", lambda _: False)
+    monkeypatch.setattr(mission_module.report, "guardar_prediccion", lambda *_: None)
+    monkeypatch.setattr(mission_module.report, "generar_ticket_limpio", lambda *_: None)
+    monkeypatch.setattr(
+        mission_module.shadow_ledger,
+        "guardar_carteras_sombra",
+        lambda **kwargs: saved_shadow.append(kwargs) or True,
+    )
     monkeypatch.setattr("builtins.input", lambda *_: "")
 
     controller = MissionController(_UIStub(), _descending_history())
@@ -75,7 +86,18 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert received == [
         ("reducer", [101, 102, 103]),
         ("selector", [101, 102, 103]),
+        ("selector", [101, 102, 103]),
+        ("selector", [101, 102, 103]),
     ]
+    variants = saved_shadow[0]["variants"]
+    assert [variant["key"] for variant in variants] == [
+        "principal_ai_adaptive",
+        "challenger_ai10_geo90",
+        "control_geo_only",
+    ]
+    assert [variant["official"] for variant in variants] == [True, False, False]
+    assert variants[1]["settings"]["hybrid_alpha"] == 0.10
+    assert variants[2]["settings"]["hybrid_alpha"] == 0.0
 
 
 def test_tris_production_passes_chronological_history_to_predictor(monkeypatch):

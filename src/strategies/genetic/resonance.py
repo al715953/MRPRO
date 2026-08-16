@@ -3,7 +3,22 @@ import os
 import numpy as np
 import xgboost as xgb
 import itertools
-from src.data_access.config import BEST_SETTINGS, MODEL_FILE_PATH
+from src.data_access.config import (
+    BACKTEST_MODEL_FILE_PATH,
+    BACKTEST_NUMBER_MODEL_FILE_PATH,
+    BEST_SETTINGS,
+    MODEL_FILE_PATH,
+    NUMBER_MODEL_FILE_PATH,
+)
+from src.core.melate_features import (
+    FEATURE_NAMES as MELATE_FEATURE_NAMES,
+    FEATURE_SCHEMA as MELATE_FEATURE_SCHEMA,
+    build_candidate_features,
+)
+from src.core.melate_number_model import (
+    predict_number_probabilities,
+    score_tickets_from_number_probs,
+)
 
 
 class ResonanceEngine:
@@ -14,10 +29,17 @@ class ResonanceEngine:
     - Fallback a Random inteligente si el cerebro falla, para no detener la simulación.
     """
 
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, number_model_path=None):
         # 1. Búsqueda de Modelo (Ruta Absoluta Dinámica)
         self.model_path = model_path or MODEL_FILE_PATH
         self.bst = None
+        inferred_backtest = os.path.abspath(self.model_path) == os.path.abspath(
+            BACKTEST_MODEL_FILE_PATH
+        )
+        self.number_model_path = number_model_path or (
+            BACKTEST_NUMBER_MODEL_FILE_PATH if inferred_backtest else NUMBER_MODEL_FILE_PATH
+        )
+        self.number_bst = None
         self._matrix_cache = {"cluster_matrix": None}
 
         # Intentamos cargar
@@ -37,6 +59,14 @@ class ResonanceEngine:
             else:
                 print(f"❌ FATAL: Model not found at {self.model_path} or local.")
 
+        if os.path.exists(self.number_model_path):
+            try:
+                self.number_bst = xgb.Booster()
+                self.number_bst.load_model(self.number_model_path)
+            except Exception as e:
+                print(f"⚠️ Error loading number model: {e}")
+                self.number_bst = None
+
     @property
     def training_cutoff_contest(self):
         """Last contest visible during training, when the model records it."""
@@ -53,6 +83,22 @@ class ResonanceEngine:
         if self.bst is None:
             return None
         raw = self.bst.attr("temporal_holdout_auc")
+        try:
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def feature_schema(self):
+        if self.bst is None:
+            return None
+        return self.bst.attr("feature_schema")
+
+    @property
+    def number_temporal_holdout_auc(self):
+        if self.number_bst is None:
+            return None
+        raw = self.number_bst.attr("temporal_holdout_auc")
         try:
             return float(raw) if raw is not None else None
         except (TypeError, ValueError):
@@ -90,17 +136,27 @@ class ResonanceEngine:
 
         # 4. AI Score (Con Red de Seguridad para Ceros)
         n_candidates = len(u_xp)
+        candidates_cpu = (
+            u_xp.get().astype(np.uint8)
+            if hasattr(u_xp, "get")
+            else np.asarray(u_xp).astype(np.uint8)
+        )
 
         ai_prediction_ok = False
         if self.bst:
             try:
-                # Conversión segura a CPU uint8
-                if hasattr(u_xp, "get"):
-                    candidates_cpu = u_xp.get().astype(np.uint8)
+                if self.feature_schema == MELATE_FEATURE_SCHEMA:
+                    model_features = build_candidate_features(
+                        candidates_cpu,
+                        raw_history,
+                    )
+                    dtest = xgb.DMatrix(
+                        model_features,
+                        feature_names=list(MELATE_FEATURE_NAMES),
+                    )
                 else:
-                    candidates_cpu = np.asarray(u_xp).astype(np.uint8)
-
-                dtest = xgb.DMatrix(candidates_cpu)
+                    model_features = candidates_cpu
+                    dtest = xgb.DMatrix(model_features)
                 ai_scores_cpu = self.bst.predict(dtest)
                 ai_scores = xp.asarray(ai_scores_cpu)
                 ai_prediction_ok = True
@@ -116,12 +172,64 @@ class ResonanceEngine:
         div = ai_max - ai_min
         if div == 0:
             div = 1.0
-        ai_norm = (ai_scores - ai_min) / div
+        contextual_norm = (ai_scores - ai_min) / div
+
+        number_prediction_ok = False
+        number_norm = xp.zeros(n_candidates, dtype=xp.float32)
+        if self.number_bst is not None:
+            try:
+                number_probs = predict_number_probabilities(
+                    self.number_bst,
+                    raw_history,
+                )
+                number_scores_cpu = score_tickets_from_number_probs(
+                    candidates_cpu,
+                    number_probs,
+                )
+                number_scores = xp.asarray(number_scores_cpu)
+                number_min, number_max = number_scores.min(), number_scores.max()
+                number_div = number_max - number_min
+                if number_div == 0:
+                    number_div = 1.0
+                number_norm = (number_scores - number_min) / number_div
+                number_prediction_ok = True
+            except Exception as e:
+                print(f"⚠️ Number AI Prediction Failed: {e}")
+
+        overrides = getattr(config, "filter_overrides", None) or BEST_SETTINGS
+        context_weight = max(0.0, float(overrides.get("ai_context_weight", 1.0)))
+        number_weight = max(0.0, float(overrides.get("ai_number_weight", 0.0)))
+        if not number_prediction_ok:
+            context_weight, number_weight = 1.0, 0.0
+        weight_total = context_weight + number_weight
+        if weight_total <= 0:
+            context_weight, number_weight, weight_total = 1.0, 0.0, 1.0
+        ai_norm = (
+            contextual_norm * (context_weight / weight_total)
+            + number_norm * (number_weight / weight_total)
+        )
+        ai_prediction_ok = bool(ai_prediction_ok or number_prediction_ok)
         ai_active = bool(ai_prediction_ok and self.ai_signal_enabled)
         ai_effective = ai_norm if ai_active else xp.zeros_like(ai_norm)
 
         # 6. Lógica V8.1 (Safety Net + Hybrid Cutoff)
-        hybrid_signal = (ai_effective + geo_scores) / 2.0
+        blend_mode = str(overrides.get("resonance_blend_mode", "adaptive")).lower()
+        fixed_blend = blend_mode == "fixed"
+        if fixed_blend:
+            hybrid_alpha = max(0.0, float(overrides.get("hybrid_alpha", 0.5)))
+            hybrid_beta = max(0.0, float(overrides.get("hybrid_beta", 0.5)))
+            hybrid_weight_total = hybrid_alpha + hybrid_beta
+            if hybrid_weight_total <= 0:
+                hybrid_alpha, hybrid_beta, hybrid_weight_total = 0.5, 0.5, 1.0
+            hybrid_alpha /= hybrid_weight_total
+            hybrid_beta /= hybrid_weight_total
+            hybrid_signal = (
+                ai_effective * hybrid_alpha + geo_scores * hybrid_beta
+            )
+        else:
+            # Conserva exactamente el comportamiento histórico para producción.
+            hybrid_alpha, hybrid_beta = 0.5, 0.5
+            hybrid_signal = (ai_effective + geo_scores) / 2.0
 
         # CORRECCIÓN V8.2: Si todo es cero (Hybrid=0), inyectamos ruido minúsculo
         # para que el sorteo tenga orden y no Rank #0
@@ -141,17 +249,22 @@ class ResonanceEngine:
         ai_subset = ai_effective[radar_indices]
         geo_subset = geo_scores[radar_indices]
 
-        # Safety Net Logic (Si AI < 0.15, Geo manda 90%)
-        is_ai_confused = ai_subset < 0.15
-        is_geo_strong = geo_subset > 0.4
+        if fixed_blend:
+            final_scores_reduced = (
+                ai_subset * hybrid_alpha + geo_subset * hybrid_beta
+            )
+        else:
+            # Safety Net Logic (Si AI < 0.15, Geo manda 90%)
+            is_ai_confused = ai_subset < 0.15
+            is_geo_strong = geo_subset > 0.4
 
-        w_ai_std = xp.where(is_geo_strong, 0.40, 0.80)
-        w_geo_std = xp.where(is_geo_strong, 0.60, 0.20)
+            w_ai_std = xp.where(is_geo_strong, 0.40, 0.80)
+            w_geo_std = xp.where(is_geo_strong, 0.60, 0.20)
 
-        w_ai = xp.where(is_ai_confused, 0.10, w_ai_std)
-        w_geo = xp.where(is_ai_confused, 0.90, w_geo_std)
+            w_ai = xp.where(is_ai_confused, 0.10, w_ai_std)
+            w_geo = xp.where(is_ai_confused, 0.90, w_geo_std)
 
-        final_scores_reduced = (ai_subset * w_ai) + (geo_subset * w_geo)
+            final_scores_reduced = (ai_subset * w_ai) + (geo_subset * w_geo)
 
         # Thermal numbers (Compatibility)
         recent_draws = raw_history[-5:]
@@ -169,6 +282,16 @@ class ResonanceEngine:
             "ai_signal_enabled": ai_active,
             "ai_signal_validated": self.ai_signal_validated,
             "temporal_holdout_auc": self.temporal_holdout_auc,
+            "feature_schema": self.feature_schema or "legacy_ticket_numbers",
+            "number_ai_scores": number_norm,
+            "number_model_enabled": number_prediction_ok,
+            "number_model_applied": bool(number_prediction_ok and number_weight > 0),
+            "number_temporal_holdout_auc": self.number_temporal_holdout_auc,
+            "ai_context_weight": float(context_weight / weight_total),
+            "ai_number_weight": float(number_weight / weight_total),
+            "resonance_blend_mode": "fixed" if fixed_blend else "adaptive",
+            "hybrid_alpha": float(hybrid_alpha),
+            "hybrid_beta": float(hybrid_beta),
         }
 
     def _build_nexus_matrix(self, history, n_balls):

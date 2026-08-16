@@ -88,7 +88,10 @@ def test_unvalidated_ai_scores_remain_active():
         def predict(self, matrix):
             return np.linspace(0.1, 0.9, matrix.num_row(), dtype=np.float32)
 
-    engine = ResonanceEngine(model_path="missing-for-test.json")
+    engine = ResonanceEngine(
+        model_path="missing-for-test.json",
+        number_model_path="missing-number-for-test.json",
+    )
     engine.bst = BoosterStub()
     universe = np.array(
         [
