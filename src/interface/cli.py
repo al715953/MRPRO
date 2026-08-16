@@ -103,6 +103,7 @@ class ConsoleUI:
         menu_table.add_row("2", "Análisis Frecuencia", "5", "Sincronizar Scraper")
         menu_table.add_row("3", "Optimizador (Lab)", "", "")
         menu_table.add_row("P", "Reporte Plot (Forense)", "", "")
+        menu_table.add_row("C", "Lab Covering Design", "", "")
 
         # Capa 2: Operaciones
         menu_table.add_row("", "", "", "")

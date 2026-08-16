@@ -61,6 +61,8 @@ class MissionController:
             self._validate_bets()
         elif option == "P":
             self._run_forensic_plot()
+        elif option == "C":
+            self._run_covering_lab()
         else:
             self.ui.console.print("[red]Opcion no valida.[/]")
             self._pause()
@@ -375,6 +377,67 @@ class MissionController:
                 f"{Fore.RED}❌ No se pudo cargar el módulo de visualización: {e}{Style.RESET_ALL}"
             )
         input(f"\n{Fore.YELLOW}>> Reporte generado. Presiona ENTER...{Style.RESET_ALL}")
+
+    def _run_covering_lab(self):
+        """Laboratorio aislado de covering designs para Melate Retro."""
+        self.ui.clear_screen()
+        self.ui.console.print(
+            "\n[bold magenta]🧩 LABORATORIO DE CONDENSACIÓN COMBINATORIA[/]"
+        )
+        self.ui.console.print(
+            "[yellow]Este experimento mide cobertura matemática; no predice la física "
+            "del sorteo. El modo oracle es exclusivamente un control no predictivo.[/]"
+        )
+        try:
+            v = int(input("   Tamaño del conjunto candidato v (15): ") or 15)
+            t_raw = input(f"   Tamaño target t ({TICKET_SIZE - 1}): ") or str(
+                TICKET_SIZE - 1
+            )
+            budget = int(input("   Presupuesto de boletos m (300): ") or 300)
+            draws = int(input("   Sorteos walk-forward (108): ") or 108)
+            random_trials = int(input("   Repeticiones random (100): ") or 100)
+        except (TypeError, ValueError):
+            self.ui.console.print("[red]Parámetros inválidos.[/]")
+            self._pause()
+            return
+
+        self.ui.console.print(
+            "\n[cyan]Conjunto candidato:[/] 1) Oracle control  2) Random  3) MRPRO"
+        )
+        candidate_choice = input("   Selección (1): ").strip() or "1"
+        candidate_method = {
+            "1": "oracle_candidate_set",
+            "2": "random_candidate_set",
+            "3": "mrpro_candidate_set",
+        }.get(candidate_choice, "oracle_candidate_set")
+
+        project_root = Path(__file__).resolve().parents[2]
+        command = [
+            sys.executable,
+            str(project_root / "run_covering_experiment.py"),
+            "--v",
+            str(v),
+            "--t",
+            str(t_raw),
+            "--budget",
+            str(budget),
+            "--draws",
+            str(draws),
+            "--random-trials",
+            str(random_trials),
+            "--candidate-method",
+            candidate_method,
+            "--mode",
+            "both",
+        ]
+        try:
+            subprocess.run(command, check=True, cwd=project_root)
+            self.ui.console.print(
+                "[bold green]✅ Experimento terminado.[/] Revisa JSON, CSV y gráficos en data/."
+            )
+        except subprocess.CalledProcessError as exc:
+            self.ui.console.print(f"[bold red]❌ Falló el laboratorio:[/] {exc}")
+        self._pause()
 
     def _run_tris_backtest(self):
         self.ui.clear_screen()

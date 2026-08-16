@@ -12,6 +12,36 @@ ejecutable cuando es escribible; si la instalación está protegida, se utiliza 
 carpeta de datos del usuario. Los archivos iniciales empaquetados se copian una
 sola vez y nunca reemplazan datos persistentes.
 
+## Laboratorio de covering designs
+
+El menú Melate incluye la opción `C`, y también puede ejecutarse directamente:
+
+```bash
+python run_covering_experiment.py \
+  --v 15 \
+  --t k-1 \
+  --budget 300 \
+  --candidate-method oracle_candidate_set \
+  --random-trials 100 \
+  --draws 108
+```
+
+Para barridos matemáticos sin backtest:
+
+```bash
+python run_covering_experiment.py \
+  --mode math \
+  --v 10,12,15,18,20 \
+  --t k-1,k-2 \
+  --budget 50,100,200,300,500,1000
+```
+
+`oracle_candidate_set` inserta deliberadamente el resultado ganador dentro del
+conjunto candidato. Es un control matemático, no una estrategia predictiva. Los
+reportes separan cobertura combinatoria, calidad del conjunto candidato y
+resultados walk-forward. Todas las comparaciones random utilizan exactamente el
+mismo número efectivo de boletos que el covering correspondiente.
+
 ## Extensión propuesta: **Tris con Multiplicador**
 
 Se dejó una base para reutilizar módulos existentes del proyecto (scraper, loaders, reglas y backtest) y soportar un segundo juego además de Melate Retro.
