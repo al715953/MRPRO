@@ -1,34 +1,107 @@
 import os
+from pathlib import Path
+import shutil
 import sys
 from src.domain.lottery_profile import LotteryProfile
 
 # --- INFRAESTRUCTURA DE RUTAS ---
-# Detectar si estamos en modo Ejecutable (.exe) o Script (.py) para persistencia en Windows
-if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    # config.py vive en src/data_access; subimos hasta la raiz del proyecto.
-    BASE_DIR = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
+# En desarrollo, config.py vive en src/data_access y la raíz está dos niveles arriba.
+# En ejecutables, los datos persistentes viven junto al ejecutable cuando esa ubicación
+# es escribible; en instalaciones protegidas se usa la carpeta de datos del usuario.
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+PROJECT_ROOT = (
+    Path(sys.executable).resolve().parent
+    if IS_FROZEN
+    else Path(__file__).resolve().parents[2]
+)
+BASE_DIR = str(PROJECT_ROOT)
 
-# Carpetas de Proyecto
-DATA_FOLDER = os.path.join(BASE_DIR, "src/data")
-if not os.path.exists(DATA_FOLDER):
-    os.makedirs(DATA_FOLDER)
+
+def _user_data_directory() -> Path:
+    if sys.platform.startswith("win"):
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    elif sys.platform in {"darwin", "ios"}:
+        root = Path.home() / "Library" / "Application Support"
+    else:
+        root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return root / "MRPRO" / "data"
+
+
+def _prepare_data_directory(preferred: Path) -> Path:
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        if os.access(preferred, os.W_OK):
+            return preferred
+    except OSError:
+        pass
+
+    fallback = _user_data_directory()
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def migrate_legacy_data(legacy: Path, destination: Path) -> list[str]:
+    """Move missing files from the former ``src/data`` without overwriting data."""
+    moved = []
+    if not legacy.is_dir() or legacy.resolve() == destination.resolve():
+        return moved
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in legacy.iterdir():
+        if not source.is_file():
+            continue
+        target = destination / source.name
+        if target.exists():
+            continue
+        try:
+            shutil.move(str(source), str(target))
+            moved.append(source.name)
+        except OSError:
+            # Una instalación empaquetada puede exponer el origen como solo lectura.
+            try:
+                shutil.copy2(source, target)
+                moved.append(source.name)
+            except OSError:
+                continue
+    try:
+        legacy.rmdir()
+    except OSError:
+        pass
+    return moved
+
+
+def _seed_bundled_data(bundle: Path, destination: Path) -> None:
+    """Copy packaged seed files once; never replace persistent user data."""
+    if not bundle.is_dir() or bundle.resolve() == destination.resolve():
+        return
+    for source in bundle.iterdir():
+        if not source.is_file():
+            continue
+        target = destination / source.name
+        if not target.exists():
+            try:
+                shutil.copy2(source, target)
+            except OSError:
+                continue
+
+
+DATA_FOLDER_PATH = _prepare_data_directory(PROJECT_ROOT / "data")
+migrate_legacy_data(PROJECT_ROOT / "src" / "data", DATA_FOLDER_PATH)
+if IS_FROZEN and hasattr(sys, "_MEIPASS"):
+    _seed_bundled_data(Path(sys._MEIPASS) / "data", DATA_FOLDER_PATH)
+
+# Se conserva como ``str`` para compatibilidad con consumidores que usan os.path.
+DATA_FOLDER = str(DATA_FOLDER_PATH)
 
 # Archivos de Datos
-CSV_FILE_PATH = os.path.join(DATA_FOLDER, "Melate-Retro.csv")
-FILE_APUESTAS = os.path.join(DATA_FOLDER, "Mis_Apuestas.csv")
-FILE_CARTERAS_SOMBRA = os.path.join(DATA_FOLDER, "Carteras_Sombra.json")
-MASTER_LOG_PATH = os.path.join(DATA_FOLDER, "master_performance.csv")
-MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_model_v8_static.json")
-BACKTEST_MODEL_FILE_PATH = os.path.join(
-    DATA_FOLDER, "mrpro_model_v8_temporal_backtest.json"
-)
-NUMBER_MODEL_FILE_PATH = os.path.join(DATA_FOLDER, "mrpro_number_model.json")
-BACKTEST_NUMBER_MODEL_FILE_PATH = os.path.join(
-    DATA_FOLDER, "mrpro_number_model_temporal_backtest.json"
+CSV_FILE_PATH = str(DATA_FOLDER_PATH / "Melate-Retro.csv")
+FILE_APUESTAS = str(DATA_FOLDER_PATH / "Mis_Apuestas.csv")
+FILE_CARTERAS_SOMBRA = str(DATA_FOLDER_PATH / "Carteras_Sombra.json")
+MASTER_LOG_PATH = str(DATA_FOLDER_PATH / "master_performance.csv")
+MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_static.json")
+BACKTEST_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_temporal_backtest.json")
+NUMBER_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_number_model.json")
+BACKTEST_NUMBER_MODEL_FILE_PATH = str(
+    DATA_FOLDER_PATH / "mrpro_number_model_temporal_backtest.json"
 )
 
 # --- IDENTIFICACIÓN DE MISIÓN ---

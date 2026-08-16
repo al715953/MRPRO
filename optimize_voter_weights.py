@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
+from src.data_access.config import DATA_FOLDER_PATH
 
 
 def run_forensics():
     print("--- INICIANDO AUTOPSIA FORENSE V9 ---")
     try:
         # Carga del log
-        df = pd.read_csv("src\data\detailed_forensic_log.csv")
+        df = pd.read_csv(DATA_FOLDER_PATH / "detailed_forensic_log.csv")
 
         # 1. Auditoría del Ranking Engine (¿El premio está realmente ahí?)
         print("\n[1] CALIDAD DEL MOTOR DE RANKING (Resonance Engine)")

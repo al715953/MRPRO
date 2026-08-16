@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from rich.console import Console
 from rich.table import Table
-from src.data_access.config import MASTER_LOG_PATH
+from src.data_access.config import DATA_FOLDER_PATH, MASTER_LOG_PATH
 
 
 class AlphaComparator:
@@ -121,7 +121,7 @@ class AlphaComparator:
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         # Guardar comparativa
-        out_path = os.path.join("data", "evolution_comparison.png")
+        out_path = str(DATA_FOLDER_PATH / "evolution_comparison.png")
         plt.savefig(out_path, dpi=300)
         self.console.print(
             f"\n[bold green]✅ Dashboard comparativo guardado en:[/] {out_path}"

@@ -14,6 +14,7 @@ from src.core.backtester import BacktestEngine
 from src.data_access.config import (
     BACKTEST_MODEL_FILE_PATH,
     BEST_SETTINGS,
+    DATA_FOLDER_PATH,
     LOTTERY_PROFILES,
     TICKET_SIZE,
     TOTAL_BALLS,
@@ -235,9 +236,9 @@ def main() -> None:
     args = parser.parse_args()
 
     output = args.output or Path(
-        "src/data/melate_blend_sweep.json"
+        DATA_FOLDER_PATH / "melate_blend_sweep.json"
         if args.suite == "blend-sweep"
-        else "src/data/melate_ab_experiment.json"
+        else DATA_FOLDER_PATH / "melate_ab_experiment.json"
     )
     payload = run_experiments(
         args.draws,

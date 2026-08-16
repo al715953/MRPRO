@@ -1,7 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 datas = [('src', 'src')]
+for seed_file in (
+    'Melate-Retro.csv',
+    'Tris-Multiplicador.csv',
+    'mrpro_model_v8_static.json',
+    'mrpro_model_v8_temporal_backtest.json',
+    'mrpro_number_model.json',
+    'mrpro_number_model_temporal_backtest.json',
+):
+    source = Path('data') / seed_file
+    if source.exists():
+        datas.append((str(source), 'data'))
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('xgboost')

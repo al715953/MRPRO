@@ -21,7 +21,6 @@ from src.data_access.config import (
 )
 
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_FILE = CSV_FILE_PATH
 MODEL_OUTPUT = MODEL_FILE_PATH
 BACKTEST_MODEL_OUTPUT = BACKTEST_MODEL_FILE_PATH
@@ -321,12 +320,8 @@ def train_master_brain():
     print(f"   📂 Buscando datos en: {DATA_FILE}")
 
     if not os.path.exists(DATA_FILE):
-        fallback = os.path.join(BASE_DIR, "Melate-Retro.csv")
-        if not os.path.exists(fallback):
-            raise FileNotFoundError(f"No se encontró el histórico: {DATA_FILE}")
-        data_path = fallback
-    else:
-        data_path = DATA_FILE
+        raise FileNotFoundError(f"No se encontró el histórico: {DATA_FILE}")
+    data_path = DATA_FILE
 
     df = pd.read_csv(data_path)
     required = ["CONCURSO", "F1", "F2", "F3", "F4", "F5", "F6"]

@@ -52,12 +52,7 @@ class ResonanceEngine:
                 print(f"⚠️ Error loading V8: {e}")
                 self.bst = None
         else:
-            # Fallback a búsqueda local simple
-            if os.path.exists("mrpro_model_v8_static.json"):
-                self.bst = xgb.Booster()
-                self.bst.load_model("mrpro_model_v8_static.json")
-            else:
-                print(f"❌ FATAL: Model not found at {self.model_path} or local.")
+            print(f"❌ FATAL: Model not found at {self.model_path}.")
 
         if os.path.exists(self.number_model_path):
             try:

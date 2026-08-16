@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from rich.console import Console
 from rich.table import Table
+from src.data_access.config import CSV_FILE_PATH, DATA_FOLDER_PATH
 
 console = Console()
 
@@ -18,11 +19,11 @@ class DecadeVarianceAnalyzer:
 
     def __init__(
         self,
-        results_path="data/backtest_results.json",
-        history_path="src/data/Melate-Retro.csv",
+        results_path=None,
+        history_path=None,
     ):
-        self.results_path = results_path
-        self.history_path = history_path
+        self.results_path = str(results_path or DATA_FOLDER_PATH / "backtest_results.json")
+        self.history_path = str(history_path or CSV_FILE_PATH)
 
     def run_analysis(self):
         # 1. Carga de Resultados del Backtest
@@ -136,9 +137,10 @@ class DecadeVarianceAnalyzer:
         plt.title("Varianza de Rank por Perfil (Escala Log)", fontsize=15)
         plt.grid(True, which="both", ls="-", alpha=0.2)
         plt.tight_layout()
-        plt.savefig("data/full_variance_analysis.png")
+        output_path = DATA_FOLDER_PATH / "full_variance_analysis.png"
+        plt.savefig(output_path)
         console.print(
-            f"\n[bold green]✅ Gráfico guardado en 'data/full_variance_analysis.png'[/]"
+            f"\n[bold green]✅ Gráfico guardado en '{output_path}'[/]"
         )
 
 

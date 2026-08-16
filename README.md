@@ -1,5 +1,17 @@
 # MRPRO
 
+## Directorio de datos
+
+Los archivos persistentes viven en `data/`, en la raíz del proyecto. El código de
+aplicación permanece en `src/` y no contiene históricos, modelos, apuestas ni
+reportes generados.
+
+Las rutas se resuelven con `pathlib`, por lo que funcionan con separadores de
+Windows y macOS/Linux. En ejecutables empaquetados se usa `data/` junto al
+ejecutable cuando es escribible; si la instalación está protegida, se utiliza la
+carpeta de datos del usuario. Los archivos iniciales empaquetados se copian una
+sola vez y nunca reemplazan datos persistentes.
+
 ## Extensión propuesta: **Tris con Multiplicador**
 
 Se dejó una base para reutilizar módulos existentes del proyecto (scraper, loaders, reglas y backtest) y soportar un segundo juego además de Melate Retro.
@@ -34,4 +46,3 @@ Se dejó una base para reutilizar módulos existentes del proyecto (scraper, loa
 - **Integración en CLI/UI**:
   - Selector de juego al inicio de sesión.
   - Menú de producción y liquidación que use reglas y ledger por juego.
-

@@ -1,5 +1,5 @@
 # --- Directorios de Datos (Privado/Pesado) ---
-data/
+/data/
 *.csv
 *.xlsx
 *.json
