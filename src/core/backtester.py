@@ -230,6 +230,12 @@ class BacktestEngine:
         )
         test_size = min(config.backtest_size, len(full_h))
         start_idx = len(full_h) - test_size
+        model_overrides = (
+            config.filter_overrides
+            if hasattr(config, "filter_overrides")
+            and isinstance(config.filter_overrides, dict)
+            else {}
+        )
         training_cutoff = getattr(strategy, "training_cutoff_contest", None)
         temporal_auc = getattr(strategy, "temporal_holdout_auc", None)
         model_ai_enabled = getattr(strategy, "ai_signal_enabled", True)
@@ -254,6 +260,23 @@ class BacktestEngine:
                 f"AUC números={float(number_temporal_auc):.4f}"
             )
         if training_cutoff is not None:
+            expected_cutoff = model_overrides.get("fixed_origin_training_cutoff")
+            expected_start = model_overrides.get("fixed_origin_test_start")
+            requested_start_contest = int(full_h[start_idx][2])
+            if expected_cutoff is not None and int(training_cutoff) != int(
+                expected_cutoff
+            ):
+                raise ValueError(
+                    "El modelo fixed-origin no coincide con el corte solicitado: "
+                    f"modelo #{int(training_cutoff)}, esperado #{int(expected_cutoff)}."
+                )
+            if expected_start is not None and requested_start_contest != int(
+                expected_start
+            ):
+                raise ValueError(
+                    "La ventana fixed-origin no coincide con el backtest solicitado: "
+                    f"inicio #{requested_start_contest}, esperado #{int(expected_start)}."
+                )
             unseen_start_idx = next(
                 (
                     idx
@@ -274,6 +297,13 @@ class BacktestEngine:
                     "[yellow]⚠ Backtest temporal:[/] se evaluarán solo "
                     f"{test_size} sorteos posteriores al concurso "
                     f"#{int(training_cutoff)}."
+                )
+            if verbose and expected_cutoff is not None:
+                self.console.print(
+                    "[bold cyan]🧠 Fixed-origin:[/] "
+                    f"entrenamiento hasta #{int(training_cutoff)} | "
+                    f"evaluación #{int(full_h[start_idx][2])}-#{int(full_h[-1][2])} "
+                    f"({test_size} sorteos)."
                 )
         tracking_ctx = self._build_tracking_context(config, history, test_size)
         strategy_model_version = getattr(strategy, "model_version", "")

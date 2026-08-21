@@ -371,8 +371,9 @@ def train_master_brain():
     )
 
     print(
-        f"   🧪 Entrenamiento temporal hasta #{contests[holdout_start_idx - 1]}; "
-        f"reserva futura #{contests[holdout_start_idx]}-#{contests[-1]}."
+        "   🧪 Validación general 80/20: modelo diagnóstico hasta "
+        f"#{contests[holdout_start_idx - 1]}; reserva futura "
+        f"#{contests[holdout_start_idx]}-#{contests[-1]}."
     )
     print(
         f"   🧩 Esquema: {FEATURE_SCHEMA} ({len(FEATURE_NAMES)} variables) | "
@@ -412,7 +413,7 @@ def train_master_brain():
         f"   📊 AUC walk-forward fuera de muestra: {holdout_auc:.4f} "
         "(0.5000 equivale a azar)."
     )
-    print(f"   ✅ Modelo temporal guardado en: {BACKTEST_MODEL_OUTPUT}")
+    print(f"   ✅ Modelo diagnóstico temporal guardado en: {BACKTEST_MODEL_OUTPUT}")
 
     production_x, production_y = build_walk_forward_dataset(
         real_draws,

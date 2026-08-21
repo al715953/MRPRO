@@ -17,11 +17,13 @@ def test_all_persistent_paths_share_the_new_data_directory():
         config.CSV_FILE_PATH,
         config.FILE_APUESTAS,
         config.FILE_CARTERAS_SOMBRA,
+        config.FILE_TABLERO_SOMBRA,
         config.MASTER_LOG_PATH,
         config.MODEL_FILE_PATH,
         config.BACKTEST_MODEL_FILE_PATH,
         config.NUMBER_MODEL_FILE_PATH,
         config.BACKTEST_NUMBER_MODEL_FILE_PATH,
+        config.BACKTEST_MODEL_CACHE_PATH,
     )
 
     assert all(Path(path).parent == config.DATA_FOLDER_PATH for path in paths)

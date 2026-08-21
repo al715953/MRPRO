@@ -12,6 +12,22 @@ ejecutable cuando es escribible; si la instalación está protegida, se utiliza 
 carpeta de datos del usuario. Los archivos iniciales empaquetados se copian una
 sola vez y nunca reemplazan datos persistentes.
 
+## Backtest Melate fixed-origin
+
+La opción 6, modo 2, entrena automáticamente modelos exclusivos para la ventana
+solicitada. Si el histórico termina en `#1661`, un backtest de 108 usa entrenamiento
+hasta `#1553` y prueba `#1554-#1661`; uno de 218 entrena hasta `#1443` y prueba
+`#1444-#1661`.
+
+La selección de rondas usa una validación interna anterior al inicio del test.
+Los sorteos evaluados no intervienen en entrenamiento ni ajuste. Los modelos se
+guardan por hash del dataset, corte y tamaño en `data/backtest_models/`; repetir la
+misma corrida reutiliza la caché. Estos archivos nunca reemplazan los modelos de
+producción generados por la opción 4.
+
+La reserva 80/20 mostrada durante el reentrenamiento general es un diagnóstico
+temporal separado y ya no determina el corte de la opción 6.
+
 ## Laboratorio de covering designs
 
 El menú Melate incluye la opción `C`, y también puede ejecutarse directamente:
@@ -63,6 +79,23 @@ Ambas usan el snapshot MRPRO generado antes del sorteo, `candidate_rank_depth=50
 y se liquidan desde la opción 8 junto con las demás carteras sombra. El resumen
 normaliza resultados por sorteo y por 1,000 boletos para comparar presupuestos
 distintos sin confundir volumen con calidad.
+
+La misma opción 8 muestra un segundo tablero de promoción. Cada challenger se
+compara sorteo a sorteo contra una referencia MRPRO con exactamente el mismo
+presupuesto. Para las carteras covering se registra también
+`benchmark_mrpro_native_m300`; si falta, el gate muestra `UNMATCHED_BUDGET`.
+
+Estados del gate:
+
+- `INSUFFICIENT_SAMPLE`: menos de 20 sorteos pareados.
+- `COLLECTING` / `PROMISING`: revisión inicial entre 20 y 49 sorteos.
+- `ELIGIBLE_FOR_PILOT`: al menos 50 sorteos y evidencia pareada favorable.
+- `NO_ADVANTAGE` / `REJECTED`: no mejora o presenta deterioro respaldado.
+
+El gate considera diferencia de máximo de aciertos, tasas ≥4 y ≥5, permutation
+test, intervalo bootstrap y estabilidad en tres ventanas. Nunca cambia
+producción automáticamente. La fotografía reproducible se exporta en
+`data/Tablero_Sombra.json`.
 
 `oracle_candidate_set` inserta deliberadamente el resultado ganador dentro del
 conjunto candidato. Es un control matemático, no una estrategia predictiva. Los

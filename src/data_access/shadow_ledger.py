@@ -12,7 +12,12 @@ from rich.console import Console
 from rich.table import Table
 
 from src.core.rules import MelateRetroRules
-from src.data_access.config import FILE_CARTERAS_SOMBRA, VERSION_TAG
+from src.core.shadow_promotion import evaluate_shadow_promotions
+from src.data_access.config import (
+    FILE_CARTERAS_SOMBRA,
+    FILE_TABLERO_SOMBRA,
+    VERSION_TAG,
+)
 
 
 console = Console()
@@ -72,6 +77,7 @@ def _compact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         "hybrid_beta",
         "selected_ranks",
         "shadow_family",
+        "promotion_reference_key",
         "candidate_method",
         "candidate_pool_size",
         "candidate_rank_depth",
@@ -243,6 +249,7 @@ def _aggregate(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def liquidar_carteras_sombra(
     history,
     path: str = FILE_CARTERAS_SOMBRA,
+    dashboard_path: str | None = None,
 ) -> dict[str, Any] | None:
     """Valida carteras con resultados disponibles y devuelve el acumulado simulado."""
 
@@ -281,12 +288,35 @@ def liquidar_carteras_sombra(
     if changed:
         _atomic_save(payload, path)
 
-    return {
+    variants = _aggregate(payload)
+    promotion = evaluate_shadow_promotions(payload)
+    summary = {
         "updated_contests": updated_contests,
         "pending_contests": sorted(set(pending_contests)),
         "target_draws": VALIDATION_TARGET_DRAWS,
-        "variants": _aggregate(payload),
+        "variants": variants,
+        "promotion": promotion,
     }
+    resolved_dashboard_path = dashboard_path
+    if resolved_dashboard_path is None:
+        resolved_dashboard_path = (
+            FILE_TABLERO_SOMBRA
+            if os.path.abspath(path) == os.path.abspath(FILE_CARTERAS_SOMBRA)
+            else os.path.join(os.path.dirname(path), "Tablero_Sombra.json")
+        )
+    export_payload = {
+        "schema_version": 1,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "source_ledger": os.path.basename(path),
+        "version": VERSION_TAG,
+        "target_draws": VALIDATION_TARGET_DRAWS,
+        "pending_contests": summary["pending_contests"],
+        "variants": variants,
+        "promotion": promotion,
+    }
+    _atomic_save(export_payload, resolved_dashboard_path)
+    summary["dashboard_path"] = resolved_dashboard_path
+    return summary
 
 
 def mostrar_resumen_sombra(summary: dict[str, Any] | None) -> None:
@@ -337,3 +367,84 @@ def mostrar_resumen_sombra(summary: dict[str, Any] | None) -> None:
     console.print(
         "[dim]Los importes sombra son hipotéticos y no se suman al ROI real.[/]"
     )
+
+    promotion = summary.get("promotion", {})
+    evaluations = promotion.get("evaluations", {})
+    if evaluations:
+        promotion_table = Table(
+            title="🚦 GATE DE PROMOCIÓN — COMPARACIONES PAREADAS MISMO PRESUPUESTO",
+            box=box.DOUBLE_EDGE,
+        )
+        promotion_table.add_column("Variante", style="cyan")
+        promotion_table.add_column("Referencia")
+        promotion_table.add_column("N", justify="right")
+        promotion_table.add_column("ΔMax", justify="right")
+        promotion_table.add_column("Δ≥4", justify="right")
+        promotion_table.add_column("Δ≥5", justify="right")
+        promotion_table.add_column("IC95% ΔMax", justify="right")
+        promotion_table.add_column("p", justify="right")
+        promotion_table.add_column("Ventanas", justify="right")
+        promotion_table.add_column("Estado")
+        status_colors = {
+            "REFERENCE": "bold blue",
+            "BENCHMARK": "blue",
+            "UNMATCHED_BUDGET": "bold red",
+            "INSUFFICIENT_SAMPLE": "yellow",
+            "COLLECTING": "yellow",
+            "PROMISING": "bold cyan",
+            "ELIGIBLE_FOR_PILOT": "bold green",
+            "NO_ADVANTAGE": "magenta",
+            "REJECTED": "bold red",
+        }
+        for evaluation in evaluations.values():
+            bootstrap = evaluation.get("bootstrap_max_hits", {})
+            permutation = evaluation.get("permutation_max_hits", {})
+            stability = evaluation.get("temporal_stability", {})
+            ci_low = bootstrap.get("ci_low")
+            ci_high = bootstrap.get("ci_high")
+            ci_text = (
+                f"[{ci_low:+.3f}, {ci_high:+.3f}]"
+                if ci_low is not None and ci_high is not None
+                else "—"
+            )
+            p_value = permutation.get("p_two_sided")
+            windows_text = (
+                f"{stability.get('favorable_windows', 0)}/"
+                f"{stability.get('total_windows', 0)}"
+                if stability
+                else "—"
+            )
+            status = str(evaluation.get("status", ""))
+            style = status_colors.get(status, "white")
+            promotion_table.add_row(
+                str(evaluation.get("label", evaluation.get("key", ""))),
+                str(evaluation.get("reference_label") or "—"),
+                str(evaluation.get("paired_draws", 0)),
+                _fmt_signed(evaluation.get("avg_max_hits_delta")),
+                _fmt_percent_delta(evaluation.get("hit_rate_ge_4_delta")),
+                _fmt_percent_delta(evaluation.get("hit_rate_ge_5_delta")),
+                ci_text,
+                f"{float(p_value):.4f}" if p_value is not None else "—",
+                windows_text,
+                f"[{style}]{status}[/]",
+            )
+        console.print(promotion_table)
+        for evaluation in evaluations.values():
+            if evaluation.get("status") in {"REFERENCE", "BENCHMARK"}:
+                continue
+            reasons = " ".join(str(value) for value in evaluation.get("reasons", []))
+            console.print(
+                f"[dim]• {evaluation.get('label', evaluation.get('key'))}: {reasons}[/]"
+            )
+        console.print(
+            "[dim]El gate solo recomienda; nunca modifica producción automáticamente. "
+            f"Exportado en {summary.get('dashboard_path', FILE_TABLERO_SOMBRA)}[/]"
+        )
+
+
+def _fmt_signed(value: Any) -> str:
+    return f"{float(value):+.3f}" if value is not None else "—"
+
+
+def _fmt_percent_delta(value: Any) -> str:
+    return f"{float(value):+.1%}" if value is not None else "—"

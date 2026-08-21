@@ -115,7 +115,9 @@ class ConsoleUI:
         )
         menu_table.add_row("6", "Lab Backtest (Simulación)", "0", "Finalizar Sesión")
         menu_table.add_row("7", "[bold green]EJECUTAR OMEGA STRIDE[/]", "", "")
-        menu_table.add_row("8", "[bold yellow]LIQUIDAR CARTERA & ROI[/]", "", "")
+        menu_table.add_row(
+            "8", "[bold yellow]LIQUIDAR ROI & TABLEROS SOMBRA[/]", "", ""
+        )
 
         self.console.print(menu_table)
         return self.console.input(f"\n[bold cyan]MRPRO[/] > ")

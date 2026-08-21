@@ -123,6 +123,7 @@ def build_covering_shadow_variant(
     validate_ticket_matrix(tickets, candidates, ticket_size)
     settings = {
         "shadow_family": "combinatorial_covering",
+        "promotion_reference_key": "benchmark_mrpro_native_m300",
         "candidate_method": "mrpro_candidate_set",
         "candidate_pool_size": int(spec.candidate_pool_size),
         "candidate_rank_depth": int(spec.rank_depth),

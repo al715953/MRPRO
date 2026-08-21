@@ -14,7 +14,6 @@ from src.data_access.config import (
     BEST_SETTINGS,
     BEST_SETTINGS_TRIS,
     BEST_SETTINGS_TRIS_CAMERA_LAB,
-    BACKTEST_MODEL_FILE_PATH,
     TOTAL_BALLS,
     TICKET_SIZE,
     VERSION_TAG,
@@ -24,6 +23,7 @@ from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.combinatorial.shadow import build_promoted_covering_shadows
 from src.strategies.tris.tris_forecast import TrisForecastV1A
 from src.core.backtester import BacktestEngine
+from src.core.fixed_origin_training import prepare_fixed_origin_models
 from src.core.optimizer import StrategyOptimizer
 from src.core.coverage_tester import CoverageTester
 from src.core.rules import TrisMultiplicadorRules
@@ -154,7 +154,7 @@ class MissionController:
             f"\n{Fore.MAGENTA}🧪 LABORATORIO DE PRUEBAS (V15 OMEGA STRIDE){Style.RESET_ALL}"
         )
         print("1. Sniper Mode (Solo Reducción)")
-        print("2. Full Omega Stride (Producción Sim)")
+        print("2. Full Omega Stride (Fixed-origin automático)")
 
         sub_op = input(f"\n{Fore.CYAN}Selecciona modo: {Style.RESET_ALL}")
 
@@ -175,15 +175,41 @@ class MissionController:
         if sub_op == "1":
             engine.run(UniverseReductionStrategy(), self.history, config, verbose=True)
         elif sub_op == "2":
-            if not Path(BACKTEST_MODEL_FILE_PATH).exists():
+            try:
                 self.ui.console.print(
-                    "[bold red]❌ Falta el modelo temporal de backtest.[/] "
-                    "Ejecuta primero la opción 4 para reentrenar el cerebro."
+                    "[cyan]🧠 Preparando cerebro fixed-origin sin tocar producción...[/]"
+                )
+                artifacts = prepare_fixed_origin_models(self.history, b_size)
+            except Exception as exc:
+                self.ui.console.print(
+                    f"[bold red]❌ No se pudo preparar el modelo de backtest:[/] {exc}"
                 )
                 input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
                 return
+            cache_status = "reutilizado" if artifacts.reused_cache else "entrenado"
+            self.ui.console.print(
+                "[bold green]✅ Fixed-origin "
+                f"{cache_status}:[/] train hasta "
+                f"#{artifacts.training_cutoff_contest} | test "
+                f"#{artifacts.test_start_contest}-#{artifacts.test_end_contest} | "
+                f"AUC interna={artifacts.internal_context_auc:.4f}"
+            )
+            fixed_settings = dict(BEST_SETTINGS)
+            fixed_settings.update(
+                {
+                    "backtest_model_mode": "fixed_origin",
+                    "fixed_origin_training_cutoff": artifacts.training_cutoff_contest,
+                    "fixed_origin_test_start": artifacts.test_start_contest,
+                    "fixed_origin_test_end": artifacts.test_end_contest,
+                    "fixed_origin_dataset_hash": artifacts.dataset_hash,
+                }
+            )
+            config.filter_overrides = fixed_settings
             engine.run(
-                GeneticSelectorStrategy(model_path=BACKTEST_MODEL_FILE_PATH),
+                GeneticSelectorStrategy(
+                    model_path=artifacts.context_model_path,
+                    number_model_path=artifacts.number_model_path,
+                ),
                 self.history,
                 config,
                 True,
@@ -266,6 +292,18 @@ class MissionController:
                     "prediction": pred,
                 },
                 {
+                    "key": "benchmark_mrpro_native_m300",
+                    "label": "Benchmark MRPRO nativo / 300",
+                    "official": False,
+                    "ticket_count": 300,
+                    "settings": {
+                        "shadow_family": "same_budget_benchmark",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                    },
+                },
+                {
                     "key": "challenger_ai10_geo90",
                     "label": "Sombra IA 10% / Geo 90%",
                     "official": False,
@@ -300,7 +338,7 @@ class MissionController:
                     variant_config = PredictionConfigDTO(
                         TOTAL_BALLS,
                         TICKET_SIZE,
-                        n_prod,
+                        int(spec.get("ticket_count", n_prod)),
                         filter_overrides=variant_settings,
                     )
                     variant_config.raw_universe_ptr = config.raw_universe_ptr
@@ -342,7 +380,7 @@ class MissionController:
                 if saved:
                     self.ui.console.print(
                         "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 10/90 + "
-                        "Geo"
+                        "Geo + benchmark 300"
                         + (
                             f" + {covering_shadow_count} covering"
                             if covering_shadow_count

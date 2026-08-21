@@ -96,6 +96,7 @@ DATA_FOLDER = str(DATA_FOLDER_PATH)
 CSV_FILE_PATH = str(DATA_FOLDER_PATH / "Melate-Retro.csv")
 FILE_APUESTAS = str(DATA_FOLDER_PATH / "Mis_Apuestas.csv")
 FILE_CARTERAS_SOMBRA = str(DATA_FOLDER_PATH / "Carteras_Sombra.json")
+FILE_TABLERO_SOMBRA = str(DATA_FOLDER_PATH / "Tablero_Sombra.json")
 MASTER_LOG_PATH = str(DATA_FOLDER_PATH / "master_performance.csv")
 MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_static.json")
 BACKTEST_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_temporal_backtest.json")
@@ -103,6 +104,7 @@ NUMBER_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_number_model.json")
 BACKTEST_NUMBER_MODEL_FILE_PATH = str(
     DATA_FOLDER_PATH / "mrpro_number_model_temporal_backtest.json"
 )
+BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos

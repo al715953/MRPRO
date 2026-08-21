@@ -110,10 +110,12 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         ("selector", [101, 102, 103]),
         ("selector", [101, 102, 103]),
         ("selector", [101, 102, 103]),
+        ("selector", [101, 102, 103]),
     ]
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
         "principal_ai_adaptive",
+        "benchmark_mrpro_native_m300",
         "challenger_ai10_geo90",
         "control_geo_only",
         "cover_mixed_v20_m300",
@@ -125,9 +127,11 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         False,
         False,
         False,
+        False,
     ]
-    assert variants[1]["settings"]["hybrid_alpha"] == 0.10
-    assert variants[2]["settings"]["hybrid_alpha"] == 0.0
+    assert variants[1]["settings"]["shadow_family"] == "same_budget_benchmark"
+    assert variants[2]["settings"]["hybrid_alpha"] == 0.10
+    assert variants[3]["settings"]["hybrid_alpha"] == 0.0
 
 
 def test_tris_production_passes_chronological_history_to_predictor(monkeypatch):
