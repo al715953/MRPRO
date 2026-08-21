@@ -49,6 +49,15 @@ class FitnessConfig:
     # Pool objetivo principal
     focus_max_rank: int = 200  # énfasis total en top200
     candidate_max_rank: int = 500  # permitimos un pequeño hedge fuera del top200
+    bucket_plan: Tuple[Tuple[int, int, int], ...] = (
+        (21, 40, 4),
+        (41, 60, 3),
+        (61, 90, 2),
+        (91, 120, 3),
+        (121, 160, 3),
+        (161, 200, 3),
+        (201, 500, 1),
+    )
 
     # Utilidad por rank (power law)
     rank_alpha: float = 0.70  # más alto => más presión al top
@@ -393,15 +402,7 @@ def select_tickets_v16(
     reserve_top_m = 5
 
     # cuotas: (lo, hi, count)
-    bucket_plan = [
-        (21, 40, 4),
-        (41, 60, 3),
-        (61, 90, 2),
-        (91, 120, 3),
-        (121, 160, 3),
-        (161, 200, 3),
-        (201, 500, 1),
-    ]
+    bucket_plan = cfg.bucket_plan
 
     def _pick_one(mask):
         # Score base

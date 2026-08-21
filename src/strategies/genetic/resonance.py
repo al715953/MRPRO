@@ -226,6 +226,27 @@ class ResonanceEngine:
             hybrid_alpha, hybrid_beta = 0.5, 0.5
             hybrid_signal = (ai_effective + geo_scores) / 2.0
 
+        soft_numbers = []
+        for raw_number in overrides.get("sniper_soft_numbers", []) or []:
+            try:
+                number = int(raw_number)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= number <= int(n_balls) and number not in soft_numbers:
+                soft_numbers.append(number)
+        soft_penalty = min(
+            1.0, max(0.0, float(overrides.get("sniper_soft_penalty", 0.0)))
+        )
+        if soft_numbers and soft_penalty > 0.0:
+            soft_mask = xp.any(
+                xp.isin(u_xp, xp.asarray(soft_numbers, dtype=xp.uint8)), axis=1
+            )
+            soft_multiplier = xp.where(soft_mask, 1.0 - soft_penalty, 1.0)
+            hybrid_signal = hybrid_signal * soft_multiplier
+        else:
+            soft_mask = xp.zeros(n_candidates, dtype=bool)
+            soft_multiplier = xp.ones(n_candidates, dtype=xp.float32)
+
         # CORRECCIÓN V8.2: Si todo es cero (Hybrid=0), inyectamos ruido minúsculo
         # para que el sorteo tenga orden y no Rank #0
         if xp.max(hybrid_signal) == 0:
@@ -260,11 +281,19 @@ class ResonanceEngine:
             w_geo = xp.where(is_ai_confused, 0.90, w_geo_std)
 
             final_scores_reduced = (ai_subset * w_ai) + (geo_subset * w_geo)
+        final_scores_reduced = (
+            final_scores_reduced * soft_multiplier[radar_indices]
+        )
 
         # Thermal numbers (Compatibility)
         recent_draws = raw_history[-5:]
         flat_recent = set([num for draw in recent_draws for num in draw[:6]])
         thermal_numbers = sorted(list(set(range(1, n_balls + 1)) - flat_recent))
+        soft_candidate_count = xp.sum(soft_mask)
+        if hasattr(soft_candidate_count, "get"):
+            soft_candidate_count = soft_candidate_count.get()
+        if hasattr(soft_candidate_count, "item"):
+            soft_candidate_count = soft_candidate_count.item()
 
         return {
             "u_reduced": u_reduced,
@@ -287,6 +316,9 @@ class ResonanceEngine:
             "resonance_blend_mode": "fixed" if fixed_blend else "adaptive",
             "hybrid_alpha": float(hybrid_alpha),
             "hybrid_beta": float(hybrid_beta),
+            "sniper_soft_numbers": [int(number) for number in soft_numbers],
+            "sniper_soft_penalty": float(soft_penalty),
+            "sniper_soft_candidate_count": int(soft_candidate_count),
         }
 
     def _build_nexus_matrix(self, history, n_balls):

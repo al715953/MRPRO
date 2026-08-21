@@ -11,8 +11,8 @@ from typing import Any
 import numpy as np
 
 from src.core.backtester import BacktestEngine
+from src.core.fixed_origin_training import prepare_fixed_origin_models
 from src.data_access.config import (
-    BACKTEST_MODEL_FILE_PATH,
     BEST_SETTINGS,
     DATA_FOLDER_PATH,
     LOTTERY_PROFILES,
@@ -95,9 +95,44 @@ BLEND_SWEEP_VARIANTS = (
     },
 )
 
+SELECTOR_SHADOW_VARIANTS = (
+    CORE_VARIANTS[0],
+    {
+        "name": "G_context50_number50_adaptive",
+        "description": "IA contextual 50% + IA por número 50%, con Geo adaptativo",
+        "overrides": {
+            "ai_context_weight": 0.50,
+            "ai_number_weight": 0.50,
+            "resonance_blend_mode": "adaptive",
+        },
+    },
+    {
+        "name": "H_deep_rank_5000_same_budget",
+        "description": "Selector estratificado hasta rank 5000 con igual presupuesto",
+        "overrides": {
+            "ai_context_weight": 1.0,
+            "ai_number_weight": 0.0,
+            "resonance_blend_mode": "adaptive",
+            "fitness_focus_max_rank": 5000,
+            "fitness_candidate_max_rank": 5000,
+            "fitness_rank_edges": [5, 20, 100, 300, 750, 1500, 3000, 5000],
+            "fitness_bucket_plan": [
+                [6, 20, 2],
+                [21, 100, 3],
+                [101, 300, 3],
+                [301, 750, 3],
+                [751, 1500, 3],
+                [1501, 3000, 3],
+                [3001, 5000, 2],
+            ],
+        },
+    },
+)
+
 VARIANT_SUITES = {
     "core": CORE_VARIANTS,
     "blend-sweep": BLEND_SWEEP_VARIANTS,
+    "selector-shadows": SELECTOR_SHADOW_VARIANTS,
 }
 
 
@@ -170,13 +205,23 @@ def run_experiments(
 ) -> dict[str, Any]:
     profile = LOTTERY_PROFILES["melate_retro"]
     history = LotteryLoader(profile).load_data()
+    artifacts = prepare_fixed_origin_models(history, backtest_size)
     results: list[dict[str, Any]] = []
     reference_draw_ids: list[int] | None = None
 
     for variant in variants:
         overrides = dict(BEST_SETTINGS)
         overrides.update(variant["overrides"])
-        overrides["seed"] = int(seed)
+        overrides.update(
+            {
+                "seed": int(seed),
+                "backtest_model_mode": "fixed_origin",
+                "fixed_origin_training_cutoff": artifacts.training_cutoff_contest,
+                "fixed_origin_test_start": artifacts.test_start_contest,
+                "fixed_origin_test_end": artifacts.test_end_contest,
+                "fixed_origin_dataset_hash": artifacts.dataset_hash,
+            }
+        )
 
         config = PredictionConfigDTO(
             TOTAL_BALLS,
@@ -187,7 +232,10 @@ def run_experiments(
         )
         engine = BacktestEngine()
         result = engine.run(
-            GeneticSelectorStrategy(model_path=BACKTEST_MODEL_FILE_PATH),
+            GeneticSelectorStrategy(
+                model_path=artifacts.context_model_path,
+                number_model_path=artifacts.number_model_path,
+            ),
             history,
             config,
             verbose=False,
@@ -213,6 +261,7 @@ def run_experiments(
         "requested_backtest_size": int(backtest_size),
         "tickets_per_draw": int(tickets),
         "seed": int(seed),
+        "fixed_origin": artifacts.to_dict(),
         "evaluated_draw_ids": reference_draw_ids or [],
         "variants": results,
     }
@@ -235,11 +284,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output = args.output or Path(
-        DATA_FOLDER_PATH / "melate_blend_sweep.json"
-        if args.suite == "blend-sweep"
-        else DATA_FOLDER_PATH / "melate_ab_experiment.json"
-    )
+    default_names = {
+        "core": "melate_ab_experiment.json",
+        "blend-sweep": "melate_blend_sweep.json",
+        "selector-shadows": "melate_selector_shadows.json",
+    }
+    output = args.output or Path(DATA_FOLDER_PATH / default_names[args.suite])
     payload = run_experiments(
         args.draws,
         args.tickets,

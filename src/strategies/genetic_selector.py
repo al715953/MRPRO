@@ -1,5 +1,7 @@
 # src/strategies/genetic_selector.py
 
+import math
+
 import numpy as np
 from src.domain.dtos import PredictionResultDTO
 from src.strategies.genetic.resonance import ResonanceEngine
@@ -114,6 +116,126 @@ class GeneticSelectorStrategy:
 
         return final_selection
 
+    @staticmethod
+    def _ensure_soft_veto_reserve(
+        final_tickets,
+        candidate_tickets,
+        candidate_scores,
+        soft_numbers,
+        reserve_fraction,
+    ):
+        """Keep a small hedge containing soft-veto numbers without duplicates."""
+        numbers = {int(number) for number in (soft_numbers or [])}
+        requested = int(
+            math.ceil(max(0.0, float(reserve_fraction)) * len(final_tickets))
+        )
+        target = min(len(final_tickets), requested) if numbers else 0
+        if target <= 0 or not final_tickets:
+            return final_tickets, {
+                "target": 0,
+                "actual": 0,
+                "replacements": 0,
+            }
+
+        selected = [list(map(int, ticket)) for ticket in final_tickets]
+        selected_keys = {tuple(ticket) for ticket in selected}
+        actual = sum(bool(numbers.intersection(ticket)) for ticket in selected)
+        if actual >= target:
+            return selected, {
+                "target": target,
+                "actual": actual,
+                "replacements": 0,
+            }
+
+        pool = (
+            candidate_tickets.get()
+            if hasattr(candidate_tickets, "get")
+            else np.asarray(candidate_tickets)
+        )
+        scores = (
+            candidate_scores.get()
+            if hasattr(candidate_scores, "get")
+            else np.asarray(candidate_scores)
+        )
+        order = np.argsort(np.asarray(scores, dtype=np.float64))[::-1]
+        replacements = 0
+        for idx in order:
+            candidate = sorted(int(number) for number in pool[int(idx)])
+            key = tuple(candidate)
+            if key in selected_keys or not numbers.intersection(candidate):
+                continue
+            replace_idx = next(
+                (
+                    pos
+                    for pos in range(len(selected) - 1, -1, -1)
+                    if not numbers.intersection(selected[pos])
+                ),
+                None,
+            )
+            if replace_idx is None:
+                break
+            selected_keys.remove(tuple(selected[replace_idx]))
+            selected[replace_idx] = candidate
+            selected_keys.add(key)
+            replacements += 1
+            actual += 1
+            if actual >= target:
+                break
+        return selected, {
+            "target": target,
+            "actual": actual,
+            "replacements": replacements,
+        }
+
+    @staticmethod
+    def _selection_configs(overrides):
+        """Build validated selector configs while preserving official defaults."""
+        source = overrides if isinstance(overrides, dict) else {}
+        try:
+            focus = max(1, int(source.get("fitness_focus_max_rank", 200)))
+            candidate = max(
+                focus, int(source.get("fitness_candidate_max_rank", 500))
+            )
+        except (TypeError, ValueError):
+            focus, candidate = 200, 500
+
+        default_edges = (10, 30, 60, 100, 150, 200, 500)
+        try:
+            edges = tuple(
+                sorted(
+                    {
+                        int(value)
+                        for value in source.get("fitness_rank_edges", default_edges)
+                        if int(value) > 0
+                    }
+                )
+            )
+        except (TypeError, ValueError):
+            edges = default_edges
+        if not edges:
+            edges = default_edges
+
+        default_plan = FitnessConfig().bucket_plan
+        plan = []
+        try:
+            for raw in source.get("fitness_bucket_plan", default_plan):
+                lo, hi, count = (int(value) for value in raw)
+                if 1 <= lo <= hi and count > 0:
+                    plan.append((lo, hi, count))
+        except (TypeError, ValueError):
+            plan = []
+        if not plan:
+            plan = list(default_plan)
+
+        return (
+            FitnessConfig(
+                focus_max_rank=focus,
+                candidate_max_rank=candidate,
+                bucket_plan=tuple(plan),
+            ),
+            StrataConfig(rank_edges=edges),
+        )
+
     def predict(self, history, config) -> PredictionResultDTO:
         univ = config.raw_universe_ptr
         if univ is None or len(univ) == 0:
@@ -139,13 +261,22 @@ class GeneticSelectorStrategy:
         # )
         # 2 Nueva logica de 200
 
+        overrides = getattr(config, "filter_overrides", None) or {}
+        fitness_config, strata_config = self._selection_configs(overrides)
         final_tickets, dbg = select_tickets_v16(
             res["u_reduced"],
             res["final_scores_reduced"],
             n_tickets=config.num_tickets,
             xp=xp,
-            cfg=FitnessConfig(focus_max_rank=200, candidate_max_rank=500),
-            strata=StrataConfig(rank_edges=(10, 30, 60, 100, 150, 200, 500)),
+            cfg=fitness_config,
+            strata=strata_config,
+        )
+        final_tickets, soft_reserve = self._ensure_soft_veto_reserve(
+            final_tickets,
+            res["u_reduced"],
+            res["final_scores_reduced"],
+            res.get("sniper_soft_numbers", []),
+            overrides.get("sniper_soft_reserve_fraction", 0.0),
         )
         # si quieres, puedes guardar dbg["selected_ranks"] directo
 
@@ -207,5 +338,24 @@ class GeneticSelectorStrategy:
                 "resonance_blend_mode": res.get("resonance_blend_mode"),
                 "hybrid_alpha": res.get("hybrid_alpha"),
                 "hybrid_beta": res.get("hybrid_beta"),
+                "fitness_focus_max_rank": fitness_config.focus_max_rank,
+                "fitness_candidate_max_rank": fitness_config.candidate_max_rank,
+                "fitness_rank_edges": list(strata_config.rank_edges),
+                "fitness_bucket_plan": [
+                    list(bucket) for bucket in fitness_config.bucket_plan
+                ],
+                "selector_debug_ranks": [
+                    int(rank) for rank in dbg.get("selected_ranks", [])
+                ],
+                "sniper_soft_numbers": res.get("sniper_soft_numbers", []),
+                "sniper_soft_penalty": res.get("sniper_soft_penalty", 0.0),
+                "sniper_soft_candidate_count": res.get(
+                    "sniper_soft_candidate_count", 0
+                ),
+                "sniper_soft_reserve_target": soft_reserve["target"],
+                "sniper_soft_reserve_actual": soft_reserve["actual"],
+                "sniper_soft_reserve_replacements": soft_reserve[
+                    "replacements"
+                ],
             },
         )

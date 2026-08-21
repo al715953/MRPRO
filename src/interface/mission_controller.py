@@ -19,6 +19,7 @@ from src.data_access.config import (
     VERSION_TAG,
 )
 from src.strategies.universe_reduction import UniverseReductionStrategy
+from src.strategies.universe.shadow import build_promoted_universe_shadows
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.combinatorial.shadow import build_promoted_covering_shadows
 from src.strategies.tris.tris_forecast import TrisForecastV1A
@@ -327,6 +328,51 @@ class MissionController:
                         "ai_number_weight": 0.0,
                     },
                 },
+                {
+                    "key": "challenger_context50_number50",
+                    "label": "Sombra IA contexto 50% / números 50%",
+                    "official": False,
+                    "settings": {
+                        "shadow_family": "ai_signal_mix",
+                        "promotion_reference_key": "principal_ai_adaptive",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 0.50,
+                        "ai_number_weight": 0.50,
+                    },
+                },
+                {
+                    "key": "challenger_deep_rank_5000",
+                    "label": "Sombra selector estratificado hasta rank 5000",
+                    "official": False,
+                    "settings": {
+                        "shadow_family": "selector_depth",
+                        "promotion_reference_key": "principal_ai_adaptive",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                        "fitness_focus_max_rank": 5000,
+                        "fitness_candidate_max_rank": 5000,
+                        "fitness_rank_edges": [
+                            5,
+                            20,
+                            100,
+                            300,
+                            750,
+                            1500,
+                            3000,
+                            5000,
+                        ],
+                        "fitness_bucket_plan": [
+                            [6, 20, 2],
+                            [21, 100, 3],
+                            [101, 300, 3],
+                            [301, 750, 3],
+                            [751, 1500, 3],
+                            [1501, 3000, 3],
+                            [3001, 5000, 2],
+                        ],
+                    },
+                },
             )
 
             shadow_variants = []
@@ -369,6 +415,23 @@ class MissionController:
                     f"producción y sombras existentes continúan:[/] {exc}"
                 )
 
+            universe_shadow_count = 0
+            try:
+                universe_variants = build_promoted_universe_shadows(
+                    production_history,
+                    selector,
+                    total_balls=TOTAL_BALLS,
+                    ticket_size=TICKET_SIZE,
+                    ticket_count=n_prod,
+                )
+                shadow_variants.extend(universe_variants)
+                universe_shadow_count = len(universe_variants)
+            except Exception as exc:
+                self.ui.console.print(
+                    "[bold yellow]⚠ Las sombras de universo no pudieron generarse; "
+                    f"producción y demás sombras continúan:[/] {exc}"
+                )
+
             report.guardar_prediccion(pred.tickets, proximo_id)
             report.generar_ticket_limpio(pred.tickets, proximo_id)
             try:
@@ -380,10 +443,15 @@ class MissionController:
                 if saved:
                     self.ui.console.print(
                         "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 10/90 + "
-                        "Geo + benchmark 300"
+                        "Geo + IA números 50/50 + rank profundo + benchmark 300"
                         + (
                             f" + {covering_shadow_count} covering"
                             if covering_shadow_count
+                            else ""
+                        )
+                        + (
+                            f" + {universe_shadow_count} de universo"
+                            if universe_shadow_count
                             else ""
                         )
                         + " guardados sin inversión adicional."

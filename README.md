@@ -97,6 +97,74 @@ test, intervalo bootstrap y estabilidad en tres ventanas. Nunca cambia
 producción automáticamente. La fotografía reproducible se exporta en
 `data/Tablero_Sombra.json`.
 
+### Sombras prospectivas de IA, selector y reducción del universo
+
+La opción 7 genera carteras no oficiales para aislar cambios de IA, selector y
+universo. Salvo los benchmarks marcados con otro presupuesto, usan el mismo
+número de boletos que la cartera principal:
+
+- `profile_oos_43k`: perfiles de décadas seleccionados hasta el concurso 1443,
+  con límite de 45,000 combinaciones.
+- `profile_same_budget_40k`: los mismos perfiles con límite de 39,864
+  combinaciones.
+- `sniper_soft_veto`: conserva el número señalado por Sniper, penaliza 15% los
+  tickets que lo contienen y reserva 10% de los boletos como cobertura.
+- `challenger_context50_number50`: conserva la IA activa y mezcla en partes
+  iguales el modelo contextual y el modelo por número.
+- `challenger_deep_rank_5000`: conserva 24 boletos, pero distribuye cobertura
+  por estratos hasta rank 5000 para medir si el límite 500 es demasiado corto.
+
+El universo oficial conserva `sniper_mode=hard` y sus perfiles actuales. Las
+variantes se guardan solamente en `data/Carteras_Sombra.json`; la opción 8 las
+liquida y compara contra `principal_ai_adaptive`. Ninguna sombra modifica
+automáticamente producción.
+
+El reductor registra tamaños antes y después de cada etapa en
+`reduction_stage_stats`. `universe_ticket_limit` controla el Top-K final; un
+valor no positivo conserva el límite histórico de 45,000.
+
+Los controles de reducción ya son independientes: `max_contig` limita pares
+consecutivos, `max_delta` limita el salto adyacente máximo y
+`max_per_decade` controla la concentración por decena. Los filtros posicional
+y espacial pueden aislarse con `positional_filter_enabled` y
+`spatial_filter_enabled`. La desviación estándar continúa como señal de
+scoring en producción; solo poda cuando `std_filter_enabled` o
+`auto_std_compensation` se activan explícitamente.
+
+La calibración de la opción 3 usa orden cronológico y separa la ventana pedida
+en validación (70%) y test reservado (30%). Los parámetros se eligen únicamente
+con validación; el test se reporta una sola vez. La calibración estructural se
+ejecuta con Sniper apagado, porque sus pesos se optimizan por separado. Si el
+Sniper no genera exclusiones en validación, se conservan los pesos vigentes y
+el resultado se marca `selection_inconclusive`.
+
+En backtest, `AIr` significa *score relativo min-max*, no probabilidad de
+premio. `pNN` es su percentil dentro del universo del sorteo, `NV` indica que
+la señal todavía no superó el umbral temporal y `Mix` muestra los pesos
+IA/Geo aplicados realmente a esa combinación. Ninguno de estos indicadores
+debe interpretarse como probabilidad física del sorteo.
+
+Las sombras de IA y profundidad también pueden repetirse en un backtest
+fixed-origin reproducible —el script prepara automáticamente el cerebro hasta
+el sorteo anterior a la ventana— con:
+
+```bash
+python3 run_melate_ab_experiments.py --suite selector-shadows --draws 218 --tickets 24
+```
+
+### Rotación del log forense
+
+`data/detailed_forensic_log.csv` conserva el historial de corridas, pero rota
+antes de superar 25 MiB. El archivo anterior se comprime de forma atómica en
+`data/forensic_log_archive/` y la corrida nueva permanece completa en el CSV
+activo. Se retienen 12 archivos comprimidos; ambos valores son configurables
+mediante `FORENSIC_LOG_MAX_BYTES` y `FORENSIC_LOG_ARCHIVE_KEEP`.
+
+`PerformanceTracker.get_summary()` sigue devolviendo el histórico retenido
+completo, incluyendo los `.csv.gz`. La opción `include_archives=False` permite
+leer únicamente el archivo activo. Un límite de tamaño no positivo desactiva
+la rotación y una retención no positiva conserva los archivos sin poda.
+
 `oracle_candidate_set` inserta deliberadamente el resultado ganador dentro del
 conjunto candidato. Es un control matemático, no una estrategia predictiva. Los
 reportes separan cobertura combinatoria, calidad del conjunto candidato y

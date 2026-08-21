@@ -84,8 +84,39 @@ class LotteryForensics:
         scores_cpu = snapshot["hybrid_scores"]
         if hasattr(scores_cpu, "get"):
             scores_cpu = scores_cpu.get()
+        scores_cpu = np.asarray(scores_cpu)
 
         rank = int(np.sum(scores_cpu > scores_cpu[idx_best]) + 1)
+
+        ai_scores_cpu = snapshot.get("ai_scores", np.zeros(len(univ)))
+        if hasattr(ai_scores_cpu, "get"):
+            ai_scores_cpu = ai_scores_cpu.get()
+        ai_scores_cpu = np.asarray(ai_scores_cpu, dtype=np.float64)
+        ai_score = float(ai_scores_cpu[idx_best])
+        below = int(np.sum(ai_scores_cpu < ai_score))
+        tied = int(np.sum(ai_scores_cpu == ai_score))
+        ai_percentile_rank = (
+            100.0 * (below + 0.5 * tied) / len(ai_scores_cpu)
+            if len(ai_scores_cpu)
+            else 0.0
+        )
+
+        geo_score = float(snapshot.get("geo_scores", [0])[idx_best])
+        blend_mode = str(snapshot.get("resonance_blend_mode", "adaptive")).lower()
+        if blend_mode == "fixed":
+            ai_weight = max(0.0, float(snapshot.get("hybrid_alpha", 0.5)))
+            geo_weight = max(0.0, float(snapshot.get("hybrid_beta", 0.5)))
+            weight_total = ai_weight + geo_weight
+            if weight_total <= 0.0:
+                ai_weight, geo_weight, weight_total = 0.5, 0.5, 1.0
+            ai_weight /= weight_total
+            geo_weight /= weight_total
+        elif ai_score < 0.15:
+            ai_weight, geo_weight = 0.10, 0.90
+        elif geo_score > 0.4:
+            ai_weight, geo_weight = 0.40, 0.60
+        else:
+            ai_weight, geo_weight = 0.80, 0.20
 
         # 4. Cálculo de Proximidad al Top Rank Seleccionado
         selected_ranks = snapshot.get("selected_ranks", [])
@@ -99,10 +130,15 @@ class LotteryForensics:
             "proximity": proximity,
             "univ_size": len(univ),
             "hybrid_score": float(scores_cpu[idx_best]),
-            "ai_score": float(snapshot.get("ai_scores", [0])[idx_best]),
-            "geo_score": float(snapshot.get("geo_scores", [0])[idx_best]),
+            "ai_score": ai_score,
+            "ai_score_kind": "relative_minmax",
+            "ai_percentile_rank": float(ai_percentile_rank),
+            "ai_weight_effective": float(ai_weight),
+            "geo_weight_effective": float(geo_weight),
+            "geo_score": geo_score,
             "ai_signal_enabled": bool(snapshot.get("ai_signal_enabled", True)),
             "ai_signal_validated": bool(snapshot.get("ai_signal_validated", True)),
             "temporal_holdout_auc": snapshot.get("temporal_holdout_auc"),
+            "resonance_blend_mode": blend_mode,
             "sniper_log": snapshot.get("sniper_msg", "N/A"),
         }

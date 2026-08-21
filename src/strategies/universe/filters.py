@@ -235,8 +235,12 @@ class VectorizedFilters:
         row_sums = self.xp.sum(deltas, axis=1)[:, self.xp.newaxis]
         p = deltas / (row_sums + 1e-9)
         entropy = -self.xp.sum(p * self.xp.log2(p + 1e-9), axis=1)
+        theoretical_max = float(np.log2(max(2, int(universe.shape[1]) - 1)))
+        configured_max = min(
+            theoretical_max, float(cfg.get("entropy_max", theoretical_max))
+        )
         mask = (entropy >= cfg.get("entropy_min", 2.10)) & (
-            entropy <= cfg.get("entropy_max", 2.50)
+            entropy <= configured_max
         )
         return universe[mask]
 
@@ -251,7 +255,9 @@ class VectorizedFilters:
         return universe[mask]
 
     def apply_positional_limits(self, universe, cfg):
-        if len(universe) == 0:
+        if len(universe) == 0 or not bool(
+            cfg.get("positional_filter_enabled", True)
+        ):
             return universe
         mask = (universe[:, 0] <= cfg.get("f1_max", 12)) & (
             universe[:, 5] >= cfg.get("f6_min", 28)
@@ -262,7 +268,8 @@ class VectorizedFilters:
         evens = self.xp.sum(universe % 2 == 0, axis=1)
         primes = self.xp.sum(self.is_prime[universe], axis=1)
         deltas = self.xp.diff(universe, axis=1)
-        max_contig = cfg.get("max_contig", cfg.get("max_delta", 1))
+        max_contig = int(cfg.get("max_contig", 1))
+        max_delta = int(cfg.get("max_delta", 0) or 0)
         mask = (
             (evens >= cfg.get("even_min", 2))
             & (evens <= cfg.get("even_max", 4))
@@ -270,6 +277,8 @@ class VectorizedFilters:
             & (primes <= cfg.get("prime_max", 4))
             & (self.xp.sum(deltas == 1, axis=1) <= max_contig)
         )
+        if max_delta > 0:
+            mask &= self.xp.max(deltas, axis=1) <= max_delta
         return universe[mask]
 
     def apply_terminal_poda(self, universe, cfg):
@@ -289,7 +298,15 @@ class VectorizedFilters:
         d2 = self.xp.sum((universe >= 11) & (universe <= 20), axis=1)
         d3 = self.xp.sum((universe >= 21) & (universe <= 30), axis=1)
         d4 = self.xp.sum((universe >= 31) & (universe <= 39), axis=1)
-        mask = (d1 <= 3) & (d2 <= 3) & (d3 <= 3) & (d4 <= 3)
+        if not bool(cfg.get("spatial_filter_enabled", True)):
+            return universe, (d1, d2, d3, d4)
+        max_per_decade = max(1, int(cfg.get("max_per_decade", 3)))
+        mask = (
+            (d1 <= max_per_decade)
+            & (d2 <= max_per_decade)
+            & (d3 <= max_per_decade)
+            & (d4 <= max_per_decade)
+        )
         return universe[mask], (d1[mask], d2[mask], d3[mask], d4[mask])
 
     def apply_profile_poda(self, universe, d_vecs, cfg):
@@ -310,67 +327,46 @@ class VectorizedFilters:
         candidates_np = universe if isinstance(universe, np.ndarray) else universe.get()
         return universe[calculate_ac_numba(candidates_np) >= ac_min]
 
-    # ==============================
-    # SURVIVAL SCORING ENGINE V15
-    # ==============================
-
-    def compute_survival_scores(self, universe, cfg):
-        """
-        Calcula score acumulado normalizado [0,1]
-        SIN descartar tickets.
-        GPU-first.
-        """
-
-        if len(universe) == 0:
-            return self.xp.zeros(0, dtype=self.xp.float32)
+    def apply_standard_deviation(self, universe, cfg):
+        """Apply an optional std gate and keep an automatic target-sized cushion."""
+        enabled = bool(cfg.get("std_filter_enabled", False))
+        automatic = bool(cfg.get("auto_std_compensation", False))
+        if len(universe) == 0 or not (enabled or automatic):
+            return universe
 
         xp = self.xp
-        universe_f = universe.astype(xp.float32)
+        values = xp.std(universe.astype(xp.float32), axis=1)
+        lower = float(cfg.get("std_min", 0.0))
+        upper = float(cfg.get("std_max", float("inf")))
+        if lower > upper:
+            lower, upper = upper, lower
+        mask = (values >= lower) & (values <= upper)
+        if not automatic:
+            return universe[mask]
 
-        # ----------------------------
-        # 1. Score Suma (gaussiano)
-        # ----------------------------
-        sums = xp.sum(universe_f, axis=1)
-        mean_sum = (cfg.get("sum_min", 110) + cfg.get("sum_max", 132)) / 2.0
-        std_sum = (cfg.get("sum_max", 132) - cfg.get("sum_min", 110)) / 4.0
-        score_sum = xp.exp(-((sums - mean_sum) ** 2) / (2 * std_sum**2))
+        try:
+            requested = int(
+                cfg.get("target_universe_size", 0)
+                or cfg.get("universe_ticket_limit", 0)
+                or 0
+            )
+        except (TypeError, ValueError):
+            requested = 0
+        desired = min(max(0, requested), int(len(universe)))
+        inside_count = int(xp.sum(mask))
+        if desired <= 0 or inside_count >= desired:
+            return universe[mask]
 
-        # ----------------------------
-        # 2. Score Desviación Estándar
-        # ----------------------------
-        stds = xp.std(universe_f, axis=1)
-        mean_std = (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0
-        std_std = (cfg.get("std_max", 12.0) - cfg.get("std_min", 8.0)) / 4.0
-        score_std = xp.exp(-((stds - mean_std) ** 2) / (2 * std_std**2))
-
-        # ----------------------------
-        # 3. Score Paridad Balance
-        # ----------------------------
-        evens = xp.sum(universe % 2 == 0, axis=1)
-        ideal_even = (cfg.get("even_min", 2) + cfg.get("even_max", 4)) / 2.0
-        score_even = 1.0 - xp.abs(evens - ideal_even) / 6.0
-
-        # ----------------------------
-        # 4. Score Terminal Distribution
-        # ----------------------------
-        last_digits = universe % 10
-        counts = xp.zeros((len(universe), 10), dtype=xp.int32)
-        for i in range(6):
-            xp.add.at(counts, (xp.arange(len(universe)), last_digits[:, i]), 1)
-        max_rep = xp.max(counts, axis=1)
-        score_term = 1.0 - (max_rep - 1) / 5.0
-
-        # ----------------------------
-        # Score Total (ponderado)
-        # ----------------------------
-        total_score = (
-            0.30 * score_sum + 0.30 * score_std + 0.20 * score_even + 0.20 * score_term
+        distance = xp.maximum(lower - values, 0.0) + xp.maximum(
+            values - upper, 0.0
         )
-
-        return total_score.astype(xp.float32)
+        # Canonicalizar índices mantiene una salida reproducible y el orden natural
+        # del universo, tanto con NumPy como con CuPy.
+        indices = xp.sort(xp.argpartition(distance, desired - 1)[:desired])
+        return universe[indices]
 
     # ============================================
-    # CORE SURVIVAL SCORE (V15)
+    # CORE SURVIVAL SCORE (V15, comportamiento operativo histórico)
     # ============================================
     def compute_survival_scores(self, universe, cfg):
 

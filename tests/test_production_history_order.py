@@ -92,6 +92,36 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
             },
         ],
     )
+    monkeypatch.setattr(
+        mission_module,
+        "build_promoted_universe_shadows",
+        lambda *_args, **_kwargs: [
+            {
+                "key": "profile_oos_43k",
+                "label": "Profile 43K",
+                "official": False,
+                "settings": {"shadow_family": "universe_reduction"},
+                "tickets": [[1, 2, 3, 4, 5, 6]],
+                "metadata": {"raw_universe_size": 43368},
+            },
+            {
+                "key": "profile_same_budget_40k",
+                "label": "Profile same",
+                "official": False,
+                "settings": {"shadow_family": "universe_reduction"},
+                "tickets": [[1, 2, 3, 4, 5, 6]],
+                "metadata": {"raw_universe_size": 39864},
+            },
+            {
+                "key": "sniper_soft_veto",
+                "label": "Soft veto",
+                "official": False,
+                "settings": {"shadow_family": "universe_reduction"},
+                "tickets": [[1, 2, 3, 4, 5, 6]],
+                "metadata": {"sniper_mode": "soft"},
+            },
+        ],
+    )
     monkeypatch.setattr(mission_module.report, "tiene_apuestas_pendientes", lambda _: False)
     monkeypatch.setattr(mission_module.report, "guardar_prediccion", lambda *_: None)
     monkeypatch.setattr(mission_module.report, "generar_ticket_limpio", lambda *_: None)
@@ -111,6 +141,8 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         ("selector", [101, 102, 103]),
         ("selector", [101, 102, 103]),
         ("selector", [101, 102, 103]),
+        ("selector", [101, 102, 103]),
+        ("selector", [101, 102, 103]),
     ]
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
@@ -118,11 +150,21 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         "benchmark_mrpro_native_m300",
         "challenger_ai10_geo90",
         "control_geo_only",
+        "challenger_context50_number50",
+        "challenger_deep_rank_5000",
         "cover_mixed_v20_m300",
         "cover_mixed_v18_m300",
+        "profile_oos_43k",
+        "profile_same_budget_40k",
+        "sniper_soft_veto",
     ]
     assert [variant["official"] for variant in variants] == [
         True,
+        False,
+        False,
+        False,
+        False,
+        False,
         False,
         False,
         False,
@@ -132,6 +174,8 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert variants[1]["settings"]["shadow_family"] == "same_budget_benchmark"
     assert variants[2]["settings"]["hybrid_alpha"] == 0.10
     assert variants[3]["settings"]["hybrid_alpha"] == 0.0
+    assert variants[4]["settings"]["ai_number_weight"] == 0.50
+    assert variants[5]["settings"]["fitness_candidate_max_rank"] == 5000
 
 
 def test_tris_production_passes_chronological_history_to_predictor(monkeypatch):

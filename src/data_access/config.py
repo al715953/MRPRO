@@ -98,6 +98,12 @@ FILE_APUESTAS = str(DATA_FOLDER_PATH / "Mis_Apuestas.csv")
 FILE_CARTERAS_SOMBRA = str(DATA_FOLDER_PATH / "Carteras_Sombra.json")
 FILE_TABLERO_SOMBRA = str(DATA_FOLDER_PATH / "Tablero_Sombra.json")
 MASTER_LOG_PATH = str(DATA_FOLDER_PATH / "master_performance.csv")
+FORENSIC_LOG_PATH = str(DATA_FOLDER_PATH / "detailed_forensic_log.csv")
+FORENSIC_LOG_ARCHIVE_PATH = DATA_FOLDER_PATH / "forensic_log_archive"
+# El archivo activo rota antes de superar 25 MiB; los archivos históricos se
+# comprimen. Un valor <= 0 desactiva el límite o la retención, respectivamente.
+FORENSIC_LOG_MAX_BYTES = 25 * 1024 * 1024
+FORENSIC_LOG_ARCHIVE_KEEP = 12
 MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_static.json")
 BACKTEST_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_model_v8_temporal_backtest.json")
 NUMBER_MODEL_FILE_PATH = str(DATA_FOLDER_PATH / "mrpro_number_model.json")
@@ -166,6 +172,9 @@ NUM_SIMULACIONES = 250000
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     "dynamic_exclude_count": 1,  # Números a eliminar por inercia térmica
+    "sniper_mode": "hard",  # hard=excluye, soft=penaliza, off=desactiva.
+    "sniper_soft_penalty": 0.15,
+    "sniper_soft_reserve_fraction": 0.10,
     "anchor_nexus_size": 3,  # Cuántos números 'ancla' compartirán los tickets
     "nexus_density": 0.90,  # 80% de los tickets tendrán las anclas
     "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
@@ -174,21 +183,24 @@ BEST_SETTINGS = {
     "sum_max": 115,  # 128
     "f1_max": 11,
     "f6_min": 29,
+    "positional_filter_enabled": True,
+    "spatial_filter_enabled": True,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
     "max_per_decade": 3,
     "prime_min": 1,
     "prime_max": 3,
-    "max_delta": 15,  # Saltos más cortos (más realista)
-    "max_contig": 1,  # Alias operativo para filtro de consecutivos
+    "max_delta": 15,  # Salto máximo permitido entre números adyacentes.
+    "max_contig": 1,  # Máximo de pares consecutivos.
     "std_min": 7.5,  # Dispersión más controlada
     "std_max": 13.2,
+    "std_filter_enabled": False,  # Scoring solamente salvo activación explícita.
     "entropy_min": 2.15,  # Punto dulce detectado en V13
-    "entropy_max": 2.45,  # Filtra el ruido estético excesivo
+    "entropy_max": 2.321928094887362,  # Máximo teórico log2(5).
     "sdr_min": 22,  # Suma de Raíces Digitales mínima
     "sdr_max": 38,  # Suma de Raíces Digitales máxima
-    "max_same_last_digit": 3,  # Solo máximo 2 números con misma terminación
+    "max_same_last_digit": 3,  # Máximo 3 números con la misma terminación.
     # 2. IA Scorer (Fase 2: Sugerencia 3 de Resonancia)
     "scale_pos_weight": 4,
     "n_estimators": 3200,
@@ -210,6 +222,18 @@ BEST_SETTINGS = {
     "alpha_core_size": 3,
     "repulsion_strength": 2.8,
     "sampling_top": 2,  # Tickets de cobertura aleatoria en el Top 100
+    "fitness_focus_max_rank": 200,
+    "fitness_candidate_max_rank": 500,
+    "fitness_rank_edges": [10, 30, 60, 100, 150, 200, 500],
+    "fitness_bucket_plan": [
+        [21, 40, 4],
+        [41, 60, 3],
+        [61, 90, 2],
+        [91, 120, 3],
+        [121, 160, 3],
+        [161, 200, 3],
+        [201, 500, 1],
+    ],
     # Umbrales de Calidad
     # General
     "verbose": True,
@@ -231,7 +255,10 @@ BEST_SETTINGS = {
     "sniper_conservative": False,  # Activa modo conservador (menos exclusiones).
     "sniper_threshold_boost": 0.08,  # Incremento de umbral en modo conservador.
     "auto_std_compensation": False,  # Ajusta std para sostener tamaño objetivo.
-    "target_universe_size": 0,  # Si >0, objetivo de tamaño para compensación std.
+    # Alias legacy: si es >0 tiene precedencia sobre universe_ticket_limit.
+    "target_universe_size": 0,
+    "universe_ticket_limit": 45000,
+    "density_penalty_strength": 0.15,
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     # ESTRUCTURA CRÍTICA: Cada experto requiere su propio objetivo de entrenamiento
     "ensemble_config": {
@@ -400,7 +427,7 @@ RESET = "\033[0m"
 # Define los ejes para la Calibración Forense Exhaustiva
 SEARCH_GRID = {
     "e_min": [2.00, 2.05, 2.10, 2.15],
-    "e_max": [2.45, 2.50, 2.55, 2.60],
+    "e_max": [2.25, 2.28, 2.30, 2.321928094887362],
     "s_min": [20, 22, 24],
     "s_max": [42, 44, 46],
     "ac": [7, 8],

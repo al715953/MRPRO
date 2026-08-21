@@ -106,6 +106,12 @@ class UniverseReductionStrategy:
             "final_size": len(universe),
             "sniper_log": sniper_log,
             "reduction_stage_stats": stage_stats,
+            "sniper_mode": stage_stats.get("sniper_mode", "hard"),
+            "sniper_candidates": stage_stats.get("sniper_candidates", []),
+            "hard_excluded_numbers": stage_stats.get(
+                "hard_excluded_numbers", []
+            ),
+            "universe_ticket_limit": stage_stats.get("universe_ticket_limit"),
         }
 
         return res
@@ -113,45 +119,160 @@ class UniverseReductionStrategy:
     def reduce(self, history, config, verbose=True):
 
         start_time = time.time()
-        cfg = getattr(config, "filter_overrides", None) or BEST_SETTINGS
+        runtime_overrides = getattr(config, "filter_overrides", None)
+        cfg = runtime_overrides or BEST_SETTINGS
 
         if verbose:
             print(f"🚀 Sniper V15.2 [Backend: {self.backend_name}]")
 
-        # SNIPER E1
-        excluded_pool, sniper_msg = self.filters.get_sniper_exclusion(
+        sniper_mode = str(cfg.get("sniper_mode", "hard")).strip().lower()
+        if sniper_mode not in {"hard", "soft", "off"}:
+            sniper_mode = "hard"
+        sniper_threshold = float(cfg.get("sniper_threshold", 0.85))
+        if bool(cfg.get("sniper_conservative", False)):
+            sniper_threshold += max(
+                0.0, float(cfg.get("sniper_threshold_boost", 0.0))
+            )
+
+        # SNIPER E1. En modo soft solamente produce una señal; no borra números.
+        sniper_candidates, sniper_msg = self.filters.get_sniper_exclusion(
             history,
-            threshold=cfg.get("sniper_threshold", 0.85),
+            threshold=sniper_threshold,
             weights=(
                 cfg.get("w_gap", 0.25),
                 cfg.get("w_term", 0.10),
                 cfg.get("w_freq", 0.60),
             ),
-            n_exclude=int(cfg.get("dynamic_exclude_count", 1)),
+            n_exclude=(
+                0
+                if sniper_mode == "off"
+                else int(cfg.get("dynamic_exclude_count", 1))
+            ),
         )
+        excluded_pool = sniper_candidates if sniper_mode == "hard" else []
+        # Contexto transitorio para que el selector pueda aplicar el veto suave en
+        # producción y backtest sin acoplarse al reductor.
+        if isinstance(runtime_overrides, dict) and runtime_overrides:
+            runtime_overrides["sniper_soft_numbers"] = (
+                [int(number) for number in sniper_candidates]
+                if sniper_mode == "soft"
+                else []
+            )
 
         # ---- LOG (único cambio funcional): compact + 1 línea ----
         # Mantén el "base" de exclusión (Sniper:-N(score)) y agrega solo lo necesario para no wrappear.
         sniper_msg = self._build_sniper_log_compact(sniper_msg, cfg)
         # --------------------------------------------------------
 
+        stage_sizes = []
+
+        def apply_stage(name, operation, current):
+            before = int(len(current))
+            after_value = operation(current)
+            after = int(len(after_value))
+            stage_sizes.append(
+                {
+                    "stage": str(name),
+                    "before": before,
+                    "after": after,
+                    "removed": before - after,
+                }
+            )
+            return after_value
+
         universe = self.filters.generate_universe(excluded_pool=excluded_pool)
+        generated_size = int(len(universe))
 
         if len(universe) > 0:
-            universe = self.filters.apply_positional_limits(universe, cfg)
-            universe = self.filters.apply_aggregation(universe, cfg)
-            universe = self.filters.apply_structure(universe, cfg)
+            universe = apply_stage(
+                "positional",
+                lambda value: self.filters.apply_positional_limits(value, cfg),
+                universe,
+            )
+            universe = apply_stage(
+                "sum",
+                lambda value: self.filters.apply_aggregation(value, cfg),
+                universe,
+            )
+            universe = apply_stage(
+                "structure",
+                lambda value: self.filters.apply_structure(value, cfg),
+                universe,
+            )
+            before = int(len(universe))
             universe, _ = self.filters.apply_terminal_poda(universe, cfg)
+            stage_sizes.append(
+                {
+                    "stage": "terminal",
+                    "before": before,
+                    "after": int(len(universe)),
+                    "removed": before - int(len(universe)),
+                }
+            )
+            before = int(len(universe))
             universe, d_vecs = self.filters.apply_spatial(universe, cfg)
-            universe = self.filters.apply_profile_poda(universe, d_vecs, cfg)
-            universe = self.filters.apply_entropy_shannon(universe, cfg)
-            universe = self.filters.apply_digital_root_sum(universe, cfg)
-            universe = self.filters.apply_ac_complexity(universe, cfg)
+            stage_sizes.append(
+                {
+                    "stage": "spatial",
+                    "before": before,
+                    "after": int(len(universe)),
+                    "removed": before - int(len(universe)),
+                }
+            )
+            universe = apply_stage(
+                "decade_profile",
+                lambda value: self.filters.apply_profile_poda(value, d_vecs, cfg),
+                universe,
+            )
+            universe = apply_stage(
+                "entropy",
+                lambda value: self.filters.apply_entropy_shannon(value, cfg),
+                universe,
+            )
+            universe = apply_stage(
+                "digital_root",
+                lambda value: self.filters.apply_digital_root_sum(value, cfg),
+                universe,
+            )
+            universe = apply_stage(
+                "ac_complexity",
+                lambda value: self.filters.apply_ac_complexity(value, cfg),
+                universe,
+            )
+            if bool(cfg.get("std_filter_enabled", False)) or bool(
+                cfg.get("auto_std_compensation", False)
+            ):
+                universe = apply_stage(
+                    "standard_deviation",
+                    lambda value: self.filters.apply_standard_deviation(value, cfg),
+                    universe,
+                )
 
-        target_k = 45000
+        legacy_target = cfg.get("target_universe_size", 0)
+        configured_limit = cfg.get("universe_ticket_limit", 45000)
+        try:
+            legacy_target = int(legacy_target or 0)
+            configured_limit = int(configured_limit or 0)
+        except (TypeError, ValueError):
+            legacy_target = 0
+            configured_limit = 0
+        if legacy_target > 0:
+            configured_limit = legacy_target
+        target_k = configured_limit if configured_limit > 0 else 45000
 
+        topk_applied = False
         if len(universe) > target_k:
+            before = int(len(universe))
             universe = self._density_penalized_selection(universe, cfg, target_k)
+            topk_applied = True
+            stage_sizes.append(
+                {
+                    "stage": "density_topk",
+                    "before": before,
+                    "after": int(len(universe)),
+                    "removed": before - int(len(universe)),
+                }
+            )
 
         elapsed = time.time() - start_time
 
@@ -165,6 +286,14 @@ class UniverseReductionStrategy:
                 "final_size": len(universe),
                 "execution_time": elapsed,
                 "backend": self.backend_name,
+                "generated_size": generated_size,
+                "stages": stage_sizes,
+                "sniper_mode": sniper_mode,
+                "sniper_threshold_effective": sniper_threshold,
+                "sniper_candidates": [int(number) for number in sniper_candidates],
+                "hard_excluded_numbers": [int(number) for number in excluded_pool],
+                "universe_ticket_limit": int(target_k),
+                "topk_applied": bool(topk_applied),
             },
         )
 
@@ -178,7 +307,9 @@ class UniverseReductionStrategy:
         core_scores = self.filters.compute_survival_scores(universe, cfg)
         density_penalty = self.filters.compute_density_penalty(universe)
 
-        lambda_penalty = 0.15
+        lambda_penalty = max(
+            0.0, float(cfg.get("density_penalty_strength", 0.15))
+        )
 
         final_scores = core_scores - lambda_penalty * density_penalty
 

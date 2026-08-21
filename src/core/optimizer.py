@@ -70,12 +70,143 @@ class StrategyOptimizer:
         )
         sys.stdout.flush()
 
+    @staticmethod
+    def _temporal_split(
+        history: DrawHistoryDTO,
+        requested_draws: int,
+        validation_fraction: float = 0.70,
+    ) -> Dict[str, Any]:
+        """Create a chronological train/validation/test split with a held-out test."""
+        total = len(history.winning_numbers)
+        if total < 2:
+            raise ValueError("Se requieren al menos dos sorteos para optimizar")
+        window = min(total, max(2, int(requested_draws)))
+        start = total - window
+        if total > 52:
+            start = max(50, start)
+        available = total - start
+        if available < 2:
+            start = max(0, total - 2)
+            available = total - start
+        validation_count = int(round(available * float(validation_fraction)))
+        validation_count = min(available - 1, max(1, validation_count))
+        test_start = start + validation_count
+        return {
+            "train": (0, start),
+            "validation": (start, test_start),
+            "test": (test_start, total),
+            "train_end_contest": (
+                int(history.concursos[start - 1]) if start > 0 else None
+            ),
+            "validation_range": [
+                int(history.concursos[start]),
+                int(history.concursos[test_start - 1]),
+            ],
+            "test_range": [
+                int(history.concursos[test_start]),
+                int(history.concursos[-1]),
+            ],
+        }
+
+    @staticmethod
+    def _score_universe(
+        universe,
+        history: DrawHistoryDTO,
+        start: int,
+        end: int,
+        target_size: int,
+    ) -> Dict[str, Any]:
+        universe_cpu = universe.get() if hasattr(universe, "get") else universe
+        universe_cpu = np.asarray(universe_cpu, dtype=np.uint8)
+        distribution = {hit: 0 for hit in range(7)}
+        details = []
+        for idx in range(int(start), int(end)):
+            winner = np.asarray(history.winning_numbers[idx][:6], dtype=np.uint8)
+            matches = np.sum(np.isin(universe_cpu, winner), axis=1)
+            max_hits = int(np.max(matches)) if len(matches) else 0
+            distribution[max_hits] += 1
+            details.append(
+                {
+                    "contest": int(history.concursos[idx]),
+                    "date": history.dates[idx],
+                    "winner": winner.tolist(),
+                    "max_hits": max_hits,
+                }
+            )
+        size = int(len(universe_cpu))
+        size_delta = size - int(target_size)
+        oversize_penalty = max(0, size_delta) / max(1, target_size) * 2500.0
+        undersize_penalty = max(0, -size_delta) / max(1, target_size) * 300.0
+        score = (
+            distribution[6] * 6000
+            + distribution[5] * 1000
+            + distribution[4] * 120
+            - oversize_penalty
+            - undersize_penalty
+        )
+        return {
+            "draws": int(end - start),
+            "universe_size": size,
+            "hit_distribution": distribution,
+            "hits_6_6": distribution[6],
+            "hits_5_6": distribution[5],
+            "hits_4_6": distribution[4],
+            "score": float(score),
+            "details": details,
+        }
+
+    def _evaluate_voter_weights(
+        self,
+        history: DrawHistoryDTO,
+        weights,
+        start: int,
+        end: int,
+    ) -> Dict[str, Any]:
+        errors = 0
+        successful_exclusions = 0
+        active = 0
+        for idx in range(int(start), int(end)):
+            past_history = DrawHistoryDTO(
+                dates=history.dates[:idx],
+                winning_numbers=history.winning_numbers[:idx],
+                concursos=history.concursos[:idx],
+            )
+            excluded, _ = self.reducer.filters.get_sniper_exclusion(
+                past_history,
+                threshold=float(BEST_SETTINGS.get("sniper_threshold", 0.90)),
+                weights=weights,
+                n_exclude=int(BEST_SETTINGS.get("dynamic_exclude_count", 1)),
+            )
+            if not excluded:
+                continue
+            active += 1
+            if int(excluded[0]) in set(history.winning_numbers[idx][:6]):
+                errors += 1
+            else:
+                successful_exclusions += 1
+        return {
+            "draws": int(end - start),
+            "active_exclusions": active,
+            "successful_exclusions": successful_exclusions,
+            "errors": errors,
+            "error_rate": float(errors / active) if active else 0.0,
+            "score": float(successful_exclusions - errors * 50),
+        }
+
     # Ubicación: src/core/optimizer.py
 
     def optimize_voter_weights(self, history: DrawHistoryDTO, n_draws: int = 200):
         print(f"\n{CYAN}⚖️  CALIBRANDO PESOS DE VOTANTES (Protocolo Sniper E1){RESET}")
         global_start = time.time()
         h = self._as_chronological(history)
+        split = self._temporal_split(h, n_draws)
+        validation_start, validation_end = split["validation"]
+        test_start, test_end = split["test"]
+        print(
+            f"{YELLOW}Split temporal: validación "
+            f"#{split['validation_range'][0]}-#{split['validation_range'][1]} | "
+            f"test reservado #{split['test_range'][0]}-#{split['test_range'][1]}.{RESET}"
+        )
 
         # 1. Generar Rejilla (G + T + F = 1.0)
         resolution = 0.05
@@ -87,61 +218,85 @@ class StrategyOptimizer:
                     weights_grid.append((round(g, 2), round(t, 2), round(f, 2)))
 
         total_comb = len(weights_grid)
-        best_score = -float("inf")
-        best_weights = (0.25, 0.10, 0.60)
-
-        # 2. Preparar sub-historiales para backtesting rápido
-        # Probamos los últimos 'n_draws' sorteos
-        total_available = len(h.winning_numbers)
-        start_idx = max(50, total_available - n_draws)
+        current_weights = (
+            float(BEST_SETTINGS.get("w_gap", 0.25)),
+            float(BEST_SETTINGS.get("w_term", 0.10)),
+            float(BEST_SETTINGS.get("w_freq", 0.60)),
+        )
+        best_weights = current_weights
+        best_validation = self._evaluate_voter_weights(
+            h, current_weights, validation_start, validation_end
+        )
+        best_score = best_validation["score"]
+        best_distance = 0.0
 
         for i, w_tuple in enumerate(weights_grid):
-            errors = 0
-            success_exclusions = 0
+            validation = self._evaluate_voter_weights(
+                h, w_tuple, validation_start, validation_end
+            )
+            current_score = validation["score"]
 
-            for idx in range(start_idx, total_available):
-                # Creamos un "falso presente" para el Sniper
-                past_history = DrawHistoryDTO(
-                    dates=h.dates[:idx],
-                    winning_numbers=h.winning_numbers[:idx],
-                    concursos=h.concursos[:idx],
-                )
-                real_winner = set(h.winning_numbers[idx][:6])
-
-                # Ejecutamos Sniper con los pesos de la iteración actual
-                excluded, _ = self.reducer.filters.get_sniper_exclusion(
-                    past_history, weights=w_tuple
-                )
-
-                if excluded:
-                    if excluded[0] in real_winner:
-                        errors += 1  # ¡Fatal! Excluimos un número que iba a ganar
-                    else:
-                        success_exclusions += 1
-
-            # Puntuación: Queremos muchas exclusiones pero PENALIZAMOS fuerte los errores
-            # Un error (matar el Jackpot) resta mucho más que un acierto
-            current_score = success_exclusions - (errors * 50)
-
-            if current_score > best_score:
+            distance = sum(
+                abs(candidate - current)
+                for candidate, current in zip(w_tuple, current_weights)
+            )
+            candidate_key = (
+                current_score,
+                -validation["errors"],
+                validation["successful_exclusions"],
+            )
+            best_key = (
+                best_score,
+                -best_validation["errors"],
+                best_validation["successful_exclusions"],
+            )
+            if candidate_key > best_key or (
+                candidate_key == best_key and distance < best_distance
+            ):
                 best_score = current_score
                 best_weights = w_tuple
+                best_validation = validation
+                best_distance = distance
 
             if i % 10 == 0 or i == total_comb - 1:
                 self._print_progress(
-                    i, total_comb, 0, errors, global_start, label="Weights"
+                    i,
+                    total_comb,
+                    0,
+                    validation["errors"],
+                    global_start,
+                    label="Weights-Validation",
                 )
+
+        validation_metrics = best_validation
+        test_metrics = self._evaluate_voter_weights(
+            h, best_weights, test_start, test_end
+        )
+        selection_inconclusive = validation_metrics["active_exclusions"] == 0
 
         print(f"\n\n{GREEN}✅ OPTIMIZACIÓN DE PESOS FINALIZADA{RESET}")
         print(
             f"{WHITE}Copia estos valores en 'BEST_SETTINGS' dentro de config.py:{RESET}"
         )
+        if selection_inconclusive:
+            print(
+                f"{YELLOW}Sin exclusiones activas en validación: se conservan "
+                f"los pesos vigentes; no hay evidencia para promover otros.{RESET}"
+            )
 
         return {
             "w_gap": best_weights[0],
             "w_term": best_weights[1],
             "w_freq": best_weights[2],
-            "score": best_score,
+            "score": validation_metrics["score"],
+            "selection_inconclusive": selection_inconclusive,
+            "optimizer_split": {
+                key: value
+                for key, value in split.items()
+                if key not in {"train", "validation", "test"}
+            },
+            "validation_metrics": validation_metrics,
+            "test_metrics": test_metrics,
         }
 
     def optimize_filters(
@@ -152,36 +307,43 @@ class StrategyOptimizer:
         target_universe_size: int = None,
     ) -> Dict[str, Any]:
         print(
-            f"\n{CYAN}🔬 FASE 1: Calibración Forense con Verificación de Números (Hardware: {self.reducer.backend_name}){RESET}"
+            f"\n{CYAN}🔬 CALIBRACIÓN TEMPORAL DE FILTROS "
+            f"(Hardware: {self.reducer.backend_name}){RESET}"
         )
         global_start = time.time()
-
         grid = custom_grid or SEARCH_GRID
         keys = list(grid.keys())
         combinations = list(itertools.product(*(grid[k] for k in keys)))
         total_comb = len(combinations)
-
         best_score = -float("inf")
         best_params = BEST_SETTINGS.copy()
         h = self._as_chronological(history)
-        total_available = len(h.winning_numbers)
-        eval_start_idx = max(50, total_available - draws_to_test)
-
+        split = self._temporal_split(h, draws_to_test)
+        train_start, train_end = split["train"]
+        validation_start, validation_end = split["validation"]
+        test_start, test_end = split["test"]
         train_history = DrawHistoryDTO(
-            dates=h.dates[:eval_start_idx],
-            winning_numbers=h.winning_numbers[:eval_start_idx],
-            concursos=h.concursos[:eval_start_idx],
+            dates=h.dates[train_start:train_end],
+            winning_numbers=h.winning_numbers[train_start:train_end],
+            concursos=h.concursos[train_start:train_end],
         )
-        winners_to_check = np.array(
-            [w[:6] for w in h.winning_numbers[eval_start_idx:]], dtype=np.uint8
+        print(
+            f"{YELLOW}Split temporal: entrenamiento hasta "
+            f"#{split['train_end_contest']} | validación "
+            f"#{split['validation_range'][0]}-#{split['validation_range'][1]} | "
+            f"test reservado #{split['test_range'][0]}-#{split['test_range'][1]}.{RESET}"
         )
-        concursos = h.concursos[eval_start_idx:]
-        fechas = h.dates[eval_start_idx:]
-        best_audit_log = []
 
-        # Universo objetivo para no crecer tamaño: si no se provee, usamos baseline actual.
         if target_universe_size is None:
             baseline_cfg = BEST_SETTINGS.copy()
+            # Los filtros estructurales se calibran aislados del veto temporal.
+            baseline_cfg.update(
+                {
+                    "sniper_mode": "off",
+                    "dynamic_exclude_count": 0,
+                    "sniper_soft_numbers": [],
+                }
+            )
             baseline_dto = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
@@ -196,7 +358,8 @@ class StrategyOptimizer:
             target_u_size = int(max(1, target_universe_size))
 
         print(
-            f"{YELLOW}🎯 Objetivo de universo fijo: {target_u_size:,} tickets (sin crecimiento).{RESET}"
+            f"{YELLOW}🎯 Objetivo fijo: {target_u_size:,} tickets. "
+            f"El test no participa en la selección.{RESET}"
         )
 
         for i, values in enumerate(combinations):
@@ -218,17 +381,15 @@ class StrategyOptimizer:
                     "ac_min": c["ac"],
                     "std_min": c["std_min"],
                     "std_max": c["std_max"],
-                    # Sniper conservador + compensación de std para sostener tamaño final.
-                    "sniper_conservative": True,
-                    "sniper_threshold_boost": 0.08,
-                    "dynamic_exclude_count": min(
-                        int(BEST_SETTINGS.get("dynamic_exclude_count", 1)), 1
-                    ),
+                    "std_filter_enabled": True,
                     "auto_std_compensation": True,
                     "target_universe_size": target_u_size,
+                    "universe_ticket_limit": target_u_size,
+                    "sniper_mode": "off",
+                    "dynamic_exclude_count": 0,
+                    "sniper_soft_numbers": [],
                 }
             )
-
             config_dto = PredictionConfigDTO(
                 total_balls=TOTAL_BALLS,
                 ticket_size=TICKET_SIZE,
@@ -246,85 +407,78 @@ class StrategyOptimizer:
                     i, total_comb, 0, 0, global_start, "Skip", u_size=u_size
                 )
                 continue
-
-            u_data = self.xp.asarray(universe[:, :6], dtype=self.xp.uint8)
-            current_hits_6, current_hits_5, current_hits_4 = 0, 0, 0
-            temp_log = []
-
-            for idx, winner in enumerate(winners_to_check):
-                matches = self.xp.zeros(u_size, dtype=self.xp.int8)
-                for val in winner:
-                    matches += self.xp.any(u_data == val, axis=1)
-
-                max_h = int(self.xp.max(matches))
-                winner_str = str(list(winner))  # Convertimos a string para el log
-
-                if max_h == 6:
-                    current_hits_6 += 1
-                    temp_log.append(
-                        f"Concurso {concursos[idx]} ({fechas[idx]}): {GREEN}Hit 6/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
-                    )
-                elif max_h == 5:
-                    current_hits_5 += 1
-                    temp_log.append(
-                        f"Concurso {concursos[idx]} ({fechas[idx]}): {GREEN}Hit 5/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
-                    )
-                elif max_h == 4:
-                    current_hits_4 += 1
-                    temp_log.append(
-                        f"Concurso {concursos[idx]} ({fechas[idx]}): {CYAN}Hit 4/6{RESET} -> Real: {WHITE}{winner_str}{RESET}"
-                    )
-
-            size_delta = u_size - target_u_size
-            oversize_penalty = (
-                (max(0, size_delta) / max(1, target_u_size)) * 2500.0
-            )
-            undersize_penalty = (
-                (max(0, -size_delta) / max(1, target_u_size)) * 300.0
-            )
-            density_score = (
-                (current_hits_6 * 6000)
-                + (current_hits_5 * 1000)
-                + (current_hits_4 * 120)
-                - oversize_penalty
-                - undersize_penalty
+            validation = self._score_universe(
+                universe,
+                h,
+                validation_start,
+                validation_end,
+                target_u_size,
             )
             self._print_progress(
                 i,
                 total_comb,
-                current_hits_5 + current_hits_6,
-                current_hits_4,
+                validation["hits_5_6"] + validation["hits_6_6"],
+                validation["hits_4_6"],
                 global_start,
-                "Search",
+                "Validation",
                 u_size=u_size,
             )
-
-            if density_score > best_score:
-                best_score = density_score
+            if validation["score"] > best_score:
+                best_score = validation["score"]
                 best_params = params.copy()
-                best_params["u_size_avg"] = u_size
-                best_params["hits_6_6_found"] = current_hits_6
-                best_params["hits_5_6_found"] = current_hits_5
-                best_params["hits_4_6_found"] = current_hits_4
-                best_params["target_universe_size"] = target_u_size
-                best_audit_log = temp_log
+                best_params["optimizer_validation_metrics"] = validation
 
-        # --- REPORTE DE EVIDENCIA FINAL ---
-        print(f"\n\n{GREEN}✅ CALIBRACIÓN FINALIZADA - REPORTE FORENSE{RESET}")
-        print("=" * 80)
-        print(f"{'CONCURSO':<15} {'FECHA':<12} {'RESULTADO':<20} {'COMBINACIÓN REAL'}")
-        print("-" * 80)
-        for log in best_audit_log:
-            # El log ya viene con colores, lo imprimimos directamente
-            print(f" 🎯 {log}")
-        print("=" * 80)
-        hits_6_6_found = best_params.get("hits_6_6_found", 0)
-        hits_5_6_found = best_params.get("hits_5_6_found", 0)
-        hits_4_6_found = best_params.get("hits_4_6_found", 0)
-        u_size_avg = best_params.get("u_size_avg", 0)
-        print(
-            f"📊 Resumen Sniper: 6/6={hits_6_6_found} | 5/6={hits_5_6_found} | 4/6={hits_4_6_found} "
-            f"en {u_size_avg:,} tickets (objetivo {target_u_size:,})."
+        if best_score == -float("inf"):
+            raise ValueError("Ninguna configuración produjo un universo válido")
+
+        best_config = PredictionConfigDTO(
+            total_balls=TOTAL_BALLS,
+            ticket_size=TICKET_SIZE,
+            num_tickets=20,
+            filter_overrides=best_params,
         )
+        best_universe = self._extract_universe(
+            self.reducer.reduce(train_history, best_config, verbose=False)
+        )
+        validation_metrics = self._score_universe(
+            best_universe,
+            h,
+            validation_start,
+            validation_end,
+            target_u_size,
+        )
+        test_metrics = self._score_universe(
+            best_universe,
+            h,
+            test_start,
+            test_end,
+            target_u_size,
+        )
+        best_params["u_size_avg"] = int(len(best_universe))
+        best_params["hits_6_6_found"] = test_metrics["hits_6_6"]
+        best_params["hits_5_6_found"] = test_metrics["hits_5_6"]
+        best_params["hits_4_6_found"] = test_metrics["hits_4_6"]
+        best_params["target_universe_size"] = target_u_size
+        best_params["optimizer_split"] = {
+            key: value
+            for key, value in split.items()
+            if key not in {"train", "validation", "test"}
+        }
+        best_params["optimizer_validation_metrics"] = validation_metrics
+        best_params["optimizer_test_metrics"] = test_metrics
 
+        print(f"\n\n{GREEN}✅ CALIBRACIÓN TEMPORAL FINALIZADA{RESET}")
+        print(
+            "📊 Validación: "
+            f"6/6={validation_metrics['hits_6_6']} | "
+            f"5/6={validation_metrics['hits_5_6']} | "
+            f"4/6={validation_metrics['hits_4_6']}"
+        )
+        print(
+            "🧪 Test reservado: "
+            f"6/6={test_metrics['hits_6_6']} | "
+            f"5/6={test_metrics['hits_5_6']} | "
+            f"4/6={test_metrics['hits_4_6']} | "
+            f"universo={len(best_universe):,}."
+        )
         return best_params

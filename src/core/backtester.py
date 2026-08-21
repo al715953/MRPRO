@@ -2065,6 +2065,10 @@ class BacktestEngine:
         )
         ai_s = audit.get("ai_score", 0.0)
         ai_enabled = bool(audit.get("ai_signal_enabled", True))
+        ai_validated = bool(audit.get("ai_signal_validated", True))
+        ai_percentile = audit.get("ai_percentile_rank")
+        ai_weight = float(audit.get("ai_weight_effective", 0.0))
+        geo_weight = float(audit.get("geo_weight_effective", 0.0))
         geo_s = audit.get("geo_score", 0.0)
         u_s = audit.get("univ_size", 0)
 
@@ -2081,13 +2085,28 @@ class BacktestEngine:
         d_c = "bold green" if d == 0 else "bold yellow" if d < 50 else "white"
         status = "🎯 HIT" if d == 0 else "❌"
 
-        ai_cell = f"{ai_s:.4f}" if ai_enabled else "OFF"
+        if ai_enabled:
+            percentile_cell = (
+                f" p{float(ai_percentile):02.0f}"
+                if ai_percentile is not None
+                else ""
+            )
+            validation_cell = " NV" if not ai_validated else ""
+            ai_cell = f"{ai_s:.3f}{percentile_cell}{validation_cell}"
+        else:
+            ai_cell = "OFF"
+        mix_cell = (
+            f"{int(round(ai_weight * 100)):02d}/{int(round(geo_weight * 100)):02d}"
+            if ai_enabled
+            else "00/100"
+        )
         line = (
             f"[bold blue]#{t_id}[/] | "
             f"U: {u_s:>6,d} | "
             f"[{h_c}]{h}/{max_hits}[/] | "
-            f"AI: [bold yellow]{ai_cell:>6}[/] | "
+            f"AIr: [bold yellow]{ai_cell:>11}[/] | "
             f"Geo: [bold cyan]{geo_s:.4f}[/] | "
+            f"Mix: {mix_cell} | "
             f"Rank: #{r:<5} | "
             f"Dist: [{d_c}]{d:<4}[/] | "
             f"[{st_c}]{status}[/] | [dim]{time.time()-t_s:.2f}s[/dim]"
