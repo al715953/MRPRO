@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import itertools
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -79,6 +80,38 @@ class FitnessConfig:
 
     # Estabilidad numérica
     eps: float = 1e-9
+
+
+@dataclass(frozen=True)
+class DeepDispersionConfig:
+    """Precommitted hedge that distributes tickets throughout the score depth."""
+
+    core_tickets: int = 20
+    deep_tickets: int = 10
+    min_deep_rank: int = 501
+    max_overlap_preferred: int = 3
+    w_pair_novelty: float = 0.40
+    w_number_rarity: float = 0.25
+    w_dissimilarity: float = 0.20
+    w_local_quality: float = 0.15
+
+
+@dataclass(frozen=True)
+class EliteCoverageDeepConfig:
+    """Three-zone portfolio: exact elites, combinatorial cover and depth hedge."""
+
+    elite_tickets: int = 10
+    coverage_tickets: int = 10
+    deep_tickets: int = 10
+    coverage_max_rank: int = 500
+    min_deep_rank: int = 501
+    max_overlap_preferred: int = 3
+    w_pair_novelty: float = 0.15
+    w_triple_novelty: float = 0.30
+    w_quad_novelty: float = 0.30
+    w_number_rarity: float = 0.05
+    w_dissimilarity: float = 0.05
+    w_local_quality: float = 0.15
 
 
 # ============================================================
@@ -489,3 +522,392 @@ def select_tickets_v16(
     t_cpu = t_sel.get().tolist() if hasattr(t_sel, "get") else t_sel.tolist()
 
     return t_cpu, {"selected_idx": selected, "selected_ranks": selected_ranks}
+
+
+def select_core_plus_deep_tickets(
+    tickets_6,
+    scores,
+    n_tickets: int = 30,
+    xp=None,
+    cfg: Optional[FitnessConfig] = None,
+    strata: Optional[StrataConfig] = None,
+    deep_cfg: Optional[DeepDispersionConfig] = None,
+):
+    """Keep the native core and add a deterministic depth-diversity hedge.
+
+    The eligible depth (``min_deep_rank..N``) is divided into equal-population
+    strata. One ticket is selected from each stratum, so the bands adapt to the
+    candidate-pool size without being fitted to historical winning ranks.
+    """
+    cfg = cfg or FitnessConfig()
+    deep_cfg = deep_cfg or DeepDispersionConfig()
+    xp = _get_xp(scores, xp)
+
+    tickets_cpu = (
+        tickets_6.get() if hasattr(tickets_6, "get") else np.asarray(tickets_6)
+    )
+    scores_cpu = scores.get() if hasattr(scores, "get") else np.asarray(scores)
+    tickets_cpu = np.asarray(tickets_cpu, dtype=np.uint8)
+    scores_cpu = np.asarray(scores_cpu, dtype=np.float64)
+    candidate_count = int(tickets_cpu.shape[0])
+    target = min(max(0, int(n_tickets)), candidate_count)
+    if target <= 0:
+        return [], {
+            "selected_idx": [],
+            "selected_ranks": [],
+            "core_selected_ranks": [],
+            "deep_selected_ranks": [],
+            "deep_rank_bands": [],
+        }
+
+    requested_core = min(max(0, int(deep_cfg.core_tickets)), target)
+    requested_deep = min(
+        max(0, int(deep_cfg.deep_tickets)), target - requested_core
+    )
+    core_tickets, core_debug = select_tickets_v16(
+        tickets_6,
+        scores,
+        n_tickets=requested_core,
+        xp=xp,
+        cfg=cfg,
+        strata=strata,
+    )
+
+    order = np.argsort(-scores_cpu, kind="stable")
+    ranks = np.empty(candidate_count, dtype=np.int32)
+    ranks[order] = np.arange(1, candidate_count + 1, dtype=np.int32)
+    key_to_idx = {tuple(int(v) for v in row): idx for idx, row in enumerate(tickets_cpu)}
+    selected = [key_to_idx[tuple(int(v) for v in row)] for row in core_tickets]
+    selected_set = set(selected)
+    core_selected_ranks = [int(ranks[idx]) for idx in selected]
+
+    max_number = max(1, int(tickets_cpu.max()) if tickets_cpu.size else 1)
+    one_hot = np.zeros((candidate_count, max_number + 1), dtype=np.uint8)
+    row_idx = np.arange(candidate_count)[:, None]
+    one_hot[row_idx, tickets_cpu.astype(np.int32)] = 1
+    pair_positions = tuple(itertools.combinations(range(6), 2))
+    pair_base = max_number + 1
+    pair_codes = np.stack(
+        [
+            tickets_cpu[:, left].astype(np.int32) * pair_base
+            + tickets_cpu[:, right].astype(np.int32)
+            for left, right in pair_positions
+        ],
+        axis=1,
+    )
+    covered_pairs = np.zeros(pair_base * pair_base, dtype=bool)
+    number_counts = np.zeros(max_number + 1, dtype=np.int32)
+
+    def _register(idx: int) -> None:
+        selected.append(int(idx))
+        selected_set.add(int(idx))
+        covered_pairs[pair_codes[int(idx)]] = True
+        number_counts[tickets_cpu[int(idx)]] += 1
+
+    # Register native core coverage before evaluating the deep reserve.
+    native_core = list(selected)
+    selected = []
+    selected_set = set()
+    for idx in native_core:
+        _register(idx)
+
+    def _minmax_cpu(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        low = float(values.min())
+        high = float(values.max())
+        if high <= low:
+            return np.ones(values.shape, dtype=np.float64)
+        return (values - low) / (high - low)
+
+    def _pick(candidates: np.ndarray) -> int | None:
+        candidates = np.asarray(
+            [int(idx) for idx in candidates if int(idx) not in selected_set],
+            dtype=np.int32,
+        )
+        if candidates.size == 0:
+            return None
+        selected_matrix = one_hot[np.asarray(selected, dtype=np.int32)]
+        overlap = one_hot[candidates] @ selected_matrix.T
+        max_overlap = overlap.max(axis=1) if overlap.size else np.zeros(candidates.size)
+        preferred = max_overlap <= int(deep_cfg.max_overlap_preferred)
+        if not np.any(preferred):
+            for allowed in range(int(deep_cfg.max_overlap_preferred) + 1, 7):
+                preferred = max_overlap <= allowed
+                if np.any(preferred):
+                    break
+
+        novelty = np.mean(~covered_pairs[pair_codes[candidates]], axis=1)
+        rarity = np.mean(
+            1.0 / (1.0 + number_counts[tickets_cpu[candidates]]), axis=1
+        )
+        dissimilarity = 1.0 - (max_overlap.astype(np.float64) / 6.0)
+        local_quality = 1.0 - _minmax_cpu(ranks[candidates].astype(np.float64))
+        objective = (
+            float(deep_cfg.w_pair_novelty) * _minmax_cpu(novelty)
+            + float(deep_cfg.w_number_rarity) * _minmax_cpu(rarity)
+            + float(deep_cfg.w_dissimilarity) * dissimilarity
+            + float(deep_cfg.w_local_quality) * local_quality
+        )
+        objective = np.where(preferred, objective, -np.inf)
+        return int(candidates[int(np.argmax(objective))])
+
+    deep_eligible = order[ranks[order] >= max(1, int(deep_cfg.min_deep_rank))]
+    band_count = min(requested_deep, int(deep_eligible.size))
+    deep_rank_bands = []
+    deep_selected_ranks = []
+    if band_count > 0:
+        for band in np.array_split(deep_eligible, band_count):
+            if band.size == 0:
+                continue
+            chosen = _pick(band)
+            if chosen is None:
+                continue
+            _register(chosen)
+            deep_selected_ranks.append(int(ranks[chosen]))
+            deep_rank_bands.append(
+                {
+                    "rank_min": int(ranks[band[0]]),
+                    "rank_max": int(ranks[band[-1]]),
+                    "chosen_rank": int(ranks[chosen]),
+                    "candidates": int(band.size),
+                }
+            )
+
+    # Defensive fill for undersized pools; it does not normally execute for Melate.
+    if len(selected) < target:
+        for idx in order:
+            idx = int(idx)
+            if idx in selected_set:
+                continue
+            _register(idx)
+            if len(selected) >= target:
+                break
+
+    chosen = selected[:target]
+    tickets = tickets_cpu[np.asarray(chosen, dtype=np.int32)].tolist()
+    selected_ranks = [int(ranks[idx]) for idx in chosen]
+    return tickets, {
+        "selected_idx": chosen,
+        "selected_ranks": selected_ranks,
+        "core_selected_ranks": core_selected_ranks,
+        "deep_selected_ranks": deep_selected_ranks,
+        "deep_rank_bands": deep_rank_bands,
+        "deep_dispersion_weights": {
+            "pair_novelty": float(deep_cfg.w_pair_novelty),
+            "number_rarity": float(deep_cfg.w_number_rarity),
+            "dissimilarity": float(deep_cfg.w_dissimilarity),
+            "local_quality": float(deep_cfg.w_local_quality),
+        },
+    }
+
+
+def select_elite_coverage_deep_tickets(
+    tickets_6,
+    scores,
+    n_tickets: int = 30,
+    xp=None,
+    cfg: Optional[FitnessConfig] = None,
+    strata: Optional[StrataConfig] = None,
+    portfolio_cfg: Optional[EliteCoverageDeepConfig] = None,
+):
+    """Build a deterministic elite + coverage + depth portfolio.
+
+    The elite tranche contains the exact best-ranked tickets and cannot be
+    displaced by diversity penalties. The middle tranche greedily maximizes
+    new pairs, triples and quadruples among the leading ranks. The final tranche
+    applies the same objective inside equal-population depth bands.
+
+    This is a portfolio construction rule, not a claim that any number is more
+    likely to be drawn. Its purpose is to avoid losing strong ranked candidates
+    while reducing combinatorial redundancy among the remaining tickets.
+    """
+    del cfg, strata  # Reserved for a compatible selector interface.
+    portfolio_cfg = portfolio_cfg or EliteCoverageDeepConfig()
+    xp = _get_xp(scores, xp)
+    tickets_cpu = (
+        tickets_6.get() if hasattr(tickets_6, "get") else np.asarray(tickets_6)
+    )
+    scores_cpu = scores.get() if hasattr(scores, "get") else np.asarray(scores)
+    tickets_cpu = np.asarray(tickets_cpu, dtype=np.uint8)
+    scores_cpu = np.asarray(scores_cpu, dtype=np.float64)
+    candidate_count = int(tickets_cpu.shape[0])
+    target = min(max(0, int(n_tickets)), candidate_count)
+    if target <= 0:
+        return [], {
+            "selected_idx": [],
+            "selected_ranks": [],
+            "elite_selected_ranks": [],
+            "coverage_selected_ranks": [],
+            "deep_selected_ranks": [],
+            "deep_rank_bands": [],
+            "phase_by_ticket": [],
+        }
+
+    order = np.argsort(-scores_cpu, kind="stable")
+    ranks = np.empty(candidate_count, dtype=np.int32)
+    ranks[order] = np.arange(1, candidate_count + 1, dtype=np.int32)
+    requested_elite = min(max(0, int(portfolio_cfg.elite_tickets)), target)
+    requested_coverage = min(
+        max(0, int(portfolio_cfg.coverage_tickets)), target - requested_elite
+    )
+    requested_deep = min(
+        max(0, int(portfolio_cfg.deep_tickets)),
+        target - requested_elite - requested_coverage,
+    )
+
+    max_number = max(1, int(tickets_cpu.max()) if tickets_cpu.size else 1)
+    code_base = max_number + 1
+    one_hot = np.zeros((candidate_count, code_base), dtype=np.uint8)
+    rows = np.arange(candidate_count)[:, None]
+    one_hot[rows, tickets_cpu.astype(np.int32)] = 1
+
+    def _subset_codes(subset_size: int) -> np.ndarray:
+        position_sets = tuple(itertools.combinations(range(6), subset_size))
+        encoded = []
+        for positions in position_sets:
+            code = np.zeros(candidate_count, dtype=np.int32)
+            for position in positions:
+                code = code * code_base + tickets_cpu[:, position].astype(np.int32)
+            encoded.append(code)
+        return np.stack(encoded, axis=1)
+
+    pair_codes = _subset_codes(2)
+    triple_codes = _subset_codes(3)
+    quad_codes = _subset_codes(4)
+    covered_pairs = np.zeros(code_base**2, dtype=bool)
+    covered_triples = np.zeros(code_base**3, dtype=bool)
+    covered_quads = np.zeros(code_base**4, dtype=bool)
+    number_counts = np.zeros(code_base, dtype=np.int32)
+    selected: list[int] = []
+    selected_set: set[int] = set()
+    phase_by_ticket: list[str] = []
+
+    def _register(idx: int, phase: str) -> None:
+        idx = int(idx)
+        selected.append(idx)
+        selected_set.add(idx)
+        phase_by_ticket.append(str(phase))
+        covered_pairs[pair_codes[idx]] = True
+        covered_triples[triple_codes[idx]] = True
+        covered_quads[quad_codes[idx]] = True
+        number_counts[tickets_cpu[idx]] += 1
+
+    for idx in order[:requested_elite]:
+        _register(int(idx), "elite")
+    elite_selected_ranks = [int(ranks[idx]) for idx in selected]
+
+    def _minmax(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        if values.size == 0:
+            return values
+        low, high = float(values.min()), float(values.max())
+        if high <= low:
+            return np.ones(values.shape, dtype=np.float64)
+        return (values - low) / (high - low)
+
+    def _pick(candidates: np.ndarray) -> int | None:
+        candidates = np.asarray(
+            [int(idx) for idx in candidates if int(idx) not in selected_set],
+            dtype=np.int32,
+        )
+        if candidates.size == 0:
+            return None
+        selected_matrix = one_hot[np.asarray(selected, dtype=np.int32)]
+        overlap = one_hot[candidates] @ selected_matrix.T
+        max_overlap = (
+            overlap.max(axis=1) if overlap.size else np.zeros(candidates.size)
+        )
+        preferred = max_overlap <= int(portfolio_cfg.max_overlap_preferred)
+        if not np.any(preferred):
+            for allowed in range(int(portfolio_cfg.max_overlap_preferred) + 1, 7):
+                preferred = max_overlap <= allowed
+                if np.any(preferred):
+                    break
+
+        pair_novelty = np.mean(~covered_pairs[pair_codes[candidates]], axis=1)
+        triple_novelty = np.mean(
+            ~covered_triples[triple_codes[candidates]], axis=1
+        )
+        quad_novelty = np.mean(~covered_quads[quad_codes[candidates]], axis=1)
+        rarity = np.mean(
+            1.0 / (1.0 + number_counts[tickets_cpu[candidates]]), axis=1
+        )
+        dissimilarity = 1.0 - max_overlap.astype(np.float64) / 6.0
+        local_quality = 1.0 - _minmax(ranks[candidates].astype(np.float64))
+        objective = (
+            float(portfolio_cfg.w_pair_novelty) * _minmax(pair_novelty)
+            + float(portfolio_cfg.w_triple_novelty) * _minmax(triple_novelty)
+            + float(portfolio_cfg.w_quad_novelty) * _minmax(quad_novelty)
+            + float(portfolio_cfg.w_number_rarity) * _minmax(rarity)
+            + float(portfolio_cfg.w_dissimilarity) * dissimilarity
+            + float(portfolio_cfg.w_local_quality) * local_quality
+        )
+        objective = np.where(preferred, objective, -np.inf)
+        return int(candidates[int(np.argmax(objective))])
+
+    coverage_min_rank = requested_elite + 1
+    coverage_pool = order[
+        (ranks[order] >= coverage_min_rank)
+        & (ranks[order] <= max(coverage_min_rank, int(portfolio_cfg.coverage_max_rank)))
+    ]
+    coverage_selected_ranks = []
+    for _ in range(requested_coverage):
+        chosen = _pick(coverage_pool)
+        if chosen is None:
+            break
+        _register(chosen, "coverage")
+        coverage_selected_ranks.append(int(ranks[chosen]))
+
+    deep_eligible = order[
+        ranks[order] >= max(1, int(portfolio_cfg.min_deep_rank))
+    ]
+    deep_rank_bands = []
+    deep_selected_ranks = []
+    band_count = min(requested_deep, int(deep_eligible.size))
+    if band_count > 0:
+        for band in np.array_split(deep_eligible, band_count):
+            if band.size == 0:
+                continue
+            chosen = _pick(band)
+            if chosen is None:
+                continue
+            _register(chosen, "deep")
+            deep_selected_ranks.append(int(ranks[chosen]))
+            deep_rank_bands.append(
+                {
+                    "rank_min": int(ranks[band[0]]),
+                    "rank_max": int(ranks[band[-1]]),
+                    "chosen_rank": int(ranks[chosen]),
+                    "candidates": int(band.size),
+                }
+            )
+
+    if len(selected) < target:
+        for idx in order:
+            if int(idx) in selected_set:
+                continue
+            _register(int(idx), "fill")
+            if len(selected) >= target:
+                break
+
+    chosen = selected[:target]
+    return tickets_cpu[np.asarray(chosen, dtype=np.int32)].tolist(), {
+        "selected_idx": chosen,
+        "selected_ranks": [int(ranks[idx]) for idx in chosen],
+        "elite_selected_ranks": elite_selected_ranks,
+        "coverage_selected_ranks": coverage_selected_ranks,
+        "deep_selected_ranks": deep_selected_ranks,
+        "deep_rank_bands": deep_rank_bands,
+        "phase_by_ticket": phase_by_ticket[:target],
+        "coverage_unique_pairs": int(covered_pairs.sum()),
+        "coverage_unique_triples": int(covered_triples.sum()),
+        "coverage_unique_quads": int(covered_quads.sum()),
+        "coverage_weights": {
+            "pair_novelty": float(portfolio_cfg.w_pair_novelty),
+            "triple_novelty": float(portfolio_cfg.w_triple_novelty),
+            "quad_novelty": float(portfolio_cfg.w_quad_novelty),
+            "number_rarity": float(portfolio_cfg.w_number_rarity),
+            "dissimilarity": float(portfolio_cfg.w_dissimilarity),
+            "local_quality": float(portfolio_cfg.w_local_quality),
+        },
+    }

@@ -58,6 +58,7 @@ class PerformanceTracker:
         "ai_weight_effective",
         "geo_weight_effective",
         "ai_signal_validated",
+        "ai_validation_scope",
         "temporal_holdout_auc",
         "geo_score",
         "hybrid_score",

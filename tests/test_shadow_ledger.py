@@ -74,6 +74,14 @@ def test_shadow_liquidation_is_simulated_and_idempotent(tmp_path):
     control = first["variants"]["control_geo_only"]
     assert principal["hits_6"] == 1
     assert principal["simulated_prize"] == 4_650_020.0
+    assert principal["prize_breakdown"]["6"] == {
+        "tickets": 1,
+        "earnings": 4_650_000.0,
+    }
+    assert principal["prize_breakdown"]["3"] == {
+        "tickets": 1,
+        "earnings": 20.0,
+    }
     assert challenger["hits_5"] == 1
     assert challenger["simulated_prize"] == 800.0
     assert control["hits_4"] == 1
@@ -86,6 +94,9 @@ def test_shadow_liquidation_is_simulated_and_idempotent(tmp_path):
     dashboard = tmp_path / "Tablero_Sombra.json"
     assert dashboard.exists()
     exported = json.loads(dashboard.read_text(encoding="utf-8"))
+    assert exported["variants"]["principal_ai_adaptive"]["prize_breakdown"]["6"][
+        "tickets"
+    ] == 1
     assert exported["promotion"]["automatic_production_change"] is False
 
 

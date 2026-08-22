@@ -65,6 +65,7 @@ def _compact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     keys = (
         "ai_signal_enabled",
         "ai_signal_validated",
+        "ai_validation_scope",
         "temporal_holdout_auc",
         "feature_schema",
         "number_model_enabled",
@@ -79,8 +80,31 @@ def _compact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         "fitness_candidate_max_rank",
         "fitness_rank_edges",
         "fitness_bucket_plan",
+        "fitness_selector_mode",
         "selector_debug_ranks",
         "selected_ranks",
+        "selected_stable_ranks",
+        "deep_dispersion_core_tickets",
+        "deep_dispersion_tickets",
+        "deep_dispersion_min_rank",
+        "deep_dispersion_core_ranks",
+        "deep_dispersion_ranks",
+        "deep_dispersion_bands",
+        "deep_dispersion_weights",
+        "portfolio_elite_tickets",
+        "portfolio_coverage_tickets",
+        "portfolio_deep_tickets",
+        "portfolio_elite_ranks",
+        "portfolio_coverage_ranks",
+        "portfolio_deep_ranks",
+        "portfolio_phase_by_ticket",
+        "portfolio_unique_pairs",
+        "portfolio_unique_triples",
+        "portfolio_unique_quads",
+        "portfolio_coverage_weights",
+        "selected_unique_pairs",
+        "selected_unique_triples",
+        "selected_unique_quads",
         "shadow_family",
         "promotion_reference_key",
         "candidate_method",
@@ -166,13 +190,20 @@ def guardar_carteras_sombra(
 
 def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str, Any]:
     distribution = {str(hits): 0 for hits in range(7)}
+    prize_breakdown = {}
     ticket_results = []
     total_prize = 0.0
     max_hits = 0
     for ticket in variant.get("tickets", []):
         hits, additional = rules.validate_ticket(ticket, winning_draw)
         prize = float(rules.calculate_prize(hits, additional))
+        prize_category = rules.prize_category(hits, additional)
         distribution[str(hits)] += 1
+        bucket = prize_breakdown.setdefault(
+            prize_category, {"tickets": 0, "earnings": 0.0}
+        )
+        bucket["tickets"] += 1
+        bucket["earnings"] += prize
         total_prize += prize
         max_hits = max(max_hits, int(hits))
         ticket_results.append(
@@ -180,6 +211,7 @@ def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str,
                 "ticket": [int(number) for number in ticket],
                 "hits": int(hits),
                 "additional": bool(additional),
+                "prize_category": prize_category,
                 "prize": prize,
             }
         )
@@ -190,6 +222,7 @@ def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str,
         "winning_draw": [int(number) for number in winning_draw],
         "ticket_count": len(ticket_results),
         "hit_distribution": distribution,
+        "prize_breakdown": prize_breakdown,
         "max_hits": max_hits,
         "simulated_investment": simulated_investment,
         "simulated_prize": total_prize,
@@ -224,6 +257,7 @@ def _aggregate(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     "simulated_investment": 0.0,
                     "simulated_prize": 0.0,
                     "simulated_net": 0.0,
+                    "prize_breakdown": {},
                 },
             )
             distribution = validation.get("hit_distribution", {})
@@ -242,6 +276,12 @@ def _aggregate(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
             )
             row["simulated_prize"] += float(validation.get("simulated_prize", 0.0))
             row["simulated_net"] += float(validation.get("simulated_net", 0.0))
+            for category, bucket in validation.get("prize_breakdown", {}).items():
+                aggregate_bucket = row["prize_breakdown"].setdefault(
+                    str(category), {"tickets": 0, "earnings": 0.0}
+                )
+                aggregate_bucket["tickets"] += int(bucket.get("tickets", 0))
+                aggregate_bucket["earnings"] += float(bucket.get("earnings", 0.0))
     for row in summary.values():
         contests = int(row["contests"])
         tickets = int(row["tickets"])

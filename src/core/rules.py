@@ -4,6 +4,17 @@ from typing import List, Tuple
 class MelateRetroRules:
     """Reglas de Negocio actualizadas para Melate Retro"""
 
+    PRIZE_CATEGORY_ORDER = (
+        "6",
+        "5+AD",
+        "5",
+        "4",
+        "3",
+        "2+AD",
+        "1+AD",
+        "SIN_PREMIO",
+    )
+
     def __init__(self):
         self.ticket_cost = 10.0
         self.pay_table = {
@@ -40,6 +51,37 @@ class MelateRetroRules:
                 return prize
 
         return 0.0
+
+    def prize_category(self, hits_naturales: int, has_adicional: bool) -> str:
+        """Return the paid Melate category without hiding the additional ball.
+
+        Categories whose prize does not change when the ticket also contains the
+        additional ball (3 and 4 natural hits) remain in their natural category.
+        """
+        prize = self.calculate_prize(hits_naturales, has_adicional)
+        if prize <= 0:
+            return "SIN_PREMIO"
+        if has_adicional and (hits_naturales, True) in self.pay_table:
+            return f"{int(hits_naturales)}+AD"
+        return str(int(hits_naturales))
+
+    def category_from_recorded_result(
+        self, hits_naturales: int, prize: float
+    ) -> str:
+        """Reconstruct a category from legacy telemetry without an AD flag."""
+        hits_naturales = int(hits_naturales)
+        prize = float(prize)
+        if prize <= 0:
+            return "SIN_PREMIO"
+        additional_prize = self.pay_table.get((hits_naturales, True))
+        natural_prize = self.pay_table.get((hits_naturales, False))
+        if (
+            additional_prize is not None
+            and additional_prize != natural_prize
+            and prize == float(additional_prize)
+        ):
+            return f"{hits_naturales}+AD"
+        return str(hits_naturales)
 
 
 class TrisMultiplicadorRules:

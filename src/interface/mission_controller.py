@@ -293,6 +293,66 @@ class MissionController:
                     "prediction": pred,
                 },
                 {
+                    "key": "benchmark_mrpro_native_m30",
+                    "label": "Benchmark MRPRO nativo / 30",
+                    "official": False,
+                    "ticket_count": 30,
+                    "settings": {
+                        "shadow_family": "same_budget_benchmark",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                    },
+                },
+                {
+                    "key": "challenger_core20_deep10",
+                    "label": "Sombra 20 core + 10 profundidad",
+                    "official": False,
+                    "ticket_count": 30,
+                    "settings": {
+                        "shadow_family": "selector_depth_dispersion",
+                        "promotion_reference_key": "benchmark_mrpro_native_m30",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "core_plus_deep",
+                        "deep_dispersion_core_tickets": 20,
+                        "deep_dispersion_tickets": 10,
+                        "deep_dispersion_min_rank": 501,
+                        "deep_dispersion_max_overlap": 3,
+                        "deep_dispersion_pair_novelty_weight": 0.40,
+                        "deep_dispersion_number_rarity_weight": 0.25,
+                        "deep_dispersion_dissimilarity_weight": 0.20,
+                        "deep_dispersion_local_quality_weight": 0.15,
+                    },
+                },
+                {
+                    "key": "challenger_elite10_cover10_deep10",
+                    "label": "Sombra 10 élite + 10 cobertura + 10 profundidad",
+                    "official": False,
+                    "ticket_count": 30,
+                    "settings": {
+                        "shadow_family": "elite_combinatorial_portfolio",
+                        "promotion_reference_key": "challenger_core20_deep10",
+                        "resonance_blend_mode": "adaptive",
+                        "ai_context_weight": 1.0,
+                        "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "elite_coverage_deep",
+                        "portfolio_elite_tickets": 10,
+                        "portfolio_coverage_tickets": 10,
+                        "portfolio_deep_tickets": 10,
+                        "portfolio_coverage_max_rank": 500,
+                        "portfolio_min_deep_rank": 501,
+                        "portfolio_max_overlap": 3,
+                        "portfolio_pair_novelty_weight": 0.15,
+                        "portfolio_triple_novelty_weight": 0.30,
+                        "portfolio_quad_novelty_weight": 0.30,
+                        "portfolio_number_rarity_weight": 0.05,
+                        "portfolio_dissimilarity_weight": 0.05,
+                        "portfolio_local_quality_weight": 0.15,
+                    },
+                },
+                {
                     "key": "benchmark_mrpro_native_m300",
                     "label": "Benchmark MRPRO nativo / 300",
                     "official": False,
@@ -442,8 +502,10 @@ class MissionController:
                 )
                 if saved:
                     self.ui.console.print(
-                        "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 10/90 + "
-                        "Geo + IA números 50/50 + rank profundo + benchmark 300"
+                        "[bold cyan]🌓 MODO SOMBRA ACTIVO:[/] principal + 20/10 "
+                        "profundo + 10/10/10 élite-cobertura + benchmark 30 + "
+                        "10/90 + Geo + IA números "
+                        "50/50 + rank profundo + benchmark 300"
                         + (
                             f" + {covering_shadow_count} covering"
                             if covering_shadow_count

@@ -135,18 +135,15 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     controller = MissionController(_UIStub(), _descending_history())
     controller._run_production()
 
-    assert received == [
-        ("reducer", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-        ("selector", [101, 102, 103]),
-    ]
+    assert received == [("reducer", [101, 102, 103])] + [
+        ("selector", [101, 102, 103])
+    ] * 9
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
         "principal_ai_adaptive",
+        "benchmark_mrpro_native_m30",
+        "challenger_core20_deep10",
+        "challenger_elite10_cover10_deep10",
         "benchmark_mrpro_native_m300",
         "challenger_ai10_geo90",
         "control_geo_only",
@@ -170,12 +167,25 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         False,
         False,
         False,
+        False,
+        False,
+        False,
     ]
     assert variants[1]["settings"]["shadow_family"] == "same_budget_benchmark"
-    assert variants[2]["settings"]["hybrid_alpha"] == 0.10
-    assert variants[3]["settings"]["hybrid_alpha"] == 0.0
-    assert variants[4]["settings"]["ai_number_weight"] == 0.50
-    assert variants[5]["settings"]["fitness_candidate_max_rank"] == 5000
+    assert variants[2]["settings"]["fitness_selector_mode"] == "core_plus_deep"
+    assert variants[2]["settings"]["promotion_reference_key"] == (
+        "benchmark_mrpro_native_m30"
+    )
+    assert variants[3]["settings"]["fitness_selector_mode"] == (
+        "elite_coverage_deep"
+    )
+    assert variants[3]["settings"]["promotion_reference_key"] == (
+        "challenger_core20_deep10"
+    )
+    assert variants[5]["settings"]["hybrid_alpha"] == 0.10
+    assert variants[6]["settings"]["hybrid_alpha"] == 0.0
+    assert variants[7]["settings"]["ai_number_weight"] == 0.50
+    assert variants[8]["settings"]["fitness_candidate_max_rank"] == 5000
 
 
 def test_tris_production_passes_chronological_history_to_predictor(monkeypatch):

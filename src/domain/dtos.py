@@ -62,6 +62,7 @@ class BacktestResultDTO:
     net_balance: float
     hit_distribution: Dict[int, int]
     version_tag: str = "v1.0"
+    prize_breakdown: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
     @property
     def metrics(self) -> Dict[str, Any]:

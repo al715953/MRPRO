@@ -305,6 +305,9 @@ class ResonanceEngine:
             "thermal_numbers": thermal_numbers,
             "ai_signal_enabled": ai_active,
             "ai_signal_validated": self.ai_signal_validated,
+            # La validación pertenece al modelo cargado y permanece constante
+            # durante toda la corrida fixed-origin.
+            "ai_validation_scope": "model",
             "temporal_holdout_auc": self.temporal_holdout_auc,
             "feature_schema": self.feature_schema or "legacy_ticket_numbers",
             "number_ai_scores": number_norm,

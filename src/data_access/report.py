@@ -14,6 +14,52 @@ from src.core.rules import MelateRetroRules
 
 console = Console()
 
+LEDGER_FIELDS = [
+    "Fecha",
+    "Concurso",
+    "Version",
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "Status",
+    "Premio",
+    "AciertosNaturales",
+    "Adicional",
+    "CategoriaPremio",
+]
+
+
+def _atomic_write_ledger(path, rows, fieldnames):
+    temporary_path = f"{path}.tmp"
+    try:
+        with open(temporary_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
+def _ensure_ledger_schema(path):
+    """Add prize-detail columns to an existing ledger without losing rows."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return list(LEDGER_FIELDS)
+    with open(path, mode="r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        existing_fields = list(reader.fieldnames or [])
+        rows = list(reader)
+    fieldnames = existing_fields + [
+        field for field in LEDGER_FIELDS if field not in existing_fields
+    ]
+    if fieldnames != existing_fields:
+        _atomic_write_ledger(path, rows, fieldnames)
+    return fieldnames
+
 def tiene_apuestas_pendientes(concurso_id: int) -> bool:
     """
     Regla de Oro: Evita la sobre-escritura de apuestas aceptadas.
@@ -37,19 +83,30 @@ def guardar_prediccion(tickets, concurso_id: int):
     Persiste las apuestas en el Ledger oficial con el ID del concurso.
     """
     os.makedirs(os.path.dirname(FILE_APUESTAS), exist_ok=True)
-    file_exists = os.path.isfile(FILE_APUESTAS)
+    file_exists = os.path.isfile(FILE_APUESTAS) and os.path.getsize(FILE_APUESTAS) > 0
+    fieldnames = _ensure_ledger_schema(FILE_APUESTAS)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     try:
         with open(FILE_APUESTAS, mode="a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             if not file_exists:
-                # El header ahora incluye el Concurso y el Premio para la liquidación futura
-                writer.writerow(["Fecha", "Concurso", "Version", "T1", "T2", "T3", "T4", "T5", "T6", "Status", "Premio"])
+                writer.writeheader()
             
             for t in tickets:
-                # Inicializamos como 'Pendiente' con Premio 0.0
-                writer.writerow([timestamp, concurso_id, VERSION_TAG] + sorted(t) + ["Pendiente", 0.0])
+                numbers = sorted(t)
+                row = {
+                    "Fecha": timestamp,
+                    "Concurso": concurso_id,
+                    "Version": VERSION_TAG,
+                    "Status": "Pendiente",
+                    "Premio": 0.0,
+                    "AciertosNaturales": "",
+                    "Adicional": "",
+                    "CategoriaPremio": "",
+                }
+                row.update({f"T{i}": number for i, number in enumerate(numbers, 1)})
+                writer.writerow(row)
                 
         console.print(f"\n[bold green]✅ LEDGER ACTUALIZADO:[/bold green] {len(tickets)} tickets bloqueados para Sorteo #{concurso_id}")
     except Exception as e:
@@ -92,10 +149,17 @@ def liquidar_cartera(history):
     dict_resultados = {str(c): n for c, n in zip(history.concursos, history.winning_numbers)}
     
     rows_actualizadas = []
-    totales = {"inversion": 0.0, "ganancia": 0.0, "hits": 0, "concursos": set()}
+    totales = {
+        "inversion": 0.0,
+        "ganancia": 0.0,
+        "hits": 0,
+        "concursos": set(),
+        "desglose_premios": {},
+    }
 
     try:
-        with open(FILE_APUESTAS, mode="r", encoding="utf-8") as f:
+        fieldnames = _ensure_ledger_schema(FILE_APUESTAS)
+        with open(FILE_APUESTAS, mode="r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 c_id = row["Concurso"]
@@ -110,20 +174,27 @@ def liquidar_cartera(history):
                     # Validar contra reglas oficiales
                     h_n, h_a = rules.validate_ticket(ticket, target)
                     premio = rules.calculate_prize(h_n, h_a)
-                    
-                    row["Status"] = "Validado" if h_n < 3 else "🏆 GANADOR"
+                    categoria = rules.prize_category(h_n, h_a)
+
+                    row["Status"] = "🏆 GANADOR" if premio > 0 else "Validado"
                     row["Premio"] = premio
+                    row["AciertosNaturales"] = h_n
+                    row["Adicional"] = "Sí" if h_a else "No"
+                    row["CategoriaPremio"] = categoria
                     totales["ganancia"] += premio
-                    if premio > 0: totales["hits"] += 1
+                    bucket = totales["desglose_premios"].setdefault(
+                        categoria, {"tickets": 0, "ganancia": 0.0}
+                    )
+                    bucket["tickets"] += 1
+                    bucket["ganancia"] += premio
+                    if premio > 0:
+                        totales["hits"] += 1
                 
                 rows_actualizadas.append(row)
 
         # Actualizamos el Ledger con los resultados validados
-        with open(FILE_APUESTAS, mode="w", newline="", encoding="utf-8") as f:
-            if rows_actualizadas:
-                writer = csv.DictWriter(f, fieldnames=rows_actualizadas[0].keys())
-                writer.writeheader()
-                writer.writerows(rows_actualizadas)
+        if rows_actualizadas:
+            _atomic_write_ledger(FILE_APUESTAS, rows_actualizadas, fieldnames)
         
         return totales
 
@@ -156,3 +227,20 @@ def mostrar_resumen_roi(totales):
     table.add_row("Tickets Premiados", f"[bold yellow]{totales['hits']}[/]")
 
     console.print(table)
+
+    breakdown = totales.get("desglose_premios", {})
+    if breakdown:
+        prize_table = Table(title="🎟️ DESGLOSE DE PREMIOS", box=box.SIMPLE_HEAVY)
+        prize_table.add_column("Categoría", style="cyan")
+        prize_table.add_column("Tickets", justify="right")
+        prize_table.add_column("Ganancia", justify="right")
+        for category in MelateRetroRules.PRIZE_CATEGORY_ORDER:
+            bucket = breakdown.get(category)
+            if not bucket:
+                continue
+            prize_table.add_row(
+                category,
+                str(int(bucket["tickets"])),
+                f"${float(bucket['ganancia']):,.2f}",
+            )
+        console.print(prize_table)

@@ -56,6 +56,15 @@ class BacktestEngine:
         self.console = Console()
         self.tracker, self.forensic_data = PerformanceTracker(), []
 
+    def _prize_category(self, hits: int, has_additional: bool, prize: float) -> str:
+        classifier = getattr(self.rules, "prize_category", None)
+        if callable(classifier):
+            return str(classifier(hits, has_additional))
+        if float(prize) <= 0:
+            return "SIN_PREMIO"
+        suffix = "+AD" if has_additional else ""
+        return f"{int(hits)}{suffix}"
+
     def _infer_profile_code(self, config, history: DrawHistoryDTO) -> str:
         overrides = (
             config.filter_overrides
@@ -204,6 +213,7 @@ class BacktestEngine:
         total_inv, total_earn, jackpot_coverage = 0.0, 0.0, 0
         max_hits = getattr(self.rules, "max_hits", config.ticket_size)
         hits_dist = {i: 0 for i in range(max_hits + 1)}
+        prize_breakdown = {}
         reduced_sizes = []
         high_hit_levels = list(range(max(0, max_hits - 2), max_hits + 1))
         max_hits_by_draw = {h: 0 for h in high_hit_levels}
@@ -1490,6 +1500,80 @@ class BacktestEngine:
                             else ""
                         ),
                     }
+                    for overlap_key in (
+                        "winner_in_universe",
+                        "winner_universe_max_overlap",
+                        "winner_stable_rank",
+                        "winner_score_tie_size",
+                        "winner_stable_rank_proximity",
+                        "winner_selected_max_overlap",
+                        "winner_selected_min_missing",
+                        "winner_selected_count_ge_4",
+                        "winner_selected_count_ge_5",
+                        "winner_selected_exact",
+                        "winner_selected_overlap_counts",
+                        "winner_selected_best_ranks",
+                        "winner_selected_best_stable_ranks",
+                        "winner_selected_best_ticket",
+                    ):
+                        if overlap_key in audit:
+                            metrics_payload[overlap_key] = audit[overlap_key]
+                    if isinstance(snapshot, dict):
+                        selected_ranks_payload = snapshot.get("selected_ranks")
+                        if isinstance(selected_ranks_payload, (list, tuple)):
+                            metrics_payload["selected_ranks"] = [
+                                int(rank) for rank in selected_ranks_payload
+                            ]
+                        selected_stable_ranks_payload = snapshot.get(
+                            "selected_stable_ranks"
+                        )
+                        if isinstance(
+                            selected_stable_ranks_payload, (list, tuple)
+                        ):
+                            metrics_payload["selected_stable_ranks"] = [
+                                int(rank) for rank in selected_stable_ranks_payload
+                            ]
+                        selector_mode_payload = snapshot.get(
+                            "fitness_selector_mode"
+                        )
+                        if selector_mode_payload:
+                            metrics_payload["fitness_selector_mode"] = str(
+                                selector_mode_payload
+                            )
+                        deep_ranks_payload = snapshot.get(
+                            "deep_dispersion_ranks"
+                        )
+                        if isinstance(deep_ranks_payload, (list, tuple)):
+                            metrics_payload["deep_dispersion_ranks"] = [
+                                int(rank) for rank in deep_ranks_payload
+                            ]
+                        deep_bands_payload = snapshot.get(
+                            "deep_dispersion_bands"
+                        )
+                        if isinstance(deep_bands_payload, list):
+                            metrics_payload["deep_dispersion_bands"] = (
+                                deep_bands_payload
+                            )
+                        for portfolio_key in (
+                            "portfolio_elite_tickets",
+                            "portfolio_coverage_tickets",
+                            "portfolio_deep_tickets",
+                            "portfolio_elite_ranks",
+                            "portfolio_coverage_ranks",
+                            "portfolio_deep_ranks",
+                            "portfolio_phase_by_ticket",
+                            "portfolio_unique_pairs",
+                            "portfolio_unique_triples",
+                            "portfolio_unique_quads",
+                            "portfolio_coverage_weights",
+                            "selected_unique_pairs",
+                            "selected_unique_triples",
+                            "selected_unique_quads",
+                        ):
+                            if portfolio_key in snapshot:
+                                metrics_payload[portfolio_key] = snapshot[
+                                    portfolio_key
+                                ]
                     if is_tris_profile:
                         metrics_payload["camera_mask_present"] = bool(
                             camera_mask_present_curr
@@ -1546,23 +1630,65 @@ class BacktestEngine:
 
                 # --- FASE 3: VALIDACIÓN FINANCIERA ---
                 max_hit_this_draw = 0
+                selected_hits_this_draw = []
+                selected_prizes_this_draw = []
+                selected_prize_categories_this_draw = []
                 high_hits_this_draw = {h: 0 for h in high_hit_levels}
                 if is_tris_universe_mode:
                     h_n = int(max_hits if fs_pass else 0)
                     hits_dist[h_n] += 1
                     max_hit_this_draw = h_n
+                    selected_hits_this_draw.append(h_n)
+                    selected_prizes_this_draw.append(0.0)
+                    selected_prize_categories_this_draw.append("SIN_PREMIO")
                     if h_n in high_hits_this_draw:
                         high_hits_this_draw[h_n] += 1
                 else:
                     for tkt in prediction.tickets:
                         total_inv += self.rules.ticket_cost
                         h_n, h_a = self.rules.validate_ticket(tkt, target)
-                        total_earn += self.rules.calculate_prize(h_n, h_a)
+                        prize = float(self.rules.calculate_prize(h_n, h_a))
+                        prize_category = self._prize_category(h_n, h_a, prize)
+                        total_earn += prize
+                        selected_hits_this_draw.append(int(h_n))
+                        selected_prizes_this_draw.append(prize)
+                        selected_prize_categories_this_draw.append(prize_category)
+                        prize_bucket = prize_breakdown.setdefault(
+                            prize_category, {"tickets": 0, "earnings": 0.0}
+                        )
+                        prize_bucket["tickets"] += 1
+                        prize_bucket["earnings"] += prize
                         hits_dist[h_n] += 1
                         if h_n > max_hit_this_draw:
                             max_hit_this_draw = h_n
                         if h_n in high_hits_this_draw:
                             high_hits_this_draw[h_n] += 1
+
+                if audit is not None and isinstance(audit.get("metrics_json"), dict):
+                    # Conserva el resultado máximo realmente alcanzado por la
+                    # cartera del sorteo. Esto permite comparaciones A/B
+                    # pareadas sin confundirlo con la cobertura del universo.
+                    audit["metrics_json"]["selected_max_hits"] = int(
+                        max_hit_this_draw
+                    )
+                    selected_ticket_count = (
+                        len(prediction.tickets)
+                        if prediction is not None
+                        and hasattr(prediction, "tickets")
+                        else (1 if is_tris_universe_mode else 0)
+                    )
+                    audit["metrics_json"]["selected_ticket_count"] = int(
+                        selected_ticket_count
+                    )
+                    audit["metrics_json"]["selected_ticket_hits"] = list(
+                        selected_hits_this_draw
+                    )
+                    audit["metrics_json"]["selected_ticket_prizes"] = list(
+                        selected_prizes_this_draw
+                    )
+                    audit["metrics_json"]["selected_ticket_prize_categories"] = list(
+                        selected_prize_categories_this_draw
+                    )
 
                 if baseline_compare_stats is not None and not is_tris_universe_mode:
                     model_exact = int(high_hits_this_draw.get(max_hits, 0))
@@ -1684,6 +1810,7 @@ class BacktestEngine:
             total_earn,
             total_earn - total_inv,
             hits_dist,
+            prize_breakdown=prize_breakdown,
         )
         tris_prob_summary = None
         baseline_prob_summary = None
@@ -2066,6 +2193,9 @@ class BacktestEngine:
         ai_s = audit.get("ai_score", 0.0)
         ai_enabled = bool(audit.get("ai_signal_enabled", True))
         ai_validated = bool(audit.get("ai_signal_validated", True))
+        ai_validation_scope = str(
+            audit.get("ai_validation_scope", "model")
+        ).lower()
         ai_percentile = audit.get("ai_percentile_rank")
         ai_weight = float(audit.get("ai_weight_effective", 0.0))
         geo_weight = float(audit.get("geo_weight_effective", 0.0))
@@ -2091,7 +2221,14 @@ class BacktestEngine:
                 if ai_percentile is not None
                 else ""
             )
-            validation_cell = " NV" if not ai_validated else ""
+            # La validación de modelo ya se imprime una sola vez al inicio de
+            # la corrida. Solo se repite aquí si una implementación futura
+            # declara expresamente que puede cambiar sorteo por sorteo.
+            validation_cell = (
+                f" {'V' if ai_validated else 'NV'}"
+                if ai_validation_scope == "draw"
+                else ""
+            )
             ai_cell = f"{ai_s:.3f}{percentile_cell}{validation_cell}"
         else:
             ai_cell = "OFF"
@@ -2310,6 +2447,12 @@ class BacktestEngine:
         summary.add_column("Métrica Sniper", style="dim", width=20)
         summary.add_column("Valor", justify="right", width=15)
         summary.add_row("Sorteos Analizados", str(res.total_draws_tested))
+        summary.add_row("Inversión", f"${res.investment:,.2f}")
+        summary.add_row("Ganancia Bruta", f"${res.earnings:,.2f}")
+        recovery = res.earnings / res.investment if res.investment else 0.0
+        net_roi = res.net_balance / res.investment if res.investment else 0.0
+        summary.add_row("Recuperación Bruta", f"{recovery:.2%}")
+        summary.add_row("ROI Neto", f"{net_roi:.2%}")
         summary.add_row(
             "Balance Neto",
             f"[{'green' if res.net_balance >= 0 else 'red'}]${res.net_balance:,.2f}[/]",
@@ -2347,6 +2490,32 @@ class BacktestEngine:
             style = "bold yellow" if h >= max(0, max_hits - 2) else "white"
             dist_table.add_row(f"{h}/{max_hits} aciertos", f"[{style}]{count}[/]")
         self.console.print(dist_table)
+
+        if res.prize_breakdown:
+            prize_table = Table(
+                title="Desglose de Premios",
+                show_header=True,
+                header_style="bold green",
+            )
+            prize_table.add_column("Categoría", justify="center")
+            prize_table.add_column("Tickets", justify="right")
+            prize_table.add_column("Ganancia", justify="right")
+            preferred_order = getattr(
+                self.rules, "PRIZE_CATEGORY_ORDER", tuple(res.prize_breakdown)
+            )
+            ordered_categories = list(preferred_order) + sorted(
+                set(res.prize_breakdown) - set(preferred_order)
+            )
+            for category in ordered_categories:
+                bucket = res.prize_breakdown.get(category)
+                if not bucket:
+                    continue
+                prize_table.add_row(
+                    str(category),
+                    str(int(bucket.get("tickets", 0))),
+                    f"${float(bucket.get('earnings', 0.0)):,.2f}",
+                )
+            self.console.print(prize_table)
 
         if isinstance(tris_universe_summary, dict):
             u_table = Table(
