@@ -4,6 +4,7 @@ from src.data_access.shadow_ledger import (
     guardar_carteras_sombra,
     liquidar_carteras_sombra,
 )
+from src.data_access.prize_store import save_official_prize_record
 from src.domain.dtos import DrawHistoryDTO
 
 
@@ -73,14 +74,14 @@ def test_shadow_liquidation_is_simulated_and_idempotent(tmp_path):
     challenger = first["variants"]["challenger_ai10_geo90"]
     control = first["variants"]["control_geo_only"]
     assert principal["hits_6"] == 1
-    assert principal["simulated_prize"] == 4_650_020.0
+    assert principal["simulated_prize"] == 4_650_021.51
     assert principal["prize_breakdown"]["6"] == {
         "tickets": 1,
         "earnings": 4_650_000.0,
     }
     assert principal["prize_breakdown"]["3"] == {
         "tickets": 1,
-        "earnings": 20.0,
+        "earnings": 21.51,
     }
     assert challenger["hits_5"] == 1
     assert challenger["simulated_prize"] == 800.0
@@ -110,3 +111,53 @@ def test_shadow_liquidation_keeps_future_contest_pending(tmp_path):
     assert summary["pending_contests"] == [1662]
     assert summary["updated_contests"] == []
     assert summary["variants"] == {}
+
+
+def test_shadow_liquidation_upgrades_estimate_when_official_table_arrives(tmp_path):
+    path = tmp_path / "Carteras_Sombra.json"
+    catalog = tmp_path / "Premios.json"
+    guardar_carteras_sombra(1661, _variants(), 1660, str(path))
+    history = DrawHistoryDTO(
+        dates=["2026-08-20"],
+        concursos=[1661],
+        winning_numbers=[[1, 2, 3, 4, 5, 6, 7]],
+    )
+
+    estimated = liquidar_carteras_sombra(
+        history, str(path), prize_catalog_path=str(catalog)
+    )
+    assert estimated["updated_contests"] == [1661]
+
+    official_table = {
+        "6": 1_000.0,
+        "5+AD": 600.0,
+        "5": 500.0,
+        "4": 40.0,
+        "3": 30.0,
+        "2+AD": 20.0,
+        "1+AD": 10.0,
+    }
+    save_official_prize_record(
+        {
+            "contest": 1661,
+            "prizes": official_table,
+            "source": "official-test",
+        },
+        catalog,
+    )
+
+    upgraded = liquidar_carteras_sombra(
+        history, str(path), prize_catalog_path=str(catalog)
+    )
+    repeated = liquidar_carteras_sombra(
+        history, str(path), prize_catalog_path=str(catalog)
+    )
+
+    assert upgraded["updated_contests"] == [1661]
+    assert repeated["updated_contests"] == []
+    principal = upgraded["variants"]["principal_ai_adaptive"]
+    assert principal["simulated_prize"] == 1_030.0
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    validation = payload["portfolios"][0]["variants"][0]["validation"]
+    assert validation["prize_source"] == "official-test"
+    assert validation["prize_table"] == official_table

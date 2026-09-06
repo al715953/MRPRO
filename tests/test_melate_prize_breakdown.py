@@ -11,9 +11,9 @@ def test_melate_rules_classify_every_paid_category():
     winning = [1, 2, 3, 4, 5, 6, 7]
     cases = [
         ([1, 7, 20, 21, 22, 23], (1, True, "1+AD", 10.0)),
-        ([1, 2, 7, 20, 21, 22], (2, True, "2+AD", 15.0)),
-        ([1, 2, 3, 20, 21, 22], (3, False, "3", 20.0)),
-        ([1, 2, 3, 7, 20, 21], (3, True, "3", 20.0)),
+        ([1, 2, 7, 20, 21, 22], (2, True, "2+AD", 16.13)),
+        ([1, 2, 3, 20, 21, 22], (3, False, "3", 21.51)),
+        ([1, 2, 3, 7, 20, 21], (3, True, "3", 21.51)),
         ([1, 2, 3, 4, 20, 21], (4, False, "4", 150.0)),
         ([1, 2, 3, 4, 5, 20], (5, False, "5", 800.0)),
         ([1, 2, 3, 4, 5, 7], (5, True, "5+AD", 30_000.0)),
@@ -52,11 +52,11 @@ def test_real_ledger_persists_and_aggregates_prize_breakdown(tmp_path, monkeypat
 
     totals = report_module.liquidar_cartera(history)
 
-    assert totals["ganancia"] == 25.0
+    assert totals["ganancia"] == 26.13
     assert totals["hits"] == 2
     assert totals["desglose_premios"] == {
         "1+AD": {"tickets": 1, "ganancia": 10.0},
-        "2+AD": {"tickets": 1, "ganancia": 15.0},
+        "2+AD": {"tickets": 1, "ganancia": 16.13},
     }
     with ledger.open(newline="", encoding="utf-8") as source:
         rows = list(csv.DictReader(source))

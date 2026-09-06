@@ -5,7 +5,11 @@ import pandas as pd
 import io
 import warnings
 from rich.console import Console
-from src.data_access.config import DATA_FOLDER, get_lottery_profile
+from src.data_access.config import DATA_FOLDER, URL_MELATE_RESULTS, get_lottery_profile
+from src.data_access.prize_store import (
+    parse_melate_results_html,
+    save_official_prize_record,
+)
 
 warnings.simplefilter(
     "ignore", requests.packages.urllib3.exceptions.InsecureRequestWarning
@@ -50,6 +54,20 @@ def actualizar_csv(game_code: str = "melate_retro"):
         console.print(
             f"[bold green]✅ SINCRONIZACION EXITOSA:[/bold green] {len(df)} registros en local.\n[dim]{csv_path}[/]"
         )
+        if profile.code == "melate_retro":
+            try:
+                record = _download_latest_melate_prize_record()
+                _validate_prize_record_against_history(record, df)
+                save_official_prize_record(record)
+                console.print(
+                    "[bold green]✅ PREMIOS OFICIALES SINCRONIZADOS:[/bold green] "
+                    f"concurso #{record['contest']}."
+                )
+            except Exception as exc:
+                console.print(
+                    "[bold yellow]⚠️ Histórico actualizado, pero no se pudo "
+                    f"sincronizar la tabla de premios:[/bold yellow] {exc}"
+                )
         return True
 
     except Exception as e:
@@ -89,6 +107,47 @@ def _download_historical_data(source_url: str):
         console.print(f"[bold red]❌ ERROR DE CONEXIÓN: {str(e)}[/bold red]")
 
     return None
+
+
+def _download_latest_melate_prize_record():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "es-MX,es;q=0.9",
+        "Cache-Control": "no-cache",
+    }
+    response = requests.get(
+        URL_MELATE_RESULTS,
+        headers=headers,
+        timeout=20,
+        verify=False,
+        allow_redirects=True,
+        params={"mrpro_refresh": int(pd.Timestamp.utcnow().timestamp())},
+    )
+    response.raise_for_status()
+    return parse_melate_results_html(response.text, source_url=URL_MELATE_RESULTS)
+
+
+def _validate_prize_record_against_history(record, history_df):
+    contests = pd.to_numeric(history_df["CONCURSO"], errors="coerce")
+    if contests.isna().all():
+        raise ValueError("Histórico sin identificadores de concurso válidos")
+    latest_index = contests.idxmax()
+    latest_contest = int(contests.loc[latest_index])
+    if int(record["contest"]) != latest_contest:
+        raise ValueError(
+            f"premios del #{record['contest']} no corresponden al último "
+            f"histórico #{latest_contest}"
+        )
+    expected = [
+        int(history_df.loc[latest_index, f"F{position}"]) for position in range(1, 8)
+    ]
+    received = [int(value) for value in record.get("winning_numbers", [])]
+    if received != expected:
+        raise ValueError(
+            f"combinación de premios {received} distinta al histórico {expected}"
+        )
 
 
 def _parse_csv_content(raw_content: bytes) -> pd.DataFrame:

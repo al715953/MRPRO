@@ -203,8 +203,13 @@ base. El campo `prize_breakdown` distingue `1+AD`, `2+AD`, `3`, `4`, `5`,
 También utiliza un ledger temporal para no alterar el último backtest.
 
 La liquidación de `Mis_Apuestas.csv` conserva el mismo desglose en las columnas
-`AciertosNaturales`, `Adicional` y `CategoriaPremio`. Los ledgers anteriores se
-actualizan de forma compatible al agregar una predicción nueva.
+`AciertosNaturales`, `Adicional`, `CategoriaPremio` y `FuentePremio`. Al
+sincronizar el histórico, MRPRO captura también la tabla individual publicada
+por Lotería Nacional en `data/Melate-Retro-Premios.json` y verifica que concurso
+y combinación coincidan antes de guardarla. La liquidación usa esos importes
+oficiales por concurso; cuando no existe una tabla local conserva el estimado
+de simulación, lo etiqueta `ESTIMADO_ESTATICO` y advierte que el ROI no es
+definitivo. Los ledgers anteriores se actualizan de forma compatible.
 
 ### Reserva profunda 20 + 10
 

@@ -16,8 +16,10 @@ from src.core.shadow_promotion import evaluate_shadow_promotions
 from src.data_access.config import (
     FILE_CARTERAS_SOMBRA,
     FILE_TABLERO_SOMBRA,
+    MELATE_PRIZE_TABLE_PATH,
     VERSION_TAG,
 )
+from src.data_access.prize_store import load_prize_catalog
 
 
 console = Console()
@@ -188,7 +190,14 @@ def guardar_carteras_sombra(
     return True
 
 
-def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str, Any]:
+def _validate_variant(
+    variant: dict[str, Any],
+    winning_draw,
+    rules,
+    *,
+    prize_table: dict[str, float] | None = None,
+    prize_source: str = "ESTIMADO_ESTATICO",
+) -> dict[str, Any]:
     distribution = {str(hits): 0 for hits in range(7)}
     prize_breakdown = {}
     ticket_results = []
@@ -196,7 +205,7 @@ def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str,
     max_hits = 0
     for ticket in variant.get("tickets", []):
         hits, additional = rules.validate_ticket(ticket, winning_draw)
-        prize = float(rules.calculate_prize(hits, additional))
+        prize = float(rules.calculate_prize(hits, additional, prize_table))
         prize_category = rules.prize_category(hits, additional)
         distribution[str(hits)] += 1
         bucket = prize_breakdown.setdefault(
@@ -220,6 +229,8 @@ def _validate_variant(variant: dict[str, Any], winning_draw, rules) -> dict[str,
     return {
         "validated_at": datetime.now().isoformat(timespec="seconds"),
         "winning_draw": [int(number) for number in winning_draw],
+        "prize_source": str(prize_source),
+        "prize_table": dict(prize_table) if prize_table is not None else None,
         "ticket_count": len(ticket_results),
         "hit_distribution": distribution,
         "prize_breakdown": prize_breakdown,
@@ -308,6 +319,7 @@ def liquidar_carteras_sombra(
     history,
     path: str = FILE_CARTERAS_SOMBRA,
     dashboard_path: str | None = None,
+    prize_catalog_path: str = MELATE_PRIZE_TABLE_PATH,
 ) -> dict[str, Any] | None:
     """Valida carteras con resultados disponibles y devuelve el acumulado simulado."""
 
@@ -320,6 +332,7 @@ def liquidar_carteras_sombra(
         for contest, numbers in zip(history.concursos, history.winning_numbers)
     }
     rules = MelateRetroRules()
+    prize_catalog = load_prize_catalog(prize_catalog_path).get("contests", {})
     updated_contests = []
     pending_contests = []
     changed = False
@@ -330,13 +343,44 @@ def liquidar_carteras_sombra(
         if winning_draw is None:
             pending_contests.append(contest)
             continue
+        prize_record = prize_catalog.get(str(contest))
+        prize_table = (
+            prize_record.get("prizes")
+            if isinstance(prize_record, dict)
+            and isinstance(prize_record.get("prizes"), dict)
+            else None
+        )
+        prize_source = (
+            str(prize_record.get("source") or "OFICIAL_LOTERIA_NACIONAL")
+            if prize_table is not None
+            else "ESTIMADO_ESTATICO"
+        )
         contest_updated = False
         for variant in portfolio.get("variants", []):
-            if variant.get("status") == "Validado" and isinstance(
-                variant.get("validation"), dict
+            validation = variant.get("validation")
+            previous_source = (
+                validation.get("prize_source", "ESTIMADO_ESTATICO")
+                if isinstance(validation, dict)
+                else None
+            )
+            previous_table = (
+                validation.get("prize_table")
+                if isinstance(validation, dict)
+                else None
+            )
+            if (
+                variant.get("status") == "Validado"
+                and previous_source == prize_source
+                and previous_table == prize_table
             ):
                 continue
-            variant["validation"] = _validate_variant(variant, winning_draw, rules)
+            variant["validation"] = _validate_variant(
+                variant,
+                winning_draw,
+                rules,
+                prize_table=prize_table,
+                prize_source=prize_source,
+            )
             variant["status"] = "Validado"
             changed = True
             contest_updated = True

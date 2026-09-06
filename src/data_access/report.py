@@ -9,7 +9,12 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-from src.data_access.config import FILE_APUESTAS, VERSION_TAG
+from src.data_access.config import (
+    FILE_APUESTAS,
+    MELATE_PRIZE_TABLE_PATH,
+    VERSION_TAG,
+)
+from src.data_access.prize_store import load_prize_catalog
 from src.core.rules import MelateRetroRules
 
 console = Console()
@@ -29,6 +34,7 @@ LEDGER_FIELDS = [
     "AciertosNaturales",
     "Adicional",
     "CategoriaPremio",
+    "FuentePremio",
 ]
 
 
@@ -136,7 +142,7 @@ def generar_ticket_limpio(tickets, concurso_id: int):
     except Exception as e:
         console.print(f"[red]Error al generar TXT de salida: {e}[/red]")
 
-def liquidar_cartera(history):
+def liquidar_cartera(history, prize_catalog_path=MELATE_PRIZE_TABLE_PATH):
     """
     Motor Forense de Liquidación: Cruza el Ledger contra el Historial Real.
     Calcula el ROI real basado en lo que realmente se jugó.
@@ -145,6 +151,7 @@ def liquidar_cartera(history):
         return None
 
     rules = MelateRetroRules()
+    prize_catalog = load_prize_catalog(prize_catalog_path).get("contests", {})
     
     # Mapeo de resultados reales: {concurso_id: [n1, n2, n3, n4, n5, n6, ad]}
     dict_resultados = {str(c): n for c, n in zip(history.concursos, history.winning_numbers)}
@@ -156,6 +163,8 @@ def liquidar_cartera(history):
         "hits": 0,
         "concursos": set(),
         "desglose_premios": {},
+        "concursos_premio_oficial": set(),
+        "concursos_premio_estimado": set(),
     }
 
     try:
@@ -174,14 +183,27 @@ def liquidar_cartera(history):
                     
                     # Validar contra reglas oficiales
                     h_n, h_a = rules.validate_ticket(ticket, target)
-                    premio = rules.calculate_prize(h_n, h_a)
                     categoria = rules.prize_category(h_n, h_a)
+                    prize_record = prize_catalog.get(str(c_id))
+                    official_table = (
+                        prize_record.get("prizes")
+                        if isinstance(prize_record, dict)
+                        and isinstance(prize_record.get("prizes"), dict)
+                        else None
+                    )
+                    premio = rules.calculate_prize(h_n, h_a, official_table)
+                    prize_source = (
+                        str(prize_record.get("source") or "OFICIAL_LOTERIA_NACIONAL")
+                        if official_table is not None
+                        else "ESTIMADO_ESTATICO"
+                    )
 
                     row["Status"] = "🏆 GANADOR" if premio > 0 else "Validado"
                     row["Premio"] = premio
                     row["AciertosNaturales"] = h_n
                     row["Adicional"] = "Sí" if h_a else "No"
                     row["CategoriaPremio"] = categoria
+                    row["FuentePremio"] = prize_source
                     totales["ganancia"] += premio
                     bucket = totales["desglose_premios"].setdefault(
                         categoria, {"tickets": 0, "ganancia": 0.0}
@@ -190,6 +212,12 @@ def liquidar_cartera(history):
                     bucket["ganancia"] += premio
                     if premio > 0:
                         totales["hits"] += 1
+                        source_bucket = (
+                            "concursos_premio_oficial"
+                            if official_table is not None
+                            else "concursos_premio_estimado"
+                        )
+                        totales[source_bucket].add(c_id)
                 
                 rows_actualizadas.append(row)
 
@@ -228,6 +256,14 @@ def mostrar_resumen_roi(totales):
     table.add_row("Tickets Premiados", f"[bold yellow]{totales['hits']}[/]")
 
     console.print(table)
+
+    estimated = sorted(totales.get("concursos_premio_estimado", set()), key=int)
+    if estimated:
+        contests = ", ".join(f"#{contest}" for contest in estimated)
+        console.print(
+            "[bold yellow]⚠ Premio estimado:[/] falta tabla oficial para "
+            f"{contests}; el ROI no debe considerarse definitivo."
+        )
 
     breakdown = totales.get("desglose_premios", {})
     if breakdown:

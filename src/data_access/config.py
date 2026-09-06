@@ -97,6 +97,7 @@ CSV_FILE_PATH = str(DATA_FOLDER_PATH / "Melate-Retro.csv")
 FILE_APUESTAS = str(DATA_FOLDER_PATH / "Mis_Apuestas.csv")
 FILE_CARTERAS_SOMBRA = str(DATA_FOLDER_PATH / "Carteras_Sombra.json")
 FILE_TABLERO_SOMBRA = str(DATA_FOLDER_PATH / "Tablero_Sombra.json")
+MELATE_PRIZE_TABLE_PATH = str(DATA_FOLDER_PATH / "Melate-Retro-Premios.json")
 MASTER_LOG_PATH = str(DATA_FOLDER_PATH / "master_performance.csv")
 FORENSIC_LOG_PATH = str(DATA_FOLDER_PATH / "detailed_forensic_log.csv")
 FORENSIC_LOG_ARCHIVE_PATH = DATA_FOLDER_PATH / "forensic_log_archive"
@@ -115,13 +116,14 @@ BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
 VERSION_TAG = (
-    "V17_BALANCED_MIXED50_SOFT_GEO_20260904"
+    "V17.1_BALANCED_MIXED50_OFFICIAL_PRIZES_20260906"
 )
 
 # --- CONSTANTES DE MELATE RETRO ---
 TOTAL_BALLS = 39
 TICKET_SIZE = 6
 URL_MELATE = "https://www.loterianacional.gob.mx/Home/Historicos?ARHP=TQBlAGwAYQB0AGUALQBSAGUAdAByAG8A"
+URL_MELATE_RESULTS = "https://www.loterianacional.gob.mx/MelateRetro/Resultados"
 
 # --- CONFIGURACIÓN: TRIS CON MULTIPLICADOR ---
 # El endpoint de Historicos usa ARHP en Base64 UTF-16LE.

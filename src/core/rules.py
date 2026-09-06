@@ -1,8 +1,9 @@
+from collections.abc import Mapping
 from typing import List, Tuple
 
 
 class MelateRetroRules:
-    """Reglas de Negocio actualizadas para Melate Retro"""
+    """Clasificación oficial y tabla estimada para simulaciones de Melate Retro."""
 
     PRIZE_CATEGORY_ORDER = (
         "6",
@@ -22,8 +23,8 @@ class MelateRetroRules:
             (5, True): 30000.0,
             (5, False): 800.0,
             (4, False): 150.0,
-            (3, False): 20.0,
-            (2, True): 15.0,
+            (3, False): 21.51,
+            (2, True): 16.13,
             (1, True): 10.0,
         }
         self.max_hits = 6
@@ -40,7 +41,15 @@ class MelateRetroRules:
 
         return hits_naturales, has_adicional
 
-    def calculate_prize(self, hits_naturales: int, has_adicional: bool) -> float:
+    def calculate_prize(
+        self,
+        hits_naturales: int,
+        has_adicional: bool,
+        prize_table: Mapping[str, float] | None = None,
+    ) -> float:
+        category = self.prize_category(hits_naturales, has_adicional)
+        if prize_table is not None and category in prize_table:
+            return float(prize_table[category])
         prize = self.pay_table.get((hits_naturales, has_adicional))
         if prize is not None:
             return prize
@@ -53,17 +62,18 @@ class MelateRetroRules:
         return 0.0
 
     def prize_category(self, hits_naturales: int, has_adicional: bool) -> str:
-        """Return the paid Melate category without hiding the additional ball.
+        """Devuelve la categoría por aciertos, independiente del importe."""
 
-        Categories whose prize does not change when the ticket also contains the
-        additional ball (3 and 4 natural hits) remain in their natural category.
-        """
-        prize = self.calculate_prize(hits_naturales, has_adicional)
-        if prize <= 0:
-            return "SIN_PREMIO"
-        if has_adicional and (hits_naturales, True) in self.pay_table:
-            return f"{int(hits_naturales)}+AD"
-        return str(int(hits_naturales))
+        hits = int(hits_naturales)
+        if hits == 6:
+            return "6"
+        if hits == 5:
+            return "5+AD" if has_adicional else "5"
+        if hits in {3, 4}:
+            return str(hits)
+        if has_adicional and hits in {1, 2}:
+            return f"{hits}+AD"
+        return "SIN_PREMIO"
 
     def category_from_recorded_result(
         self, hits_naturales: int, prize: float
@@ -73,6 +83,8 @@ class MelateRetroRules:
         prize = float(prize)
         if prize <= 0:
             return "SIN_PREMIO"
+        if hits_naturales in {1, 2}:
+            return f"{hits_naturales}+AD"
         additional_prize = self.pay_table.get((hits_naturales, True))
         natural_prize = self.pay_table.get((hits_naturales, False))
         if (
