@@ -115,7 +115,7 @@ class MissionController:
 
     def _run_optimizer(self):
         self.ui.clear_screen()
-        print(f"\n{Fore.MAGENTA}🔬 MÓDULO DE OPTIMIZACIÓN MRPRO V15{Style.RESET_ALL}")
+        print(f"\n{Fore.MAGENTA}🔬 MÓDULO DE OPTIMIZACIÓN MRPRO V17{Style.RESET_ALL}")
         print("1. Calibración Forense (Filtros de Reducción)")
         print("2. Optimizar Pesos de Votantes (Sniper E1)")
 
@@ -220,7 +220,7 @@ class MissionController:
         input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
     def _run_production(self):
-        """Producción V15: Con inputs funcionales y Ledger Lock."""
+        """Producción V17 balanceada con inputs funcionales y Ledger Lock."""
         ultimo_id = max(self.history.concursos)
         proximo_id = ultimo_id + 1
 
@@ -255,13 +255,43 @@ class MissionController:
         )
         production_history = sort_history_chronologically(self.history)
 
-        print(f"   {Fore.YELLOW}⏳ Paso 1: Filtrado Titanium...{Style.RESET_ALL}")
+        print(
+            f"   {Fore.YELLOW}⏳ Paso 1: Universo V17 balanceado...{Style.RESET_ALL}"
+        )
         univ_res = UniverseReductionStrategy().predict(production_history, config)
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
         print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
         selector = GeneticSelectorStrategy()
         pred = selector.predict(production_history, config)
+        reduction_stats = dict(
+            univ_res.metadata.get("reduction_stage_stats") or {}
+        )
+        pred.metadata.update(
+            {
+                "raw_universe_size": int(univ_res.metadata.get("final_size", 0)),
+                "sniper_mode": univ_res.metadata.get("sniper_mode", "soft"),
+                "sniper_candidates": univ_res.metadata.get(
+                    "sniper_candidates", []
+                ),
+                "hard_excluded_numbers": univ_res.metadata.get(
+                    "hard_excluded_numbers", []
+                ),
+                "candidate_selection_mode": univ_res.metadata.get(
+                    "candidate_selection_mode", "density"
+                ),
+                "candidate_selection_seed": univ_res.metadata.get(
+                    "candidate_selection_seed"
+                ),
+                "selection_core_count": univ_res.metadata.get(
+                    "selection_core_count", 0
+                ),
+                "selection_exploration_count": univ_res.metadata.get(
+                    "selection_exploration_count", 0
+                ),
+                "reduction_stage_stats": reduction_stats,
+            }
+        )
 
         if pred.metadata.get("ai_signal_enabled") is False:
             self.ui.console.print(

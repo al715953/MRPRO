@@ -21,6 +21,25 @@ PROFILE_OOS_SET = (
     "3-1-0-2",
 )
 
+LEGACY_HARD_FILTER_OVERRIDES = {
+    "sniper_mode": "hard",
+    "sum_filter_enabled": True,
+    "structure_filter_enabled": True,
+    "parity_filter_enabled": True,
+    "prime_filter_enabled": True,
+    "consecutive_filter_enabled": True,
+    "max_delta_filter_enabled": True,
+    "terminal_filter_enabled": True,
+    "decade_profile_filter_enabled": True,
+    "entropy_filter_enabled": True,
+    "digital_root_filter_enabled": True,
+    "ac_filter_enabled": True,
+    "positional_filter_enabled": True,
+    "spatial_filter_enabled": True,
+    "candidate_selection_mode": "density",
+    "radar_percentile": 50.0,
+}
+
 
 @dataclass(frozen=True)
 class UniverseShadowSpec:
@@ -38,6 +57,7 @@ PROMOTED_UNIVERSE_SHADOWS = (
             "promotion_reference_key": "principal_ai_adaptive",
             "universe_variant": "profile_oos_43k",
             "valid_decade_profiles": list(PROFILE_OOS_SET),
+            "decade_profile_filter_enabled": True,
             "universe_ticket_limit": 45000,
         },
     ),
@@ -49,19 +69,30 @@ PROMOTED_UNIVERSE_SHADOWS = (
             "promotion_reference_key": "principal_ai_adaptive",
             "universe_variant": "profile_same_budget_40k",
             "valid_decade_profiles": list(PROFILE_OOS_SET),
+            "decade_profile_filter_enabled": True,
             "universe_ticket_limit": 39864,
         },
     ),
     UniverseShadowSpec(
-        key="sniper_soft_veto",
-        label="Sombra Sniper veto suave / reserva 10%",
+        key="sniper_off_control",
+        label="Control Sniper completamente apagado",
         overrides={
             "shadow_family": "universe_reduction",
             "promotion_reference_key": "principal_ai_adaptive",
-            "universe_variant": "sniper_soft_veto",
-            "sniper_mode": "soft",
-            "sniper_soft_penalty": 0.15,
-            "sniper_soft_reserve_fraction": 0.10,
+            "universe_variant": "sniper_off_control",
+            "sniper_mode": "off",
+            "sniper_soft_penalty": 0.0,
+            "sniper_soft_reserve_fraction": 0.0,
+        },
+    ),
+    UniverseShadowSpec(
+        key="legacy_hard_geo_v16",
+        label="Control legacy V16 / filtros Geo duros",
+        overrides={
+            "shadow_family": "universe_reduction",
+            "promotion_reference_key": "principal_ai_adaptive",
+            "universe_variant": "legacy_hard_geo_v16",
+            **LEGACY_HARD_FILTER_OVERRIDES,
         },
     ),
 )
@@ -102,6 +133,19 @@ def build_universe_shadow_variant(
             ),
             "universe_ticket_limit": reduction.metadata.get(
                 "universe_ticket_limit"
+            ),
+            "candidate_selection_mode": reduction.metadata.get(
+                "candidate_selection_mode",
+                effective_settings.get("candidate_selection_mode", "density"),
+            ),
+            "candidate_selection_seed": reduction.metadata.get(
+                "candidate_selection_seed"
+            ),
+            "selection_core_count": reduction.metadata.get(
+                "selection_core_count", 0
+            ),
+            "selection_exploration_count": reduction.metadata.get(
+                "selection_exploration_count", 0
             ),
             "reduction_stage_stats": reduction_stats,
         }

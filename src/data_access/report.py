@@ -117,10 +117,11 @@ def generar_ticket_limpio(tickets, concurso_id: int):
     Genera el archivo minimalista para el punto de venta (UX de Producción).
     """
     path_txt = os.path.join(os.path.dirname(FILE_APUESTAS), f"tickets_sorteo_{concurso_id}.txt")
+    release_name = VERSION_TAG.split("_", 1)[0]
     
     try:
         with open(path_txt, "w", encoding="utf-8") as f:
-            f.write(f"--- MRPRO V15: OMEGA STRIDE ---\n")
+            f.write(f"--- MRPRO {release_name}: BALANCED EXPLORATION ---\n")
             f.write(f"SORTEO: #{concurso_id}\n")
             f.write(f"ESTRATEGIA: {VERSION_TAG}\n")
             f.write("-" * 30 + "\n")

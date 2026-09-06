@@ -2,6 +2,7 @@ import itertools
 
 import numpy as np
 
+from src.data_access.config import BEST_SETTINGS
 from src.strategies.universe.filters import VectorizedFilters
 
 
@@ -105,3 +106,52 @@ def test_entropy_upper_bound_is_clamped_to_theoretical_maximum():
 
     assert accepted.tolist() == uniform_gaps.tolist()
     assert len(rejected) == 0
+
+
+def test_production_disables_unvalidated_hard_geo_filters():
+    assert BEST_SETTINGS["sniper_mode"] == "soft"
+    assert BEST_SETTINGS["candidate_selection_mode"] == "balanced_mixed"
+    assert BEST_SETTINGS["radar_percentile"] == 0.0
+
+    hard_flags = (
+        "positional_filter_enabled",
+        "sum_filter_enabled",
+        "structure_filter_enabled",
+        "terminal_filter_enabled",
+        "spatial_filter_enabled",
+        "decade_profile_filter_enabled",
+        "entropy_filter_enabled",
+        "digital_root_filter_enabled",
+        "ac_filter_enabled",
+    )
+    assert all(BEST_SETTINGS[name] is False for name in hard_flags)
+
+
+def test_disabled_geo_filters_preserve_candidates_that_violate_legacy_limits():
+    filters = VectorizedFilters(np)
+    candidates = np.asarray([[1, 2, 3, 4, 5, 6]], dtype=np.uint8)
+    cfg = dict(BEST_SETTINGS)
+
+    assert (
+        filters.apply_positional_limits(candidates, cfg).tolist()
+        == candidates.tolist()
+    )
+    assert filters.apply_aggregation(candidates, cfg).tolist() == candidates.tolist()
+    assert filters.apply_structure(candidates, cfg).tolist() == candidates.tolist()
+    terminal, _ = filters.apply_terminal_poda(candidates, cfg)
+    assert terminal.tolist() == candidates.tolist()
+    spatial, decades = filters.apply_spatial(candidates, cfg)
+    assert spatial.tolist() == candidates.tolist()
+    assert (
+        filters.apply_profile_poda(spatial, decades, cfg).tolist()
+        == candidates.tolist()
+    )
+    assert (
+        filters.apply_entropy_shannon(candidates, cfg).tolist()
+        == candidates.tolist()
+    )
+    assert (
+        filters.apply_digital_root_sum(candidates, cfg).tolist()
+        == candidates.tolist()
+    )
+    assert filters.apply_ac_complexity(candidates, cfg).tolist() == candidates.tolist()

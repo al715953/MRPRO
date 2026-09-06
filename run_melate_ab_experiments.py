@@ -25,6 +25,7 @@ from src.data_access.config import (
 from src.data_access.loader import LotteryLoader
 from src.domain.dtos import PredictionConfigDTO
 from src.strategies.genetic_selector import GeneticSelectorStrategy
+from src.strategies.universe.shadow import LEGACY_HARD_FILTER_OVERRIDES
 from src.strategies.universe_reduction import UniverseReductionStrategy
 
 
@@ -246,6 +247,19 @@ ELITE_COVERAGE_DEEP_VARIANTS = (
     },
 )
 
+UNIVERSE_V17_VARIANTS = (
+    {
+        "name": "legacy_hard_geo_v16",
+        "description": "Control V16 con filtros Geo y Sniper duros",
+        "overrides": dict(LEGACY_HARD_FILTER_OVERRIDES),
+    },
+    {
+        "name": "balanced_mixed50_v17",
+        "description": "Producción V17: núcleo suave 50% + exploración 50%",
+        "overrides": {},
+    },
+)
+
 VARIANT_SUITES = {
     "core": CORE_VARIANTS,
     "blend-sweep": BLEND_SWEEP_VARIANTS,
@@ -253,6 +267,7 @@ VARIANT_SUITES = {
     "controlled-weights": CONTROLLED_WEIGHT_VARIANTS,
     "deep-dispersion": DEEP_DISPERSION_VARIANTS,
     "elite-coverage-deep": ELITE_COVERAGE_DEEP_VARIANTS,
+    "universe-v17": UNIVERSE_V17_VARIANTS,
 }
 
 
@@ -789,6 +804,7 @@ def main() -> None:
         "controlled-weights": "melate_controlled_weights.json",
         "deep-dispersion": "melate_deep_dispersion_20_10.json",
         "elite-coverage-deep": "melate_elite_coverage_deep.json",
+        "universe-v17": "melate_universe_v17.json",
     }
     output = args.output or Path(DATA_FOLDER_PATH / default_names[args.suite])
     selected_variants = VARIANT_SUITES[args.suite]

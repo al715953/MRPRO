@@ -222,14 +222,16 @@ class VectorizedFilters:
         return self.xp.asarray(raw)
 
     def apply_aggregation(self, universe, cfg):
-        if len(universe) == 0:
+        if len(universe) == 0 or not bool(cfg.get("sum_filter_enabled", True)):
             return universe
         sums = self.xp.sum(universe, axis=1)
         mask = (sums >= cfg.get("sum_min", 90)) & (sums <= cfg.get("sum_max", 150))
         return universe[mask]
 
     def apply_entropy_shannon(self, universe, cfg):
-        if len(universe) == 0:
+        if len(universe) == 0 or not bool(
+            cfg.get("entropy_filter_enabled", True)
+        ):
             return universe
         deltas = self.xp.diff(universe, axis=1).astype(self.xp.float32)
         row_sums = self.xp.sum(deltas, axis=1)[:, self.xp.newaxis]
@@ -245,7 +247,9 @@ class VectorizedFilters:
         return universe[mask]
 
     def apply_digital_root_sum(self, universe, cfg):
-        if len(universe) == 0:
+        if len(universe) == 0 or not bool(
+            cfg.get("digital_root_filter_enabled", True)
+        ):
             return universe
         roots = 1 + ((universe.astype(self.xp.int32) - 1) % 9)
         sdr_total = self.xp.sum(roots, axis=1)
@@ -265,25 +269,36 @@ class VectorizedFilters:
         return universe[mask]
 
     def apply_structure(self, universe, cfg):
+        if len(universe) == 0 or not bool(
+            cfg.get("structure_filter_enabled", True)
+        ):
+            return universe
+
         evens = self.xp.sum(universe % 2 == 0, axis=1)
         primes = self.xp.sum(self.is_prime[universe], axis=1)
         deltas = self.xp.diff(universe, axis=1)
         max_contig = int(cfg.get("max_contig", 1))
         max_delta = int(cfg.get("max_delta", 0) or 0)
-        mask = (
-            (evens >= cfg.get("even_min", 2))
-            & (evens <= cfg.get("even_max", 4))
-            & (primes >= cfg.get("prime_min", 1))
-            & (primes <= cfg.get("prime_max", 4))
-            & (self.xp.sum(deltas == 1, axis=1) <= max_contig)
-        )
-        if max_delta > 0:
+        mask = self.xp.ones(len(universe), dtype=bool)
+        if bool(cfg.get("parity_filter_enabled", True)):
+            mask &= (evens >= cfg.get("even_min", 2)) & (
+                evens <= cfg.get("even_max", 4)
+            )
+        if bool(cfg.get("prime_filter_enabled", True)):
+            mask &= (primes >= cfg.get("prime_min", 1)) & (
+                primes <= cfg.get("prime_max", 4)
+            )
+        if bool(cfg.get("consecutive_filter_enabled", True)):
+            mask &= self.xp.sum(deltas == 1, axis=1) <= max_contig
+        if bool(cfg.get("max_delta_filter_enabled", True)) and max_delta > 0:
             mask &= self.xp.max(deltas, axis=1) <= max_delta
         return universe[mask]
 
     def apply_terminal_poda(self, universe, cfg):
         if len(universe) == 0:
             return universe, self.xp.array([], dtype=bool)
+        if not bool(cfg.get("terminal_filter_enabled", True)):
+            return universe, self.xp.ones(len(universe), dtype=bool)
         last_digits = (universe % 10).astype(self.xp.int32)
         counts = self.xp.zeros((len(last_digits), 10), dtype=self.xp.int32)
         for i in range(6):
@@ -310,6 +325,10 @@ class VectorizedFilters:
         return universe[mask], (d1[mask], d2[mask], d3[mask], d4[mask])
 
     def apply_profile_poda(self, universe, d_vecs, cfg):
+        if len(universe) == 0 or not bool(
+            cfg.get("decade_profile_filter_enabled", True)
+        ):
+            return universe
         hashes = (
             d_vecs[0] * 1000 + d_vecs[1] * 100 + d_vecs[2] * 10 + d_vecs[3]
         ).astype(self.xp.int32)
@@ -322,7 +341,7 @@ class VectorizedFilters:
 
     def apply_ac_complexity(self, universe, cfg):
         ac_min = cfg.get("ac_min", 7)
-        if len(universe) == 0:
+        if len(universe) == 0 or not bool(cfg.get("ac_filter_enabled", True)):
             return universe
         candidates_np = universe if isinstance(universe, np.ndarray) else universe.get()
         return universe[calculate_ac_numba(candidates_np) >= ac_min]
@@ -374,20 +393,57 @@ class VectorizedFilters:
         universe_f = universe.astype(xp.float32)
 
         sums = xp.sum(universe_f, axis=1)
-        mean_sum = (cfg.get("sum_min", 110) + cfg.get("sum_max", 132)) / 2.0
-        std_sum = (cfg.get("sum_max", 132) - cfg.get("sum_min", 110)) / 4.0
+        mean_sum = float(
+            cfg.get(
+                "score_sum_center",
+                (cfg.get("sum_min", 110) + cfg.get("sum_max", 132)) / 2.0,
+            )
+        )
+        std_sum = max(
+            1e-6,
+            float(
+                cfg.get(
+                    "score_sum_sigma",
+                    (cfg.get("sum_max", 132) - cfg.get("sum_min", 110)) / 4.0,
+                )
+            ),
+        )
         score_sum = xp.exp(-((sums - mean_sum) ** 2) / (2 * std_sum**2))
 
         stds = xp.std(universe_f, axis=1)
-        mean_std = (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0
-        std_std = (cfg.get("std_max", 12.0) - cfg.get("std_min", 8.0)) / 4.0
+        mean_std = float(
+            cfg.get(
+                "score_std_center",
+                (cfg.get("std_min", 8.0) + cfg.get("std_max", 12.0)) / 2.0,
+            )
+        )
+        std_std = max(
+            1e-6,
+            float(
+                cfg.get(
+                    "score_std_sigma",
+                    (cfg.get("std_max", 12.0) - cfg.get("std_min", 8.0)) / 4.0,
+                )
+            ),
+        )
         score_std = xp.exp(-((stds - mean_std) ** 2) / (2 * std_std**2))
 
         evens = xp.sum(universe % 2 == 0, axis=1)
         ideal_even = 3.0
         score_even = 1.0 - xp.abs(evens - ideal_even) / 6.0
 
-        total_score = 0.4 * score_sum + 0.4 * score_std + 0.2 * score_even
+        sum_weight = max(0.0, float(cfg.get("score_sum_weight", 0.4)))
+        std_weight = max(0.0, float(cfg.get("score_std_weight", 0.4)))
+        even_weight = max(0.0, float(cfg.get("score_even_weight", 0.2)))
+        weight_total = sum_weight + std_weight + even_weight
+        if weight_total <= 0.0:
+            sum_weight, std_weight, even_weight, weight_total = 0.4, 0.4, 0.2, 1.0
+
+        total_score = (
+            sum_weight * score_sum
+            + std_weight * score_std
+            + even_weight * score_even
+        ) / weight_total
 
         return total_score.astype(xp.float32)
 
@@ -429,16 +485,10 @@ class VectorizedFilters:
         # Crear índice 2D compacto
         combined_bin = sum_bins * 100 + std_bins
 
-        unique_bins, counts = xp.unique(combined_bin, return_counts=True)
-
-        # Map bin -> density
-        bin_to_density = dict(zip(unique_bins.tolist(), counts.tolist()))
-
-        # Construir vector densidad
-        density = xp.array(
-            [bin_to_density[int(b)] for b in combined_bin.tolist()],
-            dtype=xp.float32,
+        _, inverse, counts = xp.unique(
+            combined_bin, return_inverse=True, return_counts=True
         )
+        density = counts[inverse].astype(xp.float32)
 
         # Normalización
         density = density / (xp.max(density) + 1e-9)

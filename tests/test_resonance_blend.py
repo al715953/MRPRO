@@ -110,3 +110,29 @@ def test_soft_sniper_penalty_is_applied_without_hard_removal(monkeypatch):
     assert result["sniper_soft_numbers"] == [1]
     assert result["sniper_soft_penalty"] == 0.25
     assert result["sniper_soft_candidate_count"] > 0
+
+
+def test_zero_radar_percentile_keeps_the_whole_candidate_universe(monkeypatch):
+    candidates = np.asarray(
+        list(itertools.islice(itertools.combinations(range(1, 40), 6), 240)),
+        dtype=np.uint8,
+    )
+    history = [[1, 7, 13, 19, 25, 31]] * 10
+    engine = ResonanceEngine(model_path="/nonexistent/context.json")
+    engine.bst = _FakeBooster()
+    monkeypatch.setattr(
+        engine,
+        "_compute_geo_score",
+        lambda *_args: np.linspace(0.0, 1.0, len(candidates), dtype=np.float32),
+    )
+    config = PredictionConfigDTO(
+        total_balls=39,
+        ticket_size=6,
+        num_tickets=24,
+        filter_overrides={"radar_percentile": 0.0},
+    )
+
+    result = engine.calculate_resonance(candidates, history, config, np)
+
+    assert len(result["radar_indices"]) == len(candidates)
+    assert result["radar_percentile"] == 0.0

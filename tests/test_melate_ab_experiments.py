@@ -158,6 +158,22 @@ def test_elite_coverage_deep_suite_precommits_three_equal_budget_variants():
     )
 
 
+def test_universe_v17_suite_compares_legacy_control_with_production():
+    variants = experiment.UNIVERSE_V17_VARIANTS
+
+    assert [variant["name"] for variant in variants] == [
+        "legacy_hard_geo_v16",
+        "balanced_mixed50_v17",
+    ]
+    legacy = variants[0]["overrides"]
+    assert legacy["candidate_selection_mode"] == "density"
+    assert legacy["sniper_mode"] == "hard"
+    assert legacy["radar_percentile"] == 50.0
+    assert legacy["sum_filter_enabled"] is True
+    assert variants[1]["overrides"] == {}
+    assert experiment.VARIANT_SUITES["universe-v17"] is variants
+
+
 def test_paired_comparison_reports_mcnemar_and_reproducible_permutation():
     rows = [
         {

@@ -31,7 +31,7 @@ console = Console()
 
 class ConsoleUI:
     """
-    Interface de Misión Crítica MRPRO V15.
+    Interface de Misión Crítica MRPRO V17.
     Maneja la visualización forense y operativa del sistema.
     """
 
@@ -114,7 +114,9 @@ class ConsoleUI:
             "[dim]SISTEMA[/]",
         )
         menu_table.add_row("6", "Lab Backtest (Simulación)", "0", "Finalizar Sesión")
-        menu_table.add_row("7", "[bold green]EJECUTAR OMEGA STRIDE[/]", "", "")
+        menu_table.add_row(
+            "7", "[bold green]EJECUTAR V17 BALANCED EXPLORATION[/]", "", ""
+        )
         menu_table.add_row(
             "8", "[bold yellow]LIQUIDAR ROI & TABLEROS SOMBRA[/]", "", ""
         )

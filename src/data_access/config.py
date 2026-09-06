@@ -115,7 +115,7 @@ BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
 VERSION_TAG = (
-    "V16_SEL_fitnessV1_covTop200_t24_anchor5_subbkt_4-3_2-3_3-3_1_n500_20260215"
+    "V17_BALANCED_MIXED50_SOFT_GEO_20260904"
 )
 
 # --- CONSTANTES DE MELATE RETRO ---
@@ -168,23 +168,36 @@ GPU_ENABLED = False
 NUM_SIMULACIONES = 250000
 
 
-# --- CONFIGURACIÓN "SNIPER" (OPTIMIZADA V10.5) ---
+# --- CONFIGURACIÓN DE PRODUCCIÓN V17 ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     "dynamic_exclude_count": 1,  # Números a eliminar por inercia térmica
-    "sniper_mode": "hard",  # hard=excluye, soft=penaliza, off=desactiva.
+    "sniper_mode": "soft",  # hard=excluye, soft=penaliza, off=desactiva.
     "sniper_soft_penalty": 0.15,
     "sniper_soft_reserve_fraction": 0.10,
     "anchor_nexus_size": 3,  # Cuántos números 'ancla' compartirán los tickets
     "nexus_density": 0.90,  # 80% de los tickets tendrán las anclas
     "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
     # 1. Filtros Topológicos (Fase 1: Harmony Engine)
-    "sum_min": 95,  # 112
-    "sum_max": 115,  # 128
+    # Producción V17 conserva estos umbrales como referencia de scoring, pero no
+    # los usa para borrar combinaciones. Los flags permiten reproducir V16.
+    "sum_filter_enabled": False,
+    "structure_filter_enabled": False,
+    "parity_filter_enabled": False,
+    "prime_filter_enabled": False,
+    "consecutive_filter_enabled": False,
+    "max_delta_filter_enabled": False,
+    "terminal_filter_enabled": False,
+    "decade_profile_filter_enabled": False,
+    "entropy_filter_enabled": False,
+    "digital_root_filter_enabled": False,
+    "ac_filter_enabled": False,
+    "sum_min": 95,  # Umbral legacy, inactivo mientras sum_filter_enabled=False.
+    "sum_max": 115,
     "f1_max": 11,
     "f6_min": 29,
-    "positional_filter_enabled": True,
-    "spatial_filter_enabled": True,
+    "positional_filter_enabled": False,
+    "spatial_filter_enabled": False,
     "ac_min": 7,
     "even_min": 2,
     "even_max": 4,
@@ -216,7 +229,9 @@ BEST_SETTINGS = {
     "ai_context_weight": 1.00,
     "ai_number_weight": 0.00,
     "threshold_ai_override": 0.85,  # Elevamos la vara para el Top 20
-    "geo_floor_percentile": 50.0,
+    "geo_floor_percentile": 50.0,  # Legacy; el corte activo es radar_percentile.
+    # El radar ya no elimina por mediana antes de aplicar los pesos adaptativos.
+    "radar_percentile": 0.0,
     # 3. Malla Cuántica (Fase 3: Genetic Selector)
     # alpha_core_size: Asegura que el Top 5 de la IA sea inamovible
     "alpha_core_size": 3,
@@ -259,6 +274,18 @@ BEST_SETTINGS = {
     "target_universe_size": 0,
     "universe_ticket_limit": 45000,
     "density_penalty_strength": 0.15,
+    # 50% núcleo de score suave + 50% exploración uniforme reproducible.
+    "candidate_selection_mode": "balanced_mixed",
+    "universe_exploration_fraction": 0.50,
+    "candidate_sampling_seed": 20260904,
+    # Parámetros de preferencia suave, desacoplados de los antiguos hard gates.
+    "score_sum_center": 120.0,
+    "score_sum_sigma": 25.0,
+    "score_std_center": 10.5,
+    "score_std_sigma": 3.0,
+    "score_sum_weight": 0.40,
+    "score_std_weight": 0.40,
+    "score_even_weight": 0.20,
     # Estamos agregando una trifecta de asesemblers, 3 IA´s
     # ESTRUCTURA CRÍTICA: Cada experto requiere su propio objetivo de entrenamiento
     "ensemble_config": {

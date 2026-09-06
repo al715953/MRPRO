@@ -10,8 +10,7 @@ from src.data_access.config import BEST_SETTINGS
 
 class UniverseReductionStrategy:
     """
-    Sniper V15.2 - Density Penalized Survival
-    45K fijo + Repulsión Estructural GPU
+    Reductor V17 - núcleo suave con exploración uniforme reproducible.
     """
 
     def __init__(self):
@@ -47,7 +46,7 @@ class UniverseReductionStrategy:
                 # nd decimales, pero recorta ceros finales
                 out = f"{float(v):.{nd}f}"
                 out = out.rstrip("0").rstrip(".")
-                return out
+                return out or "0"
         except Exception:
             pass
         return str(v)
@@ -73,14 +72,34 @@ class UniverseReductionStrategy:
 
         # Ultra-compacto para que la línea completa (telemetría + log) quepa:
         # Ej: S:-16(0.95)|t.90|sum95-115|std7.5-13.2|d15|ld3|v6
+        sum_marker = "" if bool(cfg.get("sum_filter_enabled", True)) else "~"
+        std_hard = bool(cfg.get("std_filter_enabled", False)) or bool(
+            cfg.get("auto_std_compensation", False)
+        )
+        std_marker = "" if std_hard else "~"
+        selection_mode = str(cfg.get("candidate_selection_mode", "density"))
+        exploration = cls._fmt(cfg.get("universe_exploration_fraction", 0.0), 2)
+        radar = cls._fmt(cfg.get("radar_percentile", 50.0), 0)
+
         compact = (
             sniper_base.replace("Sniper:", "S:")
             + f"|t{thr}"
-            + (f"|sum{sum_min}-{sum_max}" if (sum_min or sum_max) else "")
-            + (f"|std{std_min}-{std_max}" if (std_min or std_max) else "")
+            + (
+                f"|sum{sum_marker}{sum_min}-{sum_max}"
+                if (sum_min or sum_max)
+                else ""
+            )
+            + (
+                f"|std{std_marker}{std_min}-{std_max}"
+                if (std_min or std_max)
+                else ""
+            )
             + (f"|d{max_delta}" if max_delta else "")
             + (f"|ld{max_same_last}" if max_same_last else "")
             + f"|v{vdp_n}"
+            + f"|sel:{selection_mode}"
+            + (f"@{exploration}" if selection_mode == "balanced_mixed" else "")
+            + f"|rad{radar}"
         )
 
         return cls._one_line(compact)
@@ -97,7 +116,7 @@ class UniverseReductionStrategy:
             universe_cpu = universe
 
         res = PredictionResultDTO(
-            strategy_name=f"Sniper V15.2 Density ({self.backend_name})",
+            strategy_name=f"Universe V17 Balanced ({self.backend_name})",
             tickets=universe_cpu.tolist() if len(universe_cpu) > 0 else [],
         )
 
@@ -112,6 +131,16 @@ class UniverseReductionStrategy:
                 "hard_excluded_numbers", []
             ),
             "universe_ticket_limit": stage_stats.get("universe_ticket_limit"),
+            "candidate_selection_mode": stage_stats.get(
+                "candidate_selection_mode", "density"
+            ),
+            "candidate_selection_seed": stage_stats.get(
+                "candidate_selection_seed"
+            ),
+            "selection_core_count": stage_stats.get("selection_core_count", 0),
+            "selection_exploration_count": stage_stats.get(
+                "selection_exploration_count", 0
+            ),
         }
 
         return res
@@ -121,9 +150,12 @@ class UniverseReductionStrategy:
         start_time = time.time()
         runtime_overrides = getattr(config, "filter_overrides", None)
         cfg = runtime_overrides or BEST_SETTINGS
+        std_filter_hard_enabled = bool(cfg.get("std_filter_enabled", False)) or bool(
+            cfg.get("auto_std_compensation", False)
+        )
 
         if verbose:
-            print(f"🚀 Sniper V15.2 [Backend: {self.backend_name}]")
+            print(f"🚀 Universe V17 Balanced [Backend: {self.backend_name}]")
 
         sniper_mode = str(cfg.get("sniper_mode", "hard")).strip().lower()
         if sniper_mode not in {"hard", "soft", "off"}:
@@ -261,13 +293,42 @@ class UniverseReductionStrategy:
         target_k = configured_limit if configured_limit > 0 else 45000
 
         topk_applied = False
+        selection_mode = str(
+            cfg.get("candidate_selection_mode", "density")
+        ).strip().lower()
+        selection_seed = self._candidate_selection_seed(history, cfg)
+        selection_details = {
+            "mode": selection_mode,
+            "seed": selection_seed,
+            "core_count": int(len(universe)),
+            "exploration_count": 0,
+        }
         if len(universe) > target_k:
             before = int(len(universe))
-            universe = self._density_penalized_selection(universe, cfg, target_k)
+            if selection_mode == "balanced_mixed":
+                universe, selection_details = self._balanced_mixed_selection(
+                    universe,
+                    cfg,
+                    target_k,
+                    selection_seed,
+                )
+            else:
+                selection_mode = "density"
+                universe = self._density_penalized_selection(universe, cfg, target_k)
+                selection_details = {
+                    "mode": selection_mode,
+                    "seed": selection_seed,
+                    "core_count": int(len(universe)),
+                    "exploration_count": 0,
+                }
             topk_applied = True
             stage_sizes.append(
                 {
-                    "stage": "density_topk",
+                    "stage": (
+                        "balanced_topk"
+                        if selection_mode == "balanced_mixed"
+                        else "density_topk"
+                    ),
                     "before": before,
                     "after": int(len(universe)),
                     "removed": before - int(len(universe)),
@@ -277,7 +338,7 @@ class UniverseReductionStrategy:
         elapsed = time.time() - start_time
 
         if verbose:
-            print(f"✅ UNIVERSO V15.2: {len(universe):,} ({elapsed:.2f}s)")
+            print(f"✅ UNIVERSO V17: {len(universe):,} ({elapsed:.2f}s)")
 
         return (
             universe,
@@ -294,8 +355,97 @@ class UniverseReductionStrategy:
                 "hard_excluded_numbers": [int(number) for number in excluded_pool],
                 "universe_ticket_limit": int(target_k),
                 "topk_applied": bool(topk_applied),
+                "candidate_selection_mode": selection_mode,
+                "candidate_selection_seed": int(selection_seed),
+                "selection_core_count": int(selection_details["core_count"]),
+                "selection_exploration_count": int(
+                    selection_details["exploration_count"]
+                ),
+                "hard_filters_enabled": [
+                    name
+                    for name, enabled in (
+                        ("positional", cfg.get("positional_filter_enabled", True)),
+                        ("sum", cfg.get("sum_filter_enabled", True)),
+                        ("structure", cfg.get("structure_filter_enabled", True)),
+                        ("terminal", cfg.get("terminal_filter_enabled", True)),
+                        ("spatial", cfg.get("spatial_filter_enabled", True)),
+                        (
+                            "decade_profile",
+                            cfg.get("decade_profile_filter_enabled", True),
+                        ),
+                        ("entropy", cfg.get("entropy_filter_enabled", True)),
+                        (
+                            "digital_root",
+                            cfg.get("digital_root_filter_enabled", True),
+                        ),
+                        ("ac_complexity", cfg.get("ac_filter_enabled", True)),
+                        ("standard_deviation", std_filter_hard_enabled),
+                    )
+                    if bool(enabled)
+                ],
             },
         )
+
+    @staticmethod
+    def _candidate_selection_seed(history, cfg):
+        base = int(cfg.get("candidate_sampling_seed", 20260215))
+        contests = getattr(history, "concursos", None) or []
+        try:
+            next_contest = int(contests[-1]) + 1 if contests else 1
+        except (TypeError, ValueError):
+            next_contest = len(contests) + 1
+        return int((base + next_contest * 1_000_003) % (2**32))
+
+    def _balanced_mixed_selection(self, universe, cfg, target_k, seed):
+        """Blend a softly scored core with reproducible uniform exploration."""
+
+        xp = self.xp
+        n_candidates = int(len(universe))
+        exploration_fraction = min(
+            1.0,
+            max(0.0, float(cfg.get("universe_exploration_fraction", 0.50))),
+        )
+        exploration_count = min(
+            target_k, int(round(target_k * exploration_fraction))
+        )
+        core_count = target_k - exploration_count
+
+        if core_count > 0:
+            core_scores = self.filters.compute_survival_scores(universe, cfg)
+            density_penalty = self.filters.compute_density_penalty(universe)
+            penalty = max(
+                0.0, float(cfg.get("density_penalty_strength", 0.15))
+            )
+            final_scores = core_scores - penalty * density_penalty
+            core_indices = xp.argpartition(-final_scores, core_count - 1)[:core_count]
+            core_cpu = (
+                core_indices.get()
+                if hasattr(core_indices, "get")
+                else np.asarray(core_indices)
+            )
+            core_cpu = np.asarray(core_cpu, dtype=np.int64)
+        else:
+            core_cpu = np.empty(0, dtype=np.int64)
+
+        available = np.ones(n_candidates, dtype=bool)
+        available[core_cpu] = False
+        remaining = np.flatnonzero(available)
+        rng = np.random.default_rng(int(seed))
+        if exploration_count > 0:
+            exploration_cpu = rng.choice(
+                remaining, size=exploration_count, replace=False
+            ).astype(np.int64, copy=False)
+        else:
+            exploration_cpu = np.empty(0, dtype=np.int64)
+
+        selected_cpu = np.sort(np.concatenate((core_cpu, exploration_cpu)))
+        selected = xp.asarray(selected_cpu)
+        return universe[selected], {
+            "mode": "balanced_mixed",
+            "seed": int(seed),
+            "core_count": int(core_count),
+            "exploration_count": int(exploration_count),
+        }
 
     # ======================================================
     # DENSITY PENALIZED TOP-K

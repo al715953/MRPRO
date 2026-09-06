@@ -107,29 +107,51 @@ número de boletos que la cartera principal:
   con límite de 45,000 combinaciones.
 - `profile_same_budget_40k`: los mismos perfiles con límite de 39,864
   combinaciones.
-- `sniper_soft_veto`: conserva el número señalado por Sniper, penaliza 15% los
-  tickets que lo contienen y reserva 10% de los boletos como cobertura.
+- `sniper_off_control`: apaga por completo la señal Sniper para compararla con
+  el veto suave oficial.
+- `legacy_hard_geo_v16`: conserva como control prospectivo los filtros duros,
+  el Sniper hard y el radar por mediana de V16.
 - `challenger_context50_number50`: conserva la IA activa y mezcla en partes
   iguales el modelo contextual y el modelo por número.
 - `challenger_deep_rank_5000`: conserva 24 boletos, pero distribuye cobertura
   por estratos hasta rank 5000 para medir si el límite 500 es demasiado corto.
 
-El universo oficial conserva `sniper_mode=hard` y sus perfiles actuales. Las
-variantes se guardan solamente en `data/Carteras_Sombra.json`; la opción 8 las
-liquida y compara contra `principal_ai_adaptive`. Ninguna sombra modifica
-automáticamente producción.
+Desde V17, producción no elimina combinaciones mediante los antiguos filtros
+Geo. Mantiene 45,000 candidatos con 50% de núcleo puntuado suavemente y 50% de
+exploración uniforme reproducible por concurso. Sniper usa veto suave y el
+radar no aplica un corte previo por mediana. Las variantes se guardan solamente
+en `data/Carteras_Sombra.json`; la opción 8 las liquida y compara contra
+`principal_ai_adaptive`. Ninguna sombra modifica automáticamente producción.
 
 El reductor registra tamaños antes y después de cada etapa en
 `reduction_stage_stats`. `universe_ticket_limit` controla el Top-K final; un
 valor no positivo conserva el límite histórico de 45,000.
 
-Los controles de reducción ya son independientes: `max_contig` limita pares
-consecutivos, `max_delta` limita el salto adyacente máximo y
-`max_per_decade` controla la concentración por decena. Los filtros posicional
-y espacial pueden aislarse con `positional_filter_enabled` y
-`spatial_filter_enabled`. La desviación estándar continúa como señal de
-scoring en producción; solo poda cuando `std_filter_enabled` o
-`auto_std_compensation` se activan explícitamente.
+Los controles de reducción son independientes y permanecen disponibles para
+reproducir experimentos legacy. Cada etapa tiene un flag `*_filter_enabled`.
+La suma y la desviación estándar continúan como señales suaves; sólo podan si
+sus flags correspondientes se activan explícitamente. La telemetría registra
+el modo de selección, la semilla y cuántos candidatos provinieron del núcleo y
+de exploración.
+
+La comparación fixed-origin reproducible entre el control V16 y producción V17
+puede ejecutarse con:
+
+```bash
+python3 run_melate_ab_experiments.py \
+  --suite universe-v17 --draws 216 --tickets 24
+```
+
+Para iniciar una cartera oficial V17 desde el menú, el orden operativo es:
+
+1. Opción 5: sincronizar el histórico oficial.
+2. Opción 4: reentrenar los modelos hasta el último concurso disponible.
+3. Opción 7: generar la cartera del concurso siguiente.
+
+La opción 7 usa directamente `BEST_SETTINGS`, registra `VERSION_TAG` en el
+ledger y bloquea una segunda cartera oficial para el mismo concurso. Una prueba
+seca debe conservar 45,000 candidatos, sin filtros duros activos, divididos en
+22,500 de núcleo y 22,500 de exploración.
 
 La calibración de la opción 3 usa orden cronológico y separa la ventana pedida
 en validación (70%) y test reservado (30%). Los parámetros se eligen únicamente

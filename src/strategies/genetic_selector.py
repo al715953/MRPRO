@@ -487,7 +487,7 @@ class GeneticSelectorStrategy:
         subset_coverage = self._ticket_subset_coverage(final_tickets)
 
         return PredictionResultDTO(
-            strategy_name="MRPRO V15 (Omega Stride)",
+            strategy_name="MRPRO V17 (Balanced Exploration)",
             tickets=final_tickets,
             metadata={
                 "universe": u_cpu,
@@ -514,6 +514,7 @@ class GeneticSelectorStrategy:
                 "resonance_blend_mode": res.get("resonance_blend_mode"),
                 "hybrid_alpha": res.get("hybrid_alpha"),
                 "hybrid_beta": res.get("hybrid_beta"),
+                "radar_percentile": res.get("radar_percentile", 50.0),
                 "fitness_focus_max_rank": fitness_config.focus_max_rank,
                 "fitness_candidate_max_rank": fitness_config.candidate_max_rank,
                 "fitness_rank_edges": list(strata_config.rank_edges),

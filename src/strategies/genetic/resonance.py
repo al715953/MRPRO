@@ -254,7 +254,11 @@ class ResonanceEngine:
             hybrid_signal += xp.random.rand(n_candidates) * 0.0001
             # print("⚠️ Zero Signal Detected -> Injecting Noise to prevent Rank #0")
 
-        cutoff = xp.percentile(hybrid_signal, 50)
+        radar_percentile = min(
+            100.0,
+            max(0.0, float(overrides.get("radar_percentile", 50.0))),
+        )
+        cutoff = xp.percentile(hybrid_signal, radar_percentile)
         radar_indices = xp.where(hybrid_signal >= cutoff)[0]
 
         # Fallback de cantidad mínima
@@ -319,6 +323,7 @@ class ResonanceEngine:
             "resonance_blend_mode": "fixed" if fixed_blend else "adaptive",
             "hybrid_alpha": float(hybrid_alpha),
             "hybrid_beta": float(hybrid_beta),
+            "radar_percentile": float(radar_percentile),
             "sniper_soft_numbers": [int(number) for number in soft_numbers],
             "sniper_soft_penalty": float(soft_penalty),
             "sniper_soft_candidate_count": int(soft_candidate_count),

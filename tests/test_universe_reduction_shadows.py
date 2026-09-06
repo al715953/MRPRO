@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, PredictionResultDTO
@@ -137,6 +139,12 @@ def test_profile_shadow_specs_are_non_official_and_use_expected_profiles(monkeyp
                     "universe_ticket_limit": config.filter_overrides.get(
                         "universe_ticket_limit", 45000
                     ),
+                    "candidate_selection_mode": config.filter_overrides.get(
+                        "candidate_selection_mode", "density"
+                    ),
+                    "candidate_selection_seed": 123,
+                    "selection_core_count": 1,
+                    "selection_exploration_count": 0,
                     "reduction_stage_stats": {"stages": []},
                 },
             )
@@ -161,6 +169,8 @@ def test_profile_shadow_specs_are_non_official_and_use_expected_profiles(monkeyp
     assert variant["settings"]["valid_decade_profiles"] == list(PROFILE_OOS_SET)
     assert variant["metadata"]["raw_universe_size"] == 1
     assert variant["metadata"]["universe_variant"] == "profile_oos_43k"
+    assert variant["metadata"]["candidate_selection_mode"] == "balanced_mixed"
+    assert variant["metadata"]["candidate_selection_seed"] == 123
 
 
 def test_soft_reserve_replaces_non_soft_ticket_without_duplicates():
@@ -182,3 +192,50 @@ def test_soft_reserve_replaces_non_soft_ticket_without_duplicates():
     assert debug == {"target": 1, "actual": 1, "replacements": 1}
     assert sum(9 in ticket for ticket in result) == 1
     assert len({tuple(ticket) for ticket in result}) == len(result) == 4
+
+
+def test_balanced_topk_is_reproducible_and_reserves_uniform_exploration():
+    universe = np.asarray(
+        list(itertools.combinations(range(1, 15), 6)), dtype=np.uint8
+    )
+    reducer = UniverseReductionStrategy()
+    cfg = {
+        "universe_exploration_fraction": 0.50,
+        "score_sum_center": 45.0,
+        "score_sum_sigma": 15.0,
+        "score_std_center": 4.0,
+        "score_std_sigma": 2.0,
+    }
+
+    first, first_meta = reducer._balanced_mixed_selection(
+        universe, cfg, target_k=100, seed=123
+    )
+    second, second_meta = reducer._balanced_mixed_selection(
+        universe, cfg, target_k=100, seed=123
+    )
+    changed, _ = reducer._balanced_mixed_selection(
+        universe, cfg, target_k=100, seed=456
+    )
+
+    np.testing.assert_array_equal(first, second)
+    assert not np.array_equal(first, changed)
+    assert len(first) == len({tuple(row) for row in first.tolist()}) == 100
+    assert first_meta == second_meta
+    assert first_meta["core_count"] == 50
+    assert first_meta["exploration_count"] == 50
+
+
+def test_compact_log_keeps_numeric_zero_values_visible():
+    assert UniverseReductionStrategy._fmt(0.0, 2) == "0"
+
+
+def test_legacy_hard_filter_shadow_remains_available_as_control():
+    legacy = next(
+        spec for spec in PROMOTED_UNIVERSE_SHADOWS if spec.key == "legacy_hard_geo_v16"
+    )
+
+    assert legacy.overrides["sniper_mode"] == "hard"
+    assert legacy.overrides["sum_filter_enabled"] is True
+    assert legacy.overrides["entropy_filter_enabled"] is True
+    assert legacy.overrides["candidate_selection_mode"] == "density"
+    assert legacy.overrides["radar_percentile"] == 50.0
