@@ -112,6 +112,13 @@ def test_production_disables_unvalidated_hard_geo_filters():
     assert BEST_SETTINGS["sniper_mode"] == "soft"
     assert BEST_SETTINGS["candidate_selection_mode"] == "balanced_mixed"
     assert BEST_SETTINGS["radar_percentile"] == 0.0
+    assert BEST_SETTINGS["resonance_blend_mode"] == "fixed"
+    assert BEST_SETTINGS["hybrid_alpha"] == 1.0
+    assert BEST_SETTINGS["hybrid_beta"] == 0.0
+    assert BEST_SETTINGS["fitness_selector_mode"] == "core_plus_deep"
+    assert BEST_SETTINGS["deep_dispersion_core_tickets"] == 16
+    assert BEST_SETTINGS["deep_dispersion_tickets"] == 8
+    assert BEST_SETTINGS["sniper_soft_reserve_fraction"] == 0.0
 
     hard_flags = (
         "positional_filter_enabled",

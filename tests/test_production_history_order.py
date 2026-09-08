@@ -50,6 +50,7 @@ def test_sort_history_chronologically_returns_aligned_copy():
 def test_melate_production_passes_chronological_history_to_both_stages(monkeypatch):
     received = []
     saved_shadow = []
+    selector_settings = []
 
     class ReducerStub:
         def predict(self, history, config):
@@ -63,6 +64,7 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     class SelectorStub:
         def predict(self, history, config):
             received.append(("selector", list(history.concursos)))
+            selector_settings.append(dict(config.filter_overrides))
             return PredictionResultDTO(
                 strategy_name="selector",
                 tickets=[[1, 2, 3, 4, 5, 6]],
@@ -138,6 +140,12 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert received == [("reducer", [101, 102, 103])] + [
         ("selector", [101, 102, 103])
     ] * 9
+    assert selector_settings[0]["resonance_blend_mode"] == "fixed"
+    assert selector_settings[0]["hybrid_alpha"] == 1.0
+    assert selector_settings[0]["hybrid_beta"] == 0.0
+    assert selector_settings[0]["fitness_selector_mode"] == "core_plus_deep"
+    assert selector_settings[0]["deep_dispersion_core_tickets"] == 16
+    assert selector_settings[0]["deep_dispersion_tickets"] == 8
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
         "principal_ai_adaptive",
@@ -172,6 +180,11 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
         False,
     ]
     assert variants[1]["settings"]["shadow_family"] == "same_budget_benchmark"
+    assert variants[0]["settings"]["resonance_blend_mode"] == "fixed"
+    assert variants[0]["settings"]["hybrid_alpha"] == 1.0
+    assert variants[0]["settings"]["fitness_selector_mode"] == "core_plus_deep"
+    assert variants[1]["settings"]["fitness_selector_mode"] == "native"
+    assert variants[4]["settings"]["fitness_selector_mode"] == "native"
     assert variants[2]["settings"]["fitness_selector_mode"] == "core_plus_deep"
     assert variants[2]["settings"]["promotion_reference_key"] == (
         "benchmark_mrpro_native_m30"
@@ -186,6 +199,7 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert variants[6]["settings"]["hybrid_alpha"] == 0.0
     assert variants[7]["settings"]["ai_number_weight"] == 0.50
     assert variants[8]["settings"]["fitness_candidate_max_rank"] == 5000
+    assert variants[8]["settings"]["fitness_selector_mode"] == "native"
 
 
 def test_tris_production_passes_chronological_history_to_predictor(monkeypatch):

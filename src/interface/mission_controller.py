@@ -220,7 +220,7 @@ class MissionController:
         input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
     def _run_production(self):
-        """Producción V17 balanceada con inputs funcionales y Ledger Lock."""
+        """Producción V17.2 balanceada con inputs funcionales y Ledger Lock."""
         ultimo_id = max(self.history.concursos)
         proximo_id = ultimo_id + 1
 
@@ -246,7 +246,6 @@ class MissionController:
             n_prod = 24
 
         principal_settings = dict(BEST_SETTINGS)
-        principal_settings["resonance_blend_mode"] = "adaptive"
         config = PredictionConfigDTO(
             TOTAL_BALLS,
             TICKET_SIZE,
@@ -261,7 +260,7 @@ class MissionController:
         univ_res = UniverseReductionStrategy().predict(production_history, config)
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
-        print(f"   {Fore.CYAN}🧬 Paso 2: Ejecutando Omega Stride...{Style.RESET_ALL}")
+        print(f"   {Fore.CYAN}🧬 Paso 2: Construyendo cartera V17.2...{Style.RESET_ALL}")
         selector = GeneticSelectorStrategy()
         pred = selector.predict(production_history, config)
         reduction_stats = dict(
@@ -313,12 +312,20 @@ class MissionController:
             shadow_specs = (
                 {
                     "key": "principal_ai_adaptive",
-                    "label": "Principal IA adaptativa",
+                    # Clave estable por compatibilidad con el ledger histórico.
+                    "label": "Principal V17.2 IA pura / core16 + deep8",
                     "official": True,
                     "settings": {
-                        "resonance_blend_mode": "adaptive",
+                        "resonance_blend_mode": "fixed",
+                        "hybrid_alpha": 1.0,
+                        "hybrid_beta": 0.0,
                         "ai_context_weight": 1.0,
                         "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "core_plus_deep",
+                        "deep_dispersion_core_tickets": 16,
+                        "deep_dispersion_tickets": 8,
+                        "deep_dispersion_min_rank": 501,
+                        "sniper_soft_reserve_fraction": 0.0,
                     },
                     "prediction": pred,
                 },
@@ -332,6 +339,7 @@ class MissionController:
                         "resonance_blend_mode": "adaptive",
                         "ai_context_weight": 1.0,
                         "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "native",
                     },
                 },
                 {
@@ -392,6 +400,7 @@ class MissionController:
                         "resonance_blend_mode": "adaptive",
                         "ai_context_weight": 1.0,
                         "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "native",
                     },
                 },
                 {
@@ -440,6 +449,7 @@ class MissionController:
                         "resonance_blend_mode": "adaptive",
                         "ai_context_weight": 1.0,
                         "ai_number_weight": 0.0,
+                        "fitness_selector_mode": "native",
                         "fitness_focus_max_rank": 5000,
                         "fitness_candidate_max_rank": 5000,
                         "fitness_rank_edges": [

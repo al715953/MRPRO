@@ -116,7 +116,7 @@ BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
 VERSION_TAG = (
-    "V17.1_BALANCED_MIXED50_OFFICIAL_PRIZES_20260906"
+    "V17.2_AI_ONLY_CORE16_DEEP8_5HIT_20260907"
 )
 
 # --- CONSTANTES DE MELATE RETRO ---
@@ -170,13 +170,14 @@ GPU_ENABLED = False
 NUM_SIMULACIONES = 250000
 
 
-# --- CONFIGURACIÓN DE PRODUCCIÓN V17 ---
+# --- CONFIGURACIÓN DE PRODUCCIÓN V17.2 ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     "dynamic_exclude_count": 1,  # Números a eliminar por inercia térmica
     "sniper_mode": "soft",  # hard=excluye, soft=penaliza, off=desactiva.
     "sniper_soft_penalty": 0.15,
-    "sniper_soft_reserve_fraction": 0.10,
+    # El número Sniper conserva penalización suave, sin reemplazo posterior.
+    "sniper_soft_reserve_fraction": 0.0,
     "anchor_nexus_size": 3,  # Cuántos números 'ancla' compartirán los tickets
     "nexus_density": 0.90,  # 80% de los tickets tendrán las anclas
     "shadow_risk_threshold": 0.08,  # Umbral para que el Shadow Model descarte un ticket
@@ -224,9 +225,10 @@ BEST_SETTINGS = {
     "colsample_bytree": 0.82,
     "max_depth": 10,
     "gamma": 4.0,
-    # Malla Híbrida
-    "hybrid_alpha": 0.5,  # Peso para AI_Score
-    "hybrid_beta": 0.5,  # Peso para Geo_Resonance
+    # V17.2: IA contextual pura; Geo continúa disponible para sombras.
+    "resonance_blend_mode": "fixed",
+    "hybrid_alpha": 1.0,
+    "hybrid_beta": 0.0,
     # El modelo por número queda en observación hasta superar el baseline temporal.
     "ai_context_weight": 1.00,
     "ai_number_weight": 0.00,
@@ -251,6 +253,16 @@ BEST_SETTINGS = {
         [161, 200, 3],
         [201, 500, 1],
     ],
+    # 16 tickets del selector nativo + 8 coberturas en estratos profundos.
+    "fitness_selector_mode": "core_plus_deep",
+    "deep_dispersion_core_tickets": 16,
+    "deep_dispersion_tickets": 8,
+    "deep_dispersion_min_rank": 501,
+    "deep_dispersion_max_overlap": 3,
+    "deep_dispersion_pair_novelty_weight": 0.40,
+    "deep_dispersion_number_rarity_weight": 0.25,
+    "deep_dispersion_dissimilarity_weight": 0.20,
+    "deep_dispersion_local_quality_weight": 0.15,
     # Umbrales de Calidad
     # General
     "verbose": True,

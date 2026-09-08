@@ -23,7 +23,7 @@ from src.data_access.config import (
     TOTAL_BALLS,
 )
 from src.data_access.loader import LotteryLoader
-from src.domain.dtos import PredictionConfigDTO
+from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, sort_history_chronologically
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.universe.shadow import LEGACY_HARD_FILTER_OVERRIDES
 from src.strategies.universe_reduction import UniverseReductionStrategy
@@ -37,6 +37,8 @@ CORE_VARIANTS = (
             "ai_context_weight": 1.0,
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -48,6 +50,8 @@ CORE_VARIANTS = (
             "resonance_blend_mode": "fixed",
             "hybrid_alpha": 0.0,
             "hybrid_beta": 1.0,
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -57,6 +61,8 @@ CORE_VARIANTS = (
             "ai_context_weight": 0.85,
             "ai_number_weight": 0.15,
             "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
 )
@@ -73,6 +79,8 @@ BLEND_SWEEP_VARIANTS = (
             "resonance_blend_mode": "fixed",
             "hybrid_alpha": 0.10,
             "hybrid_beta": 0.90,
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -84,6 +92,8 @@ BLEND_SWEEP_VARIANTS = (
             "resonance_blend_mode": "fixed",
             "hybrid_alpha": 0.25,
             "hybrid_beta": 0.75,
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -95,6 +105,8 @@ BLEND_SWEEP_VARIANTS = (
             "resonance_blend_mode": "fixed",
             "hybrid_alpha": 0.40,
             "hybrid_beta": 0.60,
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
 )
@@ -108,6 +120,8 @@ SELECTOR_SHADOW_VARIANTS = (
             "ai_context_weight": 0.50,
             "ai_number_weight": 0.50,
             "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -117,6 +131,8 @@ SELECTOR_SHADOW_VARIANTS = (
             "ai_context_weight": 1.0,
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
             "fitness_focus_max_rank": 5000,
             "fitness_candidate_max_rank": 5000,
             "fitness_rank_edges": [5, 20, 100, 300, 750, 1500, 3000, 5000],
@@ -147,6 +163,8 @@ DEEP_DISPERSION_VARIANTS = (
             "ai_context_weight": 1.0,
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
         },
     },
     {
@@ -159,6 +177,7 @@ DEEP_DISPERSION_VARIANTS = (
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
             "fitness_selector_mode": "core_plus_deep",
+            "sniper_soft_reserve_fraction": 0.10,
             "deep_dispersion_core_tickets": 20,
             "deep_dispersion_tickets": 10,
             "deep_dispersion_min_rank": 501,
@@ -183,6 +202,7 @@ ELITE_COVERAGE_DEEP_VARIANTS = (
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
             "fitness_selector_mode": "elite_coverage_deep",
+            "sniper_soft_reserve_fraction": 0.10,
             "portfolio_elite_tickets": 10,
             "portfolio_coverage_tickets": 10,
             "portfolio_deep_tickets": 10,
@@ -207,6 +227,7 @@ ELITE_COVERAGE_DEEP_VARIANTS = (
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
             "fitness_selector_mode": "elite_coverage_deep",
+            "sniper_soft_reserve_fraction": 0.10,
             "portfolio_elite_tickets": 15,
             "portfolio_coverage_tickets": 10,
             "portfolio_deep_tickets": 5,
@@ -231,6 +252,7 @@ ELITE_COVERAGE_DEEP_VARIANTS = (
             "ai_number_weight": 0.0,
             "resonance_blend_mode": "adaptive",
             "fitness_selector_mode": "elite_coverage_deep",
+            "sniper_soft_reserve_fraction": 0.10,
             "portfolio_elite_tickets": 10,
             "portfolio_coverage_tickets": 15,
             "portfolio_deep_tickets": 5,
@@ -243,6 +265,327 @@ ELITE_COVERAGE_DEEP_VARIANTS = (
             "portfolio_number_rarity_weight": 0.05,
             "portfolio_dissimilarity_weight": 0.05,
             "portfolio_local_quality_weight": 0.15,
+        },
+    },
+)
+
+FIVE_HIT_SELECTOR_VARIANTS = (
+    {
+        "name": "N_native24_reference",
+        "description": "Referencia productiva V17.1 nativa con 24 tickets",
+        "overrides": {
+            "resonance_blend_mode": "adaptive",
+            "fitness_selector_mode": "native",
+            "sniper_soft_reserve_fraction": 0.10,
+        },
+    },
+    {
+        "name": "O_rank500_overlap3_elite1",
+        "description": "Mejor rank hasta 500 con cobertura 5/6 disjunta",
+        "overrides": {
+            "fitness_selector_mode": "five_hit_coverage",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 500,
+            "five_hit_max_overlap": 3,
+        },
+    },
+    {
+        "name": "P_rank2000_overlap3_elite1",
+        "description": "Mejor rank hasta 2000 con cobertura 5/6 disjunta",
+        "overrides": {
+            "fitness_selector_mode": "five_hit_coverage",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 2000,
+            "five_hit_max_overlap": 3,
+        },
+    },
+    {
+        "name": "Q_rank5000_overlap2_elite1",
+        "description": "Distancia más agresiva hasta rank 5000",
+        "overrides": {
+            "fitness_selector_mode": "five_hit_coverage",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 5000,
+            "five_hit_max_overlap": 2,
+        },
+    },
+    {
+        "name": "R_core20_deep4",
+        "description": "20 tickets nativos + 4 estratos profundos",
+        "overrides": {
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "deep_dispersion_core_tickets": 20,
+            "deep_dispersion_tickets": 4,
+            "deep_dispersion_min_rank": 501,
+            "deep_dispersion_max_overlap": 3,
+        },
+    },
+    {
+        "name": "S_core16_deep8",
+        "description": "16 tickets nativos + 8 estratos profundos",
+        "overrides": {
+            "fitness_selector_mode": "core_plus_deep",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+            "deep_dispersion_max_overlap": 3,
+        },
+    },
+    {
+        "name": "T_core12_deep12",
+        "description": "12 tickets nativos + 12 estratos profundos",
+        "overrides": {
+            "fitness_selector_mode": "core_plus_deep",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "deep_dispersion_core_tickets": 12,
+            "deep_dispersion_tickets": 12,
+            "deep_dispersion_min_rank": 501,
+            "deep_dispersion_max_overlap": 3,
+        },
+    },
+    {
+        "name": "U_elite4_cover16_deep4",
+        "description": "4 élite + 16 cobertura + 4 profundidad",
+        "overrides": {
+            "fitness_selector_mode": "elite_coverage_deep",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "portfolio_elite_tickets": 4,
+            "portfolio_coverage_tickets": 16,
+            "portfolio_deep_tickets": 4,
+            "portfolio_coverage_max_rank": 1000,
+            "portfolio_min_deep_rank": 1001,
+            "portfolio_max_overlap": 3,
+        },
+    },
+    {
+        "name": "V_elite4_cover12_deep8",
+        "description": "4 élite + 12 cobertura + 8 profundidad",
+        "overrides": {
+            "fitness_selector_mode": "elite_coverage_deep",
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "portfolio_elite_tickets": 4,
+            "portfolio_coverage_tickets": 12,
+            "portfolio_deep_tickets": 8,
+            "portfolio_coverage_max_rank": 1000,
+            "portfolio_min_deep_rank": 1001,
+            "portfolio_max_overlap": 3,
+        },
+    },
+)
+
+FIVE_HIT_SCORER_VARIANTS = (
+    {
+        "name": "W_adaptive_context_core16_deep8",
+        "description": "Mezcla adaptativa actual, IA contextual y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "X_ai_only_core16_deep8",
+        "description": "IA contextual pura y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 1.0,
+            "hybrid_beta": 0.0,
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "Y_ai75_geo25_core16_deep8",
+        "description": "IA contextual 75% + Geo 25% y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.75,
+            "hybrid_beta": 0.25,
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "Z_ai50_geo50_core16_deep8",
+        "description": "IA contextual 50% + Geo 50% y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.50,
+            "hybrid_beta": 0.50,
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "AA_ai25_geo75_core16_deep8",
+        "description": "IA contextual 25% + Geo 75% y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.25,
+            "hybrid_beta": 0.75,
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "AB_geo_only_core16_deep8",
+        "description": "Geo puro y cartera 16+8",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.0,
+            "hybrid_beta": 1.0,
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "AC_number15_adaptive_core16_deep8",
+        "description": "IA por número 15% dentro de IA y mezcla adaptativa",
+        "overrides": {
+            "ai_context_weight": 0.85,
+            "ai_number_weight": 0.15,
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+    {
+        "name": "AD_number50_adaptive_core16_deep8",
+        "description": "IA contextual 50% + IA por número 50%, mezcla adaptativa",
+        "overrides": {
+            "ai_context_weight": 0.50,
+            "ai_number_weight": 0.50,
+            "resonance_blend_mode": "adaptive",
+            "sniper_soft_reserve_fraction": 0.10,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        },
+    },
+)
+
+FIVE_HIT_VALIDATION_VARIANTS = (
+    FIVE_HIT_SELECTOR_VARIANTS[0],
+    FIVE_HIT_SELECTOR_VARIANTS[1],
+    FIVE_HIT_SELECTOR_VARIANTS[5],
+    FIVE_HIT_SCORER_VARIANTS[1],
+    FIVE_HIT_SCORER_VARIANTS[3],
+    FIVE_HIT_SCORER_VARIANTS[5],
+)
+
+FIVE_HIT_RESERVE_VARIANTS = (
+    {
+        "name": "AE_overlap3_adaptive_no_reserve",
+        "description": "Cobertura de distancia adaptativa sin reemplazo Sniper posterior",
+        "overrides": {
+            "fitness_selector_mode": "five_hit_coverage",
+            "resonance_blend_mode": "adaptive",
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 500,
+            "five_hit_max_overlap": 3,
+            "sniper_soft_reserve_fraction": 0.0,
+        },
+    },
+    {
+        "name": "AF_ai_only_core16_deep8_no_reserve",
+        "description": "IA pura 16+8 sin reemplazo Sniper posterior",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 1.0,
+            "hybrid_beta": 0.0,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+            "sniper_soft_reserve_fraction": 0.0,
+        },
+    },
+)
+
+FIVE_HIT_INTERACTION_VARIANTS = (
+    {
+        "name": "AG_ai_only_overlap3_no_reserve",
+        "description": "IA pura con mejor rank sujeto a cobertura 5/6 disjunta",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 1.0,
+            "hybrid_beta": 0.0,
+            "fitness_selector_mode": "five_hit_coverage",
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 500,
+            "five_hit_max_overlap": 3,
+            "sniper_soft_reserve_fraction": 0.0,
+        },
+    },
+    {
+        "name": "AH_geo_only_overlap3_no_reserve",
+        "description": "Geo puro con mejor rank sujeto a cobertura 5/6 disjunta",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.0,
+            "hybrid_beta": 1.0,
+            "fitness_selector_mode": "five_hit_coverage",
+            "five_hit_elite_tickets": 1,
+            "five_hit_candidate_max_rank": 500,
+            "five_hit_max_overlap": 3,
+            "sniper_soft_reserve_fraction": 0.0,
+        },
+    },
+)
+
+FIVE_HIT_HOLDOUT_VARIANTS = (
+    FIVE_HIT_SELECTOR_VARIANTS[0],
+    FIVE_HIT_RESERVE_VARIANTS[0],
+    FIVE_HIT_RESERVE_VARIANTS[1],
+    {
+        "name": "AI_geo_only_core16_deep8_no_reserve",
+        "description": "Geo puro 16+8 sin reemplazo Sniper posterior",
+        "overrides": {
+            "resonance_blend_mode": "fixed",
+            "hybrid_alpha": 0.0,
+            "hybrid_beta": 1.0,
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+            "sniper_soft_reserve_fraction": 0.0,
         },
     },
 )
@@ -267,6 +610,12 @@ VARIANT_SUITES = {
     "controlled-weights": CONTROLLED_WEIGHT_VARIANTS,
     "deep-dispersion": DEEP_DISPERSION_VARIANTS,
     "elite-coverage-deep": ELITE_COVERAGE_DEEP_VARIANTS,
+    "five-hit-selector": FIVE_HIT_SELECTOR_VARIANTS,
+    "five-hit-scorer": FIVE_HIT_SCORER_VARIANTS,
+    "five-hit-validation": FIVE_HIT_VALIDATION_VARIANTS,
+    "five-hit-reserve": FIVE_HIT_RESERVE_VARIANTS,
+    "five-hit-interaction": FIVE_HIT_INTERACTION_VARIANTS,
+    "five-hit-holdout": FIVE_HIT_HOLDOUT_VARIANTS,
     "universe-v17": UNIVERSE_V17_VARIANTS,
 }
 
@@ -298,6 +647,7 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
     prefix_20_earnings = []
     selected_ticket_observations = 0
     selected_ranks_by_draw = []
+    selected_stable_ranks_by_draw = []
     deep_ranks_by_draw = []
     portfolio_elite_ranks_by_draw = []
     portfolio_coverage_ranks_by_draw = []
@@ -308,6 +658,9 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
     selected_unique_pairs = []
     selected_unique_triples = []
     selected_unique_quads = []
+    selected_unique_quintuples = []
+    selected_radius_one_coverage = []
+    selected_radius_one_max = []
     winner_selected_max_overlap = []
     radar_jackpot_diagnostics = []
     for row in forensic_rows:
@@ -328,6 +681,9 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             prefix_20_earnings.append(float(sum(ticket_prizes[:20])))
         selected_ranks_by_draw.extend(
             int(rank) for rank in metrics.get("selected_ranks", [])
+        )
+        selected_stable_ranks_by_draw.extend(
+            int(rank) for rank in metrics.get("selected_stable_ranks", [])
         )
         deep_ranks_by_draw.extend(
             int(rank) for rank in metrics.get("deep_dispersion_ranks", [])
@@ -352,6 +708,9 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             ("selected_unique_pairs", selected_unique_pairs),
             ("selected_unique_triples", selected_unique_triples),
             ("selected_unique_quads", selected_unique_quads),
+            ("selected_unique_quintuples", selected_unique_quintuples),
+            ("selected_radius_one_coverage", selected_radius_one_coverage),
+            ("selected_radius_one_max", selected_radius_one_max),
         ):
             if metrics.get(metric_name) is not None:
                 destination.append(int(metrics[metric_name]))
@@ -400,6 +759,9 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 }
             )
     selected_ranks_array = np.asarray(selected_ranks_by_draw, dtype=float)
+    selected_stable_ranks_array = np.asarray(
+        selected_stable_ranks_by_draw, dtype=float
+    )
     deep_ranks_array = np.asarray(deep_ranks_by_draw, dtype=float)
     portfolio_elite_ranks_array = np.asarray(
         portfolio_elite_ranks_by_draw, dtype=float
@@ -479,6 +841,21 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "selected_rank_max": (
             int(np.max(selected_ranks_array)) if selected_ranks_array.size else None
         ),
+        "selected_stable_rank_min": (
+            int(np.min(selected_stable_ranks_array))
+            if selected_stable_ranks_array.size
+            else None
+        ),
+        "selected_stable_rank_median": (
+            float(np.median(selected_stable_ranks_array))
+            if selected_stable_ranks_array.size
+            else None
+        ),
+        "selected_stable_rank_max": (
+            int(np.max(selected_stable_ranks_array))
+            if selected_stable_ranks_array.size
+            else None
+        ),
         "deep_rank_min": (
             int(np.min(deep_ranks_array)) if deep_ranks_array.size else None
         ),
@@ -533,6 +910,28 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "selected_unique_quads_mean": (
             float(np.mean(selected_unique_quads)) if selected_unique_quads else None
+        ),
+        "selected_unique_quintuples_mean": (
+            float(np.mean(selected_unique_quintuples))
+            if selected_unique_quintuples
+            else None
+        ),
+        "selected_radius_one_coverage_mean": (
+            float(np.mean(selected_radius_one_coverage))
+            if selected_radius_one_coverage
+            else None
+        ),
+        "selected_radius_one_efficiency_mean": (
+            float(
+                np.mean(
+                    np.asarray(selected_radius_one_coverage, dtype=float)
+                    / np.asarray(selected_radius_one_max, dtype=float)
+                )
+            )
+            if selected_radius_one_coverage
+            and selected_radius_one_max
+            and all(selected_radius_one_max)
+            else None
         ),
         "winner_selected_max_overlap_distribution": {
             str(hit): int(np.sum(winner_overlap_array == hit)) for hit in range(7)
@@ -699,9 +1098,22 @@ def run_experiments(
     variants=CORE_VARIANTS,
     experiment_name: str = "melate_resonance_ab_v1",
     isolate_ledger: bool = True,
+    end_contest: int | None = None,
 ) -> dict[str, Any]:
     profile = LOTTERY_PROFILES["melate_retro"]
     history = LotteryLoader(profile).load_data()
+    if end_contest is not None:
+        ordered = sort_history_chronologically(history)
+        keep = [
+            index
+            for index, contest in enumerate(ordered.concursos)
+            if int(contest) <= int(end_contest)
+        ]
+        history = DrawHistoryDTO(
+            dates=[ordered.dates[index] for index in keep],
+            winning_numbers=[ordered.winning_numbers[index] for index in keep],
+            concursos=[ordered.concursos[index] for index in keep],
+        )
     artifacts = prepare_fixed_origin_models(history, backtest_size)
     results: list[dict[str, Any]] = []
     reference_draw_ids: list[int] | None = None
@@ -766,6 +1178,7 @@ def run_experiments(
         "requested_backtest_size": int(backtest_size),
         "tickets_per_draw": int(tickets),
         "seed": int(seed),
+        "history_end_contest": int(end_contest) if end_contest is not None else None,
         "fixed_origin": artifacts.to_dict(),
         "evaluated_draw_ids": reference_draw_ids or [],
         "variants": results,
@@ -779,6 +1192,7 @@ def main() -> None:
     parser.add_argument("--draws", type=int, default=108)
     parser.add_argument("--tickets", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20260816)
+    parser.add_argument("--end-contest", type=int, default=None)
     parser.add_argument(
         "--suite",
         choices=tuple(VARIANT_SUITES),
@@ -804,6 +1218,12 @@ def main() -> None:
         "controlled-weights": "melate_controlled_weights.json",
         "deep-dispersion": "melate_deep_dispersion_20_10.json",
         "elite-coverage-deep": "melate_elite_coverage_deep.json",
+        "five-hit-selector": "melate_five_hit_selector.json",
+        "five-hit-scorer": "melate_five_hit_scorer.json",
+        "five-hit-validation": "melate_five_hit_validation.json",
+        "five-hit-reserve": "melate_five_hit_reserve.json",
+        "five-hit-interaction": "melate_five_hit_interaction.json",
+        "five-hit-holdout": "melate_five_hit_holdout.json",
         "universe-v17": "melate_universe_v17.json",
     }
     output = args.output or Path(DATA_FOLDER_PATH / default_names[args.suite])
@@ -824,6 +1244,7 @@ def main() -> None:
         args.seed,
         variants=selected_variants,
         experiment_name=f"melate_resonance_{args.suite}_v1",
+        end_contest=args.end_contest,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

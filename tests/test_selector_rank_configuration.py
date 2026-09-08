@@ -5,8 +5,10 @@ import numpy as np
 from src.strategies.genetic.fitness import (
     DeepDispersionConfig,
     EliteCoverageDeepConfig,
+    FiveHitCoverageConfig,
     select_core_plus_deep_tickets,
     select_elite_coverage_deep_tickets,
+    select_five_hit_coverage_tickets,
     select_tickets_v16,
 )
 from src.strategies.genetic_selector import GeneticSelectorStrategy
@@ -21,7 +23,7 @@ def test_selector_defaults_preserve_current_official_rank_plan():
     assert strata.rank_edges == (10, 30, 60, 100, 150, 200, 500)
 
 
-def test_ticket_subset_coverage_counts_unique_pairs_triples_and_quads():
+def test_ticket_subset_coverage_counts_subsets_and_exact_radius_one():
     metrics = GeneticSelectorStrategy._ticket_subset_coverage(
         [[1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 7]]
     )
@@ -30,7 +32,63 @@ def test_ticket_subset_coverage_counts_unique_pairs_triples_and_quads():
         "selected_unique_pairs": 20,
         "selected_unique_triples": 30,
         "selected_unique_quads": 25,
+        "selected_unique_quintuples": 11,
+        "selected_radius_one_coverage": 359,
+        "selected_radius_one_max": 398,
     }
+
+
+def test_five_hit_selector_prefers_rank_subject_to_disjoint_radius_one_cover():
+    rng = np.random.default_rng(20260907)
+    candidates = np.unique(
+        np.asarray(
+            [
+                sorted(rng.choice(np.arange(1, 40), size=6, replace=False))
+                for _ in range(2000)
+            ],
+            dtype=np.uint8,
+        ),
+        axis=0,
+    )[:1500]
+    scores = np.linspace(1.0, 0.0, len(candidates), dtype=np.float32)
+    config = FiveHitCoverageConfig(
+        elite_tickets=1,
+        candidate_max_rank=1000,
+        max_overlap_preferred=3,
+    )
+
+    first, debug = select_five_hit_coverage_tickets(
+        candidates, scores, n_tickets=24, xp=np, coverage_cfg=config
+    )
+    second, second_debug = select_five_hit_coverage_tickets(
+        candidates, scores, n_tickets=24, xp=np, coverage_cfg=config
+    )
+
+    assert first == second
+    assert debug == second_debug
+    assert len(first) == len({tuple(ticket) for ticket in first}) == 24
+    assert debug["elite_selected_ranks"] == [1]
+    assert debug["constraint_relaxations"] == []
+    assert max(
+        len(set(left).intersection(right))
+        for left, right in itertools.combinations(first, 2)
+    ) <= 3
+    coverage = GeneticSelectorStrategy._ticket_subset_coverage(first)
+    assert coverage["selected_radius_one_coverage"] == 24 * 199
+
+
+def test_five_hit_overrides_are_validated():
+    config = GeneticSelectorStrategy._five_hit_coverage_config(
+        {
+            "five_hit_elite_tickets": 3,
+            "five_hit_candidate_max_rank": 2000,
+            "five_hit_max_overlap": 99,
+        }
+    )
+
+    assert config.elite_tickets == 3
+    assert config.candidate_max_rank == 2000
+    assert config.max_overlap_preferred == 6
 
 
 def test_selector_accepts_reproducible_deep_rank_plan():

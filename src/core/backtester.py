@@ -1569,6 +1569,13 @@ class BacktestEngine:
                             "selected_unique_pairs",
                             "selected_unique_triples",
                             "selected_unique_quads",
+                            "selected_unique_quintuples",
+                            "selected_radius_one_coverage",
+                            "selected_radius_one_max",
+                            "five_hit_elite_tickets",
+                            "five_hit_candidate_max_rank",
+                            "five_hit_max_overlap",
+                            "five_hit_constraint_relaxations",
                         ):
                             if portfolio_key in snapshot:
                                 metrics_payload[portfolio_key] = snapshot[

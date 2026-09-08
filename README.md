@@ -142,7 +142,7 @@ python3 run_melate_ab_experiments.py \
   --suite universe-v17 --draws 216 --tickets 24
 ```
 
-Para iniciar una cartera oficial V17 desde el menú, el orden operativo es:
+Para iniciar una cartera oficial V17.2 desde el menú, el orden operativo es:
 
 1. Opción 5: sincronizar el histórico oficial.
 2. Opción 4: reentrenar los modelos hasta el último concurso disponible.
@@ -151,7 +151,22 @@ Para iniciar una cartera oficial V17 desde el menú, el orden operativo es:
 La opción 7 usa directamente `BEST_SETTINGS`, registra `VERSION_TAG` en el
 ledger y bloquea una segunda cartera oficial para el mismo concurso. Una prueba
 seca debe conservar 45,000 candidatos, sin filtros duros activos, divididos en
-22,500 de núcleo y 22,500 de exploración.
+22,500 de núcleo y 22,500 de exploración. El scorer productivo usa IA
+contextual pura y el selector reparte los 24 tickets en 16 del núcleo nativo y
+8 estratos profundos. La penalización Sniper sigue siendo suave, pero ya no
+reemplaza tickets después de construir la cartera.
+
+La reevaluación orientada a 5/6 se reproduce con suites y cortes temporales
+explícitos, por ejemplo:
+
+```bash
+python3 run_melate_ab_experiments.py \
+  --suite five-hit-holdout --draws 72 --tickets 24 \
+  --end-contest 1666 --seed 20260909
+```
+
+El selector registra además quintetos únicos y la cobertura exacta de todos los
+resultados a distancia de un número (`selected_radius_one_coverage`).
 
 La calibración de la opción 3 usa orden cronológico y separa la ventana pedida
 en validación (70%) y test reservado (30%). Los parámetros se eligen únicamente

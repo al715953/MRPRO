@@ -10,9 +10,11 @@ from src.data_access.config import GPU_ENABLED
 from src.strategies.genetic.fitness import (
     DeepDispersionConfig,
     EliteCoverageDeepConfig,
+    FiveHitCoverageConfig,
     select_tickets_v16,
     select_core_plus_deep_tickets,
     select_elite_coverage_deep_tickets,
+    select_five_hit_coverage_tickets,
     FitnessConfig,
     StrataConfig,
 )
@@ -28,21 +30,11 @@ except ImportError:
 
 class GeneticSelectorStrategy:
     """
-    Estrategia V15: OMEGA STRIDE (Cobertura Extendida Determinista).
+    Estrategia V17.2: ranking IA contextual y cartera núcleo + profundidad.
 
-    Diagnóstico:
-    El premio cae consistentemente en Top 30 (ej. Rank #27).
-    Con 20 tickets fijos (1-20) perdemos el #27.
-    Con aleatoriedad (V14) perdemos el #27 por mala suerte.
-
-    Solución:
-    Expandimos el radio de acción a 30 usando "Stride" (Pasos).
-    Seleccionamos tickets estratégicamente espaciados en el Top 30
-    para maximizar la probabilidad de captura por "vecindad".
-
-    Patrón de Selección (20 Tickets):
-    - Top 10: FIJOS (1, 2, 3... 10). Asegura premios obvios.
-    - Next 10: STRIDE 2 (12, 14, 16... 30). Cubre hasta el Rank 30.
+    El universo balanceado V17 permanece sin filtros Geo duros. El scorer y el
+    constructor de cartera se configuran de forma independiente, permitiendo
+    producción, sombras y backtests reproducibles con el mismo motor.
     """
 
     def __init__(self, model_path=None, number_model_path=None):
@@ -193,9 +185,9 @@ class GeneticSelectorStrategy:
         }
 
     @staticmethod
-    def _ticket_subset_coverage(tickets):
+    def _ticket_subset_coverage(tickets, total_balls=39):
         canonical = [tuple(sorted(int(number) for number in ticket)) for ticket in tickets]
-        return {
+        metrics = {
             f"selected_unique_{label}": len(
                 {
                     subset
@@ -203,8 +195,26 @@ class GeneticSelectorStrategy:
                     for subset in itertools.combinations(ticket, size)
                 }
             )
-            for size, label in ((2, "pairs"), (3, "triples"), (4, "quads"))
+            for size, label in (
+                (2, "pairs"),
+                (3, "triples"),
+                (4, "quads"),
+                (5, "quintuples"),
+            )
         }
+        radius_one = set(canonical)
+        for ticket in canonical:
+            ticket_numbers = set(ticket)
+            for removed in ticket:
+                base = ticket_numbers - {removed}
+                for added in range(1, int(total_balls) + 1):
+                    if added not in ticket_numbers:
+                        radius_one.add(tuple(sorted(base | {added})))
+        metrics["selected_radius_one_coverage"] = len(radius_one)
+        metrics["selected_radius_one_max"] = len(canonical) * (
+            1 + 6 * max(0, int(total_balls) - 6)
+        )
+        return metrics
 
     @staticmethod
     def _selection_configs(overrides):
@@ -363,6 +373,34 @@ class GeneticSelectorStrategy:
             ),
         )
 
+    @staticmethod
+    def _five_hit_coverage_config(overrides):
+        source = overrides if isinstance(overrides, dict) else {}
+        defaults = FiveHitCoverageConfig()
+
+        def _integer(key, default, minimum=0, maximum=None):
+            try:
+                value = max(minimum, int(source.get(key, default)))
+            except (TypeError, ValueError):
+                value = int(default)
+            return min(value, maximum) if maximum is not None else value
+
+        return FiveHitCoverageConfig(
+            elite_tickets=_integer(
+                "five_hit_elite_tickets", defaults.elite_tickets
+            ),
+            candidate_max_rank=_integer(
+                "five_hit_candidate_max_rank",
+                defaults.candidate_max_rank,
+                minimum=1,
+            ),
+            max_overlap_preferred=_integer(
+                "five_hit_max_overlap",
+                defaults.max_overlap_preferred,
+                maximum=6,
+            ),
+        )
+
     def predict(self, history, config) -> PredictionResultDTO:
         univ = config.raw_universe_ptr
         if univ is None or len(univ) == 0:
@@ -382,11 +420,7 @@ class GeneticSelectorStrategy:
         if res is None:
             return PredictionResultDTO("Resonance_Collapse", [])
 
-        # 2. SELECCIÓN V15 (Omega Stride)
-        # final_tickets = self.apply_omega_stride(
-        #    res["u_reduced"], res["final_scores_reduced"], config.num_tickets, xp
-        # )
-        # 2 Nueva logica de 200
+        # 2. Construcción de cartera configurable.
 
         overrides = getattr(config, "filter_overrides", None) or {}
         fitness_config, strata_config = self._selection_configs(overrides)
@@ -395,6 +429,7 @@ class GeneticSelectorStrategy:
         ).lower()
         deep_config = None
         portfolio_config = None
+        five_hit_config = None
         if selector_mode == "core_plus_deep":
             deep_config = self._deep_dispersion_config(overrides)
             final_tickets, dbg = select_core_plus_deep_tickets(
@@ -416,6 +451,15 @@ class GeneticSelectorStrategy:
                 cfg=fitness_config,
                 strata=strata_config,
                 portfolio_cfg=portfolio_config,
+            )
+        elif selector_mode == "five_hit_coverage":
+            five_hit_config = self._five_hit_coverage_config(overrides)
+            final_tickets, dbg = select_five_hit_coverage_tickets(
+                res["u_reduced"],
+                res["final_scores_reduced"],
+                n_tickets=config.num_tickets,
+                xp=xp,
+                coverage_cfg=five_hit_config,
             )
         else:
             selector_mode = "native"
@@ -487,7 +531,7 @@ class GeneticSelectorStrategy:
         subset_coverage = self._ticket_subset_coverage(final_tickets)
 
         return PredictionResultDTO(
-            strategy_name="MRPRO V17 (Balanced Exploration)",
+            strategy_name="MRPRO V17.2 (AI Core16 + Deep8)",
             tickets=final_tickets,
             metadata={
                 "universe": u_cpu,
@@ -571,6 +615,22 @@ class GeneticSelectorStrategy:
                 "portfolio_unique_triples": dbg.get("coverage_unique_triples"),
                 "portfolio_unique_quads": dbg.get("coverage_unique_quads"),
                 "portfolio_coverage_weights": dbg.get("coverage_weights", {}),
+                "five_hit_elite_tickets": (
+                    int(five_hit_config.elite_tickets) if five_hit_config else 0
+                ),
+                "five_hit_candidate_max_rank": (
+                    int(five_hit_config.candidate_max_rank)
+                    if five_hit_config
+                    else None
+                ),
+                "five_hit_max_overlap": (
+                    int(five_hit_config.max_overlap_preferred)
+                    if five_hit_config
+                    else None
+                ),
+                "five_hit_constraint_relaxations": list(
+                    dbg.get("constraint_relaxations", [])
+                ),
                 **subset_coverage,
                 "sniper_soft_numbers": res.get("sniper_soft_numbers", []),
                 "sniper_soft_penalty": res.get("sniper_soft_penalty", 0.0),

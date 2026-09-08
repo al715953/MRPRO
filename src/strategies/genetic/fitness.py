@@ -114,6 +114,15 @@ class EliteCoverageDeepConfig:
     w_local_quality: float = 0.15
 
 
+@dataclass(frozen=True)
+class FiveHitCoverageConfig:
+    """Highest-ranked portfolio subject to an explicit 5/6 coverage distance."""
+
+    elite_tickets: int = 1
+    candidate_max_rank: int = 500
+    max_overlap_preferred: int = 3
+
+
 # ============================================================
 # Backend helpers
 # ============================================================
@@ -698,6 +707,102 @@ def select_core_plus_deep_tickets(
             "dissimilarity": float(deep_cfg.w_dissimilarity),
             "local_quality": float(deep_cfg.w_local_quality),
         },
+    }
+
+
+def select_five_hit_coverage_tickets(
+    tickets_6,
+    scores,
+    n_tickets: int = 24,
+    xp=None,
+    coverage_cfg: Optional[FiveHitCoverageConfig] = None,
+):
+    """Select the strongest ranks compatible with broad exact 5/6 coverage.
+
+    Two six-number tickets have disjoint radius-one neighborhoods whenever they
+    share at most three numbers. The preferred-overlap constraint therefore
+    maximizes the number of distinct draws covered at five or more hits, while
+    the stable score order keeps the predictive rank as strong as possible.
+    Exact elite ranks are optional and intentionally selected before enforcing
+    the constraint so experiments can quantify their opportunity cost.
+    """
+    coverage_cfg = coverage_cfg or FiveHitCoverageConfig()
+    xp = _get_xp(scores, xp)
+    tickets_cpu = (
+        tickets_6.get() if hasattr(tickets_6, "get") else np.asarray(tickets_6)
+    )
+    scores_cpu = scores.get() if hasattr(scores, "get") else np.asarray(scores)
+    tickets_cpu = np.asarray(tickets_cpu, dtype=np.uint8)
+    scores_cpu = np.asarray(scores_cpu, dtype=np.float64)
+    candidate_count = int(tickets_cpu.shape[0])
+    target = min(max(0, int(n_tickets)), candidate_count)
+    if target <= 0:
+        return [], {
+            "selected_idx": [],
+            "selected_ranks": [],
+            "elite_selected_ranks": [],
+            "constraint_relaxations": [],
+        }
+
+    order = np.argsort(-scores_cpu, kind="stable")
+    ranks = np.empty(candidate_count, dtype=np.int32)
+    ranks[order] = np.arange(1, candidate_count + 1, dtype=np.int32)
+    max_number = max(1, int(tickets_cpu.max()) if tickets_cpu.size else 1)
+    one_hot = np.zeros((candidate_count, max_number + 1), dtype=np.uint8)
+    rows = np.arange(candidate_count)[:, None]
+    one_hot[rows, tickets_cpu.astype(np.int32)] = 1
+
+    elite_count = min(max(0, int(coverage_cfg.elite_tickets)), target)
+    selected = [int(idx) for idx in order[:elite_count]]
+    selected_set = set(selected)
+    elite_selected_ranks = [int(ranks[idx]) for idx in selected]
+    rank_limit = min(
+        candidate_count, max(elite_count, int(coverage_cfg.candidate_max_rank))
+    )
+    eligible = order[:rank_limit]
+    relaxations: list[int] = []
+
+    while len(selected) < target:
+        chosen = None
+        chosen_overlap = None
+        start_overlap = min(6, max(0, int(coverage_cfg.max_overlap_preferred)))
+        for allowed_overlap in range(start_overlap, 7):
+            for raw_idx in eligible:
+                idx = int(raw_idx)
+                if idx in selected_set:
+                    continue
+                if not selected:
+                    max_overlap = 0
+                else:
+                    overlaps = one_hot[idx] @ one_hot[np.asarray(selected)].T
+                    max_overlap = int(np.max(overlaps))
+                if max_overlap <= allowed_overlap:
+                    chosen = idx
+                    chosen_overlap = allowed_overlap
+                    break
+            if chosen is not None:
+                break
+
+        if chosen is None:
+            # The configured rank pool is exhausted; extend by stable score
+            # order before ever returning fewer tickets than requested.
+            eligible = order
+            continue
+        selected.append(chosen)
+        selected_set.add(chosen)
+        if chosen_overlap is not None and chosen_overlap > start_overlap:
+            relaxations.append(int(chosen_overlap))
+
+    chosen = selected[:target]
+    return tickets_cpu[np.asarray(chosen, dtype=np.int32)].tolist(), {
+        "selected_idx": chosen,
+        "selected_ranks": [int(ranks[idx]) for idx in chosen],
+        "elite_selected_ranks": elite_selected_ranks,
+        "constraint_relaxations": relaxations,
+        "coverage_candidate_max_rank": int(rank_limit),
+        "coverage_max_overlap_preferred": int(
+            coverage_cfg.max_overlap_preferred
+        ),
     }
 
 
