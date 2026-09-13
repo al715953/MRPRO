@@ -116,12 +116,15 @@ número de boletos que la cartera principal:
 - `challenger_deep_rank_5000`: conserva 24 boletos, pero distribuye cobertura
   por estratos hasta rank 5000 para medir si el límite 500 es demasiado corto.
 
-Desde V17, producción no elimina combinaciones mediante los antiguos filtros
-Geo. Mantiene 45,000 candidatos con 50% de núcleo puntuado suavemente y 50% de
-exploración uniforme reproducible por concurso. Sniper usa veto suave y el
-radar no aplica un corte previo por mediana. Las variantes se guardan solamente
-en `data/Carteras_Sombra.json`; la opción 8 las liquida y compara contra
-`principal_ai_adaptive`. Ninguna sombra modifica automáticamente producción.
+Desde V17, el reductor suave no elimina combinaciones mediante los antiguos
+filtros Geo. Los controles V17.2 mantienen 45,000 candidatos con 50% de núcleo
+puntuado suavemente y 50% de exploración uniforme reproducible por concurso.
+La cartera productiva V17.3 usa un prefijo anidado de 30,000 en ese carril y
+conserva el carril topológico independiente en 45,000. Sniper usa veto suave y
+el radar no aplica un corte previo por mediana. Las variantes se guardan
+solamente en `data/Carteras_Sombra.json`; la opción 8 las liquida y compara
+contra `principal_ai_adaptive`. Ninguna sombra modifica automáticamente
+producción.
 
 El reductor registra tamaños antes y después de cada etapa en
 `reduction_stage_stats`. `universe_ticket_limit` controla el Top-K final; un
@@ -142,19 +145,29 @@ python3 run_melate_ab_experiments.py \
   --suite universe-v17 --draws 216 --tickets 24
 ```
 
-Para iniciar una cartera oficial V17.2 desde el menú, el orden operativo es:
+Para iniciar una cartera oficial V17.3 desde el menú, el orden operativo es:
 
 1. Opción 5: sincronizar el histórico oficial.
 2. Opción 4: reentrenar los modelos hasta el último concurso disponible.
 3. Opción 7: generar la cartera del concurso siguiente.
 
 La opción 7 usa directamente `BEST_SETTINGS`, registra `VERSION_TAG` en el
-ledger y bloquea una segunda cartera oficial para el mismo concurso. Una prueba
-seca debe conservar 45,000 candidatos, sin filtros duros activos, divididos en
-22,500 de núcleo y 22,500 de exploración. El scorer productivo usa IA
-contextual pura y el selector reparte los 24 tickets en 16 del núcleo nativo y
-8 estratos profundos. La penalización Sniper sigue siendo suave, pero ya no
-reemplaza tickets después de construir la cartera.
+ledger y bloquea una segunda cartera oficial para el mismo concurso. V17.3 une
+sin duplicados el universo suave anidado de 30,000 candidatos con los
+supervivientes del núcleo topológico antiguo, cuyo techo sigue en 45,000. El
+scorer productivo evalúa la unión con IA contextual pura y el selector reparte
+los 24 tickets en 12 del carril suave y 12 estratos profundos del carril
+topológico. La penalización Sniper sigue siendo suave y no reemplaza tickets
+después de construir la cartera. Las sombras históricas continúan sobre el
+universo V17.2 de 45k para mantener comparabilidad.
+
+La evaluación híbrida se reproduce con:
+
+```bash
+python3 run_melate_ab_experiments.py \
+  --suite universe-hybrid --draws 72 --tickets 24 \
+  --end-contest 1666 --seed 20260908
+```
 
 La reevaluación orientada a 5/6 se reproduce con suites y cortes temporales
 explícitos, por ejemplo:

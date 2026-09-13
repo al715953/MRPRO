@@ -71,6 +71,9 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
             )
 
     monkeypatch.setattr(mission_module, "UniverseReductionStrategy", ReducerStub)
+    monkeypatch.setattr(
+        mission_module, "HybridUniverseReductionStrategy", ReducerStub
+    )
     monkeypatch.setattr(mission_module, "GeneticSelectorStrategy", SelectorStub)
     monkeypatch.setattr(
         mission_module,
@@ -143,9 +146,10 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert selector_settings[0]["resonance_blend_mode"] == "fixed"
     assert selector_settings[0]["hybrid_alpha"] == 1.0
     assert selector_settings[0]["hybrid_beta"] == 0.0
-    assert selector_settings[0]["fitness_selector_mode"] == "core_plus_deep"
-    assert selector_settings[0]["deep_dispersion_core_tickets"] == 16
-    assert selector_settings[0]["deep_dispersion_tickets"] == 8
+    assert selector_settings[0]["universe_strategy_mode"] == "hybrid_soft_topology"
+    assert selector_settings[0]["fitness_selector_mode"] == "hybrid_dual_lane"
+    assert selector_settings[0]["hybrid_primary_tickets"] == 12
+    assert selector_settings[0]["hybrid_topology_tickets"] == 12
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
         "principal_ai_adaptive",
@@ -182,7 +186,9 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert variants[1]["settings"]["shadow_family"] == "same_budget_benchmark"
     assert variants[0]["settings"]["resonance_blend_mode"] == "fixed"
     assert variants[0]["settings"]["hybrid_alpha"] == 1.0
-    assert variants[0]["settings"]["fitness_selector_mode"] == "core_plus_deep"
+    assert variants[0]["settings"]["fitness_selector_mode"] == "hybrid_dual_lane"
+    assert variants[0]["settings"]["hybrid_primary_tickets"] == 12
+    assert variants[0]["settings"]["hybrid_topology_tickets"] == 12
     assert variants[1]["settings"]["fitness_selector_mode"] == "native"
     assert variants[4]["settings"]["fitness_selector_mode"] == "native"
     assert variants[2]["settings"]["fitness_selector_mode"] == "core_plus_deep"

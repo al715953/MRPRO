@@ -110,6 +110,18 @@ def build_universe_shadow_variant(
     """Generate one non-official portfolio with its own reduced universe."""
 
     effective_settings = dict(BEST_SETTINGS)
+    # Universe shadows remain comparable to the historical V17.2 selector.
+    # They build one universe each and therefore must not inherit the official
+    # V17.3 dual-lane selector, which requires two lane pointers.
+    effective_settings.update(
+        {
+            "universe_strategy_mode": "balanced_v17_2",
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
+            "deep_dispersion_min_rank": 501,
+        }
+    )
     effective_settings.update(spec.overrides)
     config = PredictionConfigDTO(
         total_balls=int(total_balls),

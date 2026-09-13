@@ -19,6 +19,7 @@ from src.data_access.config import (
     VERSION_TAG,
 )
 from src.strategies.universe_reduction import UniverseReductionStrategy
+from src.strategies.universe.hybrid import HybridUniverseReductionStrategy
 from src.strategies.universe.shadow import build_promoted_universe_shadows
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.combinatorial.shadow import build_promoted_covering_shadows
@@ -214,13 +215,13 @@ class MissionController:
                 self.history,
                 config,
                 True,
-                UniverseReductionStrategy(),
+                HybridUniverseReductionStrategy(),
             )
 
         input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
     def _run_production(self):
-        """Producción V17.2 balanceada con inputs funcionales y Ledger Lock."""
+        """Producción V17.3 híbrida con inputs funcionales y Ledger Lock."""
         ultimo_id = max(self.history.concursos)
         proximo_id = ultimo_id + 1
 
@@ -255,12 +256,14 @@ class MissionController:
         production_history = sort_history_chronologically(self.history)
 
         print(
-            f"   {Fore.YELLOW}⏳ Paso 1: Universo V17 balanceado...{Style.RESET_ALL}"
+            f"   {Fore.YELLOW}⏳ Paso 1: Universo V17.3 híbrido...{Style.RESET_ALL}"
         )
-        univ_res = UniverseReductionStrategy().predict(production_history, config)
+        univ_res = HybridUniverseReductionStrategy().predict(
+            production_history, config
+        )
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
-        print(f"   {Fore.CYAN}🧬 Paso 2: Construyendo cartera V17.2...{Style.RESET_ALL}")
+        print(f"   {Fore.CYAN}🧬 Paso 2: Construyendo cartera V17.3 12+12...{Style.RESET_ALL}")
         selector = GeneticSelectorStrategy()
         pred = selector.predict(production_history, config)
         reduction_stats = dict(
@@ -288,6 +291,15 @@ class MissionController:
                 "selection_exploration_count": univ_res.metadata.get(
                     "selection_exploration_count", 0
                 ),
+                "hybrid_primary_size": univ_res.metadata.get(
+                    "hybrid_primary_size", 0
+                ),
+                "hybrid_topology_size": univ_res.metadata.get(
+                    "hybrid_topology_size", 0
+                ),
+                "hybrid_lane_overlap": univ_res.metadata.get(
+                    "hybrid_lane_overlap", 0
+                ),
                 "reduction_stage_stats": reduction_stats,
             }
         )
@@ -313,7 +325,7 @@ class MissionController:
                 {
                     "key": "principal_ai_adaptive",
                     # Clave estable por compatibilidad con el ledger histórico.
-                    "label": "Principal V17.2 IA pura / core16 + deep8",
+                    "label": "Principal V17.3 IA pura / suave12 + topología12",
                     "official": True,
                     "settings": {
                         "resonance_blend_mode": "fixed",
@@ -321,10 +333,11 @@ class MissionController:
                         "hybrid_beta": 0.0,
                         "ai_context_weight": 1.0,
                         "ai_number_weight": 0.0,
-                        "fitness_selector_mode": "core_plus_deep",
-                        "deep_dispersion_core_tickets": 16,
-                        "deep_dispersion_tickets": 8,
-                        "deep_dispersion_min_rank": 501,
+                        "universe_strategy_mode": "hybrid_soft_topology",
+                        "fitness_selector_mode": "hybrid_dual_lane",
+                        "hybrid_primary_tickets": 12,
+                        "hybrid_topology_tickets": 12,
+                        "hybrid_topology_min_rank": 501,
                         "sniper_soft_reserve_fraction": 0.0,
                     },
                     "prediction": pred,
@@ -480,6 +493,18 @@ class MissionController:
                 variant_pred = spec.get("prediction")
                 if variant_pred is None:
                     variant_settings = dict(BEST_SETTINGS)
+                    # Las sombras históricas siguen usando el carril V17.2 de
+                    # 45k y el selector 16+8 salvo override explícito. Así el
+                    # cambio oficial no rompe su serie comparativa.
+                    variant_settings.update(
+                        {
+                            "universe_strategy_mode": "balanced_v17_2",
+                            "fitness_selector_mode": "core_plus_deep",
+                            "deep_dispersion_core_tickets": 16,
+                            "deep_dispersion_tickets": 8,
+                            "deep_dispersion_min_rank": 501,
+                        }
+                    )
                     variant_settings.update(spec["settings"])
                     variant_config = PredictionConfigDTO(
                         TOTAL_BALLS,
@@ -487,7 +512,11 @@ class MissionController:
                         int(spec.get("ticket_count", n_prod)),
                         filter_overrides=variant_settings,
                     )
-                    variant_config.raw_universe_ptr = config.raw_universe_ptr
+                    variant_config.raw_universe_ptr = getattr(
+                        config,
+                        "hybrid_primary_universe_ptr",
+                        config.raw_universe_ptr,
+                    )
                     variant_pred = selector.predict(production_history, variant_config)
                 shadow_variants.append(
                     {

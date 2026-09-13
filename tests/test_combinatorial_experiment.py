@@ -156,7 +156,9 @@ def test_mrpro_adapter_never_receives_target_or_future_history(monkeypatch):
                 },
             )
 
-    monkeypatch.setattr(experiment_module, "UniverseReductionStrategy", ReducerStub)
+    monkeypatch.setattr(
+        experiment_module, "HybridUniverseReductionStrategy", ReducerStub
+    )
     monkeypatch.setattr(experiment_module, "GeneticSelectorStrategy", SelectorStub)
     config = CoveringExperimentConfig(
         candidate_pool_size=6,

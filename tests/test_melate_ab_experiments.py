@@ -174,6 +174,121 @@ def test_universe_v17_suite_compares_legacy_control_with_production():
     assert experiment.VARIANT_SUITES["universe-v17"] is variants
 
 
+def test_universe_dynamic_suite_freezes_v17_2_and_isolates_universe_axes():
+    variants = experiment.UNIVERSE_DYNAMIC_VARIANTS
+    by_name = {variant["name"]: variant["overrides"] for variant in variants}
+
+    assert experiment.VARIANT_SUITES["universe-dynamic"] is variants
+    assert by_name["UA_v17_2_balanced45_reference"]["universe_ticket_limit"] == 45000
+    assert by_name["UB_balanced30"]["universe_ticket_limit"] == 30000
+    assert by_name["UC_balanced60"]["universe_ticket_limit"] == 60000
+    assert by_name["UD_balanced90"]["universe_ticket_limit"] == 90000
+    assert by_name["UE_core100_45"]["universe_exploration_fraction"] == 0.0
+    assert by_name["UH_random100_45"]["universe_exploration_fraction"] == 1.0
+    assert by_name["UJ_topology_hard_current_scorer"]["sum_filter_enabled"] is True
+    assert by_name["UJ_topology_hard_current_scorer"]["sniper_mode"] == "soft"
+    assert by_name["UO_topology_hard_radar50"]["sum_filter_enabled"] is True
+    assert by_name["UO_topology_hard_radar50"]["radar_percentile"] == 50.0
+    assert by_name["UP_balanced45_radar50"]["sum_filter_enabled"] is False
+    assert by_name["UP_balanced45_radar50"]["radar_percentile"] == 50.0
+    assert by_name["UI_legacy_hard_complete"]["sniper_mode"] == "hard"
+    assert by_name["UI_legacy_hard_complete"]["radar_percentile"] == 50.0
+    assert all(
+        overrides["fitness_selector_mode"] == "core_plus_deep"
+        and overrides["deep_dispersion_core_tickets"] == 16
+        and overrides["deep_dispersion_tickets"] == 8
+        and overrides["resonance_blend_mode"] == "fixed"
+        and overrides["hybrid_alpha"] == 1.0
+        for overrides in by_name.values()
+    )
+
+
+def test_universe_hybrid_suite_precommits_three_24_ticket_allocations():
+    variants = experiment.UNIVERSE_HYBRID_VARIANTS
+    challengers = variants[3:]
+
+    assert experiment.VARIANT_SUITES["universe-hybrid"] is variants
+    assert [variant["name"] for variant in challengers] == [
+        "HQ_v17_2_18_topology_6",
+        "HR_v17_2_16_topology_8",
+        "HS_v17_2_12_topology_12",
+    ]
+    allocations = [
+        (
+            variant["overrides"]["hybrid_primary_tickets"],
+            variant["overrides"]["hybrid_topology_tickets"],
+        )
+        for variant in challengers
+    ]
+    assert allocations == [(18, 6), (16, 8), (12, 12)]
+    assert all(sum(allocation) == 24 for allocation in allocations)
+    assert all(
+        variant["overrides"]["fitness_selector_mode"] == "hybrid_dual_lane"
+        and variant["overrides"]["universe_strategy_mode"]
+        == "hybrid_soft_topology"
+        for variant in challengers
+    )
+
+
+def test_universe_nested_cap_suite_uses_ordered_deterministic_limits():
+    variants = experiment.UNIVERSE_NESTED_CAP_VARIANTS
+
+    assert experiment.VARIANT_SUITES["universe-nested-cap"] is variants
+    assert [
+        variant["overrides"]["hybrid_primary_universe_limit"]
+        for variant in variants
+    ] == [20000, 25000, 30000, 35000, 40000, 45000]
+    assert all(
+        variant["overrides"]["hybrid_primary_selection_mode"]
+        == "nested_balanced"
+        and variant["overrides"]["fitness_selector_mode"]
+        == "hybrid_dual_lane"
+        for variant in variants
+    )
+
+
+def test_summary_records_dynamic_universe_size_and_exact_winner_coverage():
+    result = SimpleNamespace(
+        total_draws_tested=2,
+        investment=48.0,
+        earnings=0.0,
+        net_balance=-48.0,
+        hit_distribution={},
+    )
+    rows = [
+        {
+            "draw_id": 1,
+            "rank": 1,
+            "proximity": 0,
+            "hits": 3,
+            "univ_size": 39864,
+            "metrics_json": {
+                "selected_max_hits": 3,
+                "winner_in_universe": 1,
+            },
+        },
+        {
+            "draw_id": 2,
+            "rank": 2,
+            "proximity": 1,
+            "hits": 4,
+            "univ_size": 45000,
+            "metrics_json": {
+                "selected_max_hits": 4,
+                "winner_in_universe": 0,
+            },
+        },
+    ]
+
+    summary = experiment._summarize(result, rows)
+
+    assert summary["universe_size_min"] == 39864
+    assert summary["universe_size_mean"] == 42432.0
+    assert summary["universe_size_max"] == 45000
+    assert summary["winner_exact_in_universe"] == 1
+    assert summary["winner_exact_in_universe_rate"] == 0.5
+
+
 def test_paired_comparison_reports_mcnemar_and_reproducible_permutation():
     rows = [
         {

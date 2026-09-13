@@ -1,5 +1,6 @@
 # src/strategies/universe_reduction.py
 
+import hashlib
 import time
 import numpy as np
 from src.domain.dtos import PredictionResultDTO
@@ -16,6 +17,10 @@ class UniverseReductionStrategy:
     def __init__(self):
         self.xp, self.backend_name = UniverseBackend.get_xp()
         self.filters = VectorizedFilters(self.xp)
+        # The soft structural ranking is history-independent.  Keeping the
+        # deterministic order avoids sorting all C(39, 6) candidates again on
+        # every walk-forward draw when an experiment uses nested subsets.
+        self._nested_core_order_cache = {}
 
     # ------------------------------
     # LOG HELPERS (solo log)
@@ -98,7 +103,11 @@ class UniverseReductionStrategy:
             + (f"|ld{max_same_last}" if max_same_last else "")
             + f"|v{vdp_n}"
             + f"|sel:{selection_mode}"
-            + (f"@{exploration}" if selection_mode == "balanced_mixed" else "")
+            + (
+                f"@{exploration}"
+                if selection_mode in {"balanced_mixed", "nested_balanced"}
+                else ""
+            )
             + f"|rad{radar}"
         )
 
@@ -305,7 +314,14 @@ class UniverseReductionStrategy:
         }
         if len(universe) > target_k:
             before = int(len(universe))
-            if selection_mode == "balanced_mixed":
+            if selection_mode == "nested_balanced":
+                universe, selection_details = self._nested_balanced_selection(
+                    universe,
+                    cfg,
+                    target_k,
+                    selection_seed,
+                )
+            elif selection_mode == "balanced_mixed":
                 universe, selection_details = self._balanced_mixed_selection(
                     universe,
                     cfg,
@@ -325,9 +341,13 @@ class UniverseReductionStrategy:
             stage_sizes.append(
                 {
                     "stage": (
-                        "balanced_topk"
-                        if selection_mode == "balanced_mixed"
-                        else "density_topk"
+                        "nested_balanced_topk"
+                        if selection_mode == "nested_balanced"
+                        else (
+                            "balanced_topk"
+                            if selection_mode == "balanced_mixed"
+                            else "density_topk"
+                        )
                     ),
                     "before": before,
                     "after": int(len(universe)),
@@ -442,6 +462,130 @@ class UniverseReductionStrategy:
         selected = xp.asarray(selected_cpu)
         return universe[selected], {
             "mode": "balanced_mixed",
+            "seed": int(seed),
+            "core_count": int(core_count),
+            "exploration_count": int(exploration_count),
+        }
+
+    @staticmethod
+    def _nested_core_cache_key(universe_cpu, cfg):
+        """Describe the static universe and every setting used by its ranking."""
+
+        universe_cpu = np.ascontiguousarray(universe_cpu)
+        universe_digest = hashlib.blake2b(
+            universe_cpu.view(np.uint8), digest_size=16
+        ).digest()
+        score_keys = (
+            "score_sum_center",
+            "score_sum_sigma",
+            "score_std_center",
+            "score_std_sigma",
+            "score_sum_weight",
+            "score_std_weight",
+            "score_even_weight",
+            "density_penalty_strength",
+        )
+        return (
+            tuple(int(value) for value in universe_cpu.shape),
+            str(universe_cpu.dtype),
+            universe_digest,
+            tuple((key, float(cfg.get(key, 0.0))) for key in score_keys),
+        )
+
+    def _nested_balanced_selection(self, universe, cfg, target_k, seed):
+        """Return a deterministic prefix family of score/exploration candidates.
+
+        For the same universe, settings and seed, every smaller ``target_k`` is
+        a strict subset of every larger one.  A fixed score order and a fixed
+        random-priority order are interleaved, skipping duplicates.  This makes
+        cap sweeps interpretable: candidates no longer disappear merely because
+        NumPy was asked to draw a sample of a different size.
+        """
+
+        xp = self.xp
+        universe_cpu = (
+            universe.get() if hasattr(universe, "get") else np.asarray(universe)
+        )
+        universe_cpu = np.asarray(universe_cpu)
+        n_candidates = int(len(universe_cpu))
+        target_k = min(max(0, int(target_k)), n_candidates)
+        exploration_fraction = min(
+            1.0,
+            max(0.0, float(cfg.get("universe_exploration_fraction", 0.50))),
+        )
+
+        cache_key = self._nested_core_cache_key(universe_cpu, cfg)
+        core_order = self._nested_core_order_cache.get(cache_key)
+        if core_order is None:
+            core_scores = self.filters.compute_survival_scores(universe, cfg)
+            density_penalty = self.filters.compute_density_penalty(universe)
+            penalty = max(
+                0.0, float(cfg.get("density_penalty_strength", 0.15))
+            )
+            final_scores = core_scores - penalty * density_penalty
+            scores_cpu = (
+                final_scores.get()
+                if hasattr(final_scores, "get")
+                else np.asarray(final_scores)
+            )
+            natural_order = np.arange(n_candidates, dtype=np.int64)
+            core_order = np.lexsort((natural_order, -np.asarray(scores_cpu)))
+            core_order = np.asarray(core_order, dtype=np.int64)
+            self._nested_core_order_cache = {cache_key: core_order}
+
+        # Generate one priority per candidate.  Selecting prefixes of this
+        # fixed ordering gives nested exploration sets for every cap.
+        rng = np.random.default_rng(int(seed))
+        exploration_priority = rng.random(n_candidates)
+        exploration_order = np.lexsort(
+            (np.arange(n_candidates, dtype=np.int64), exploration_priority)
+        ).astype(np.int64, copy=False)
+
+        selected = []
+        selected_mask = np.zeros(n_candidates, dtype=bool)
+        core_pointer = 0
+        exploration_pointer = 0
+        core_count = 0
+        exploration_count = 0
+
+        def take_next(order, pointer):
+            while pointer < n_candidates and selected_mask[int(order[pointer])]:
+                pointer += 1
+            if pointer >= n_candidates:
+                return None, pointer
+            return int(order[pointer]), pointer + 1
+
+        for slot in range(target_k):
+            desired_exploration = int(round((slot + 1) * exploration_fraction))
+            prefer_exploration = desired_exploration > exploration_count
+            if prefer_exploration:
+                candidate, exploration_pointer = take_next(
+                    exploration_order, exploration_pointer
+                )
+                source = "exploration"
+                if candidate is None:
+                    candidate, core_pointer = take_next(core_order, core_pointer)
+                    source = "core"
+            else:
+                candidate, core_pointer = take_next(core_order, core_pointer)
+                source = "core"
+                if candidate is None:
+                    candidate, exploration_pointer = take_next(
+                        exploration_order, exploration_pointer
+                    )
+                    source = "exploration"
+            if candidate is None:
+                break
+            selected.append(candidate)
+            selected_mask[candidate] = True
+            if source == "exploration":
+                exploration_count += 1
+            else:
+                core_count += 1
+
+        selected_cpu = np.sort(np.asarray(selected, dtype=np.int64))
+        return universe[xp.asarray(selected_cpu)], {
+            "mode": "nested_balanced",
             "seed": int(seed),
             "core_count": int(core_count),
             "exploration_count": int(exploration_count),

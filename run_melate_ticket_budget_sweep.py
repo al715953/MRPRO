@@ -297,6 +297,13 @@ def run_budget_sweep(
     settings = dict(BEST_SETTINGS)
     settings.update(
         {
+            # This historical prefix-budget experiment requires one nested
+            # V17.2 portfolio. Hybrid quotas change with each budget and cannot
+            # be represented by prefixes of a single maximum-size portfolio.
+            "universe_strategy_mode": "balanced_v17_2",
+            "fitness_selector_mode": "core_plus_deep",
+            "deep_dispersion_core_tickets": 16,
+            "deep_dispersion_tickets": 8,
             "seed": int(seed),
             "backtest_model_mode": "fixed_origin",
             "fixed_origin_training_cutoff": artifacts.training_cutoff_contest,

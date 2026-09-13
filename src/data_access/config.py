@@ -116,7 +116,7 @@ BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
 VERSION_TAG = (
-    "V17.2_AI_ONLY_CORE16_DEEP8_5HIT_20260907"
+    "V17.3_NESTED30_TOPOLOGY12_5HIT_20260913"
 )
 
 # --- CONSTANTES DE MELATE RETRO ---
@@ -253,8 +253,19 @@ BEST_SETTINGS = {
         [161, 200, 3],
         [201, 500, 1],
     ],
-    # 16 tickets del selector nativo + 8 coberturas en estratos profundos.
-    "fitness_selector_mode": "core_plus_deep",
+    # V17.3: 12 tickets del carril suave anidado + 12 estratos profundos del
+    # núcleo topológico. El techo primario de 30k conserva la cobertura 6/6
+    # observada; el carril topológico mantiene su techo independiente de 45k.
+    "universe_strategy_mode": "hybrid_soft_topology",
+    "hybrid_primary_selection_mode": "nested_balanced",
+    "hybrid_primary_universe_limit": 30000,
+    "hybrid_topology_universe_limit": 45000,
+    "hybrid_primary_exploration_fraction": 0.50,
+    "fitness_selector_mode": "hybrid_dual_lane",
+    "hybrid_primary_tickets": 12,
+    "hybrid_topology_tickets": 12,
+    "hybrid_topology_min_rank": 501,
+    # Defaults conservados para controles y sombras V17.2.
     "deep_dispersion_core_tickets": 16,
     "deep_dispersion_tickets": 8,
     "deep_dispersion_min_rank": 501,

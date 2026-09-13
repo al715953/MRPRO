@@ -401,6 +401,152 @@ class GeneticSelectorStrategy:
             ),
         )
 
+    @staticmethod
+    def _ticket_codes(tickets):
+        """Encode sorted six-number tickets as collision-free uint64 values."""
+
+        if hasattr(tickets, "get"):
+            tickets = tickets.get()
+        values = np.asarray(tickets, dtype=np.uint64)
+        if values.ndim != 2 or values.shape[1] < 6:
+            return np.empty(0, dtype=np.uint64)
+        shifts = np.asarray([0, 6, 12, 18, 24, 30], dtype=np.uint64)
+        return np.sum(values[:, :6] << shifts[None, :], axis=1, dtype=np.uint64)
+
+    def _select_hybrid_dual_lane(
+        self,
+        res,
+        config,
+        overrides,
+        fitness_config,
+        strata_config,
+    ):
+        """Select fixed, unique quotas from the soft and topology lanes."""
+
+        tickets = res["u_reduced"]
+        scores = res["final_scores_reduced"]
+        tickets_cpu = tickets.get() if hasattr(tickets, "get") else np.asarray(tickets)
+        scores_cpu = scores.get() if hasattr(scores, "get") else np.asarray(scores)
+        tickets_cpu = np.asarray(tickets_cpu, dtype=np.uint8)
+        scores_cpu = np.asarray(scores_cpu, dtype=np.float64)
+        total_target = min(max(0, int(config.num_tickets)), len(tickets_cpu))
+
+        requested_primary = max(
+            0, int(overrides.get("hybrid_primary_tickets", 16))
+        )
+        requested_topology = max(
+            0, int(overrides.get("hybrid_topology_tickets", 8))
+        )
+        requested_total = requested_primary + requested_topology
+        if requested_total <= 0:
+            primary_target, topology_target = total_target, 0
+        else:
+            primary_target = min(
+                total_target,
+                int(round(total_target * requested_primary / requested_total)),
+            )
+            topology_target = total_target - primary_target
+
+        all_codes = self._ticket_codes(tickets_cpu)
+        primary_codes = self._ticket_codes(
+            getattr(config, "hybrid_primary_universe_ptr", np.empty((0, 6)))
+        )
+        topology_codes = self._ticket_codes(
+            getattr(config, "hybrid_topology_universe_ptr", np.empty((0, 6)))
+        )
+        primary_mask = np.isin(all_codes, primary_codes, assume_unique=False)
+        topology_mask = np.isin(all_codes, topology_codes, assume_unique=False)
+        primary_idx = np.flatnonzero(primary_mask)
+
+        base_deep = self._deep_dispersion_config(overrides)
+        primary_deep_count = min(
+            primary_target, int(round(primary_target / 3.0))
+        )
+        primary_cfg = DeepDispersionConfig(
+            core_tickets=primary_target - primary_deep_count,
+            deep_tickets=primary_deep_count,
+            min_deep_rank=base_deep.min_deep_rank,
+            max_overlap_preferred=base_deep.max_overlap_preferred,
+            w_pair_novelty=base_deep.w_pair_novelty,
+            w_number_rarity=base_deep.w_number_rarity,
+            w_dissimilarity=base_deep.w_dissimilarity,
+            w_local_quality=base_deep.w_local_quality,
+        )
+        primary_tickets, primary_debug = select_core_plus_deep_tickets(
+            tickets_cpu[primary_idx],
+            scores_cpu[primary_idx],
+            n_tickets=primary_target,
+            xp=np,
+            cfg=fitness_config,
+            strata=strata_config,
+            deep_cfg=primary_cfg,
+        )
+        selected_codes = set(int(value) for value in self._ticket_codes(primary_tickets))
+
+        topology_idx = np.flatnonzero(
+            topology_mask
+            & ~np.isin(all_codes, np.fromiter(selected_codes, dtype=np.uint64))
+        )
+        topology_cfg = DeepDispersionConfig(
+            core_tickets=0,
+            deep_tickets=topology_target,
+            min_deep_rank=max(
+                1, int(overrides.get("hybrid_topology_min_rank", 501))
+            ),
+            max_overlap_preferred=base_deep.max_overlap_preferred,
+            w_pair_novelty=base_deep.w_pair_novelty,
+            w_number_rarity=base_deep.w_number_rarity,
+            w_dissimilarity=base_deep.w_dissimilarity,
+            w_local_quality=base_deep.w_local_quality,
+        )
+        topology_tickets, topology_debug = select_core_plus_deep_tickets(
+            tickets_cpu[topology_idx],
+            scores_cpu[topology_idx],
+            n_tickets=topology_target,
+            xp=np,
+            cfg=fitness_config,
+            strata=strata_config,
+            deep_cfg=topology_cfg,
+        )
+
+        final_tickets = [
+            [int(number) for number in ticket]
+            for ticket in primary_tickets + topology_tickets
+        ]
+        selected_codes.update(
+            int(value) for value in self._ticket_codes(topology_tickets)
+        )
+        if len(final_tickets) < total_target:
+            for idx in np.argsort(-scores_cpu, kind="stable"):
+                code = int(all_codes[int(idx)])
+                if code in selected_codes:
+                    continue
+                final_tickets.append(
+                    [int(number) for number in tickets_cpu[int(idx)]]
+                )
+                selected_codes.add(code)
+                if len(final_tickets) >= total_target:
+                    break
+
+        return final_tickets[:total_target], {
+            "selected_ranks": [],
+            "core_selected_ranks": [],
+            "deep_selected_ranks": [],
+            "hybrid_primary_requested": int(primary_target),
+            "hybrid_topology_requested": int(topology_target),
+            "hybrid_primary_selected": int(len(primary_tickets)),
+            "hybrid_topology_selected": int(len(topology_tickets)),
+            "hybrid_primary_lane_ranks": [
+                int(rank) for rank in primary_debug.get("selected_ranks", [])
+            ],
+            "hybrid_topology_lane_ranks": [
+                int(rank) for rank in topology_debug.get("selected_ranks", [])
+            ],
+            "hybrid_topology_deep_bands": topology_debug.get(
+                "deep_rank_bands", []
+            ),
+        }
+
     def predict(self, history, config) -> PredictionResultDTO:
         univ = config.raw_universe_ptr
         if univ is None or len(univ) == 0:
@@ -430,7 +576,22 @@ class GeneticSelectorStrategy:
         deep_config = None
         portfolio_config = None
         five_hit_config = None
-        if selector_mode == "core_plus_deep":
+        hybrid_lanes_present = bool(
+            getattr(config, "hybrid_primary_universe_ptr", None) is not None
+            and getattr(config, "hybrid_topology_universe_ptr", None) is not None
+        )
+        if selector_mode == "hybrid_dual_lane" and hybrid_lanes_present:
+            final_tickets, dbg = self._select_hybrid_dual_lane(
+                res,
+                config,
+                overrides,
+                fitness_config,
+                strata_config,
+            )
+        elif selector_mode in {"core_plus_deep", "hybrid_dual_lane"}:
+            # Safe compatibility path for tools that inject a single custom
+            # universe and therefore cannot provide the two hybrid lanes.
+            selector_mode = "core_plus_deep"
             deep_config = self._deep_dispersion_config(overrides)
             final_tickets, dbg = select_core_plus_deep_tickets(
                 res["u_reduced"],
@@ -531,7 +692,11 @@ class GeneticSelectorStrategy:
         subset_coverage = self._ticket_subset_coverage(final_tickets)
 
         return PredictionResultDTO(
-            strategy_name="MRPRO V17.2 (AI Core16 + Deep8)",
+            strategy_name=(
+                "MRPRO V17.3 Hybrid Soft + Topology"
+                if selector_mode == "hybrid_dual_lane"
+                else "MRPRO V17.2 (AI Core16 + Deep8)"
+            ),
             tickets=final_tickets,
             metadata={
                 "universe": u_cpu,
@@ -569,6 +734,27 @@ class GeneticSelectorStrategy:
                 "selector_debug_ranks": [
                     int(rank) for rank in dbg.get("selected_ranks", [])
                 ],
+                "hybrid_primary_requested": int(
+                    dbg.get("hybrid_primary_requested", 0)
+                ),
+                "hybrid_topology_requested": int(
+                    dbg.get("hybrid_topology_requested", 0)
+                ),
+                "hybrid_primary_selected": int(
+                    dbg.get("hybrid_primary_selected", 0)
+                ),
+                "hybrid_topology_selected": int(
+                    dbg.get("hybrid_topology_selected", 0)
+                ),
+                "hybrid_primary_lane_ranks": list(
+                    dbg.get("hybrid_primary_lane_ranks", [])
+                ),
+                "hybrid_topology_lane_ranks": list(
+                    dbg.get("hybrid_topology_lane_ranks", [])
+                ),
+                "hybrid_topology_deep_bands": list(
+                    dbg.get("hybrid_topology_deep_bands", [])
+                ),
                 "deep_dispersion_core_tickets": (
                     int(deep_config.core_tickets) if deep_config else 0
                 ),

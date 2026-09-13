@@ -14,7 +14,7 @@ from src.data_access.config import (
 from src.data_access.dataset_version import compute_dataset_version
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, sort_history_chronologically
 from src.strategies.genetic_selector import GeneticSelectorStrategy
-from src.strategies.universe_reduction import UniverseReductionStrategy
+from src.strategies.universe.hybrid import HybridUniverseReductionStrategy
 
 from .baselines import (
     iter_random_same_size,
@@ -558,7 +558,7 @@ def run_historical_experiment(
         config.include_current_mrpro or config.candidate_method == "mrpro_candidate_set"
     )
     selector = GeneticSelectorStrategy(model_path=BACKTEST_MODEL_FILE_PATH) if needs_mrpro else None
-    reducer = UniverseReductionStrategy() if needs_mrpro else None
+    reducer = HybridUniverseReductionStrategy() if needs_mrpro else None
     training_cutoff = selector.training_cutoff_contest if selector is not None else None
     if training_cutoff is not None and needs_mrpro:
         start = max(
@@ -627,6 +627,12 @@ def run_historical_experiment(
                     filter_overrides=settings,
                 )
                 native_config.raw_universe_ptr = current_config.raw_universe_ptr
+                native_config.hybrid_primary_universe_ptr = (
+                    getattr(current_config, "hybrid_primary_universe_ptr", None)
+                )
+                native_config.hybrid_topology_universe_ptr = (
+                    getattr(current_config, "hybrid_topology_universe_ptr", None)
+                )
                 native_prediction = selector.predict(past, native_config)
 
         candidates = _choose_candidates(
@@ -665,6 +671,7 @@ def run_historical_experiment(
             )
             restricted_settings = dict(BEST_SETTINGS)
             restricted_settings["seed"] = int(config.random_seed)
+            restricted_settings["fitness_selector_mode"] = "core_plus_deep"
             restricted_config = PredictionConfigDTO(
                 total_balls,
                 ticket_size,

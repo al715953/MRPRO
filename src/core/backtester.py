@@ -1576,6 +1576,13 @@ class BacktestEngine:
                             "five_hit_candidate_max_rank",
                             "five_hit_max_overlap",
                             "five_hit_constraint_relaxations",
+                            "hybrid_primary_requested",
+                            "hybrid_topology_requested",
+                            "hybrid_primary_selected",
+                            "hybrid_topology_selected",
+                            "hybrid_primary_lane_ranks",
+                            "hybrid_topology_lane_ranks",
+                            "hybrid_topology_deep_bands",
                         ):
                             if portfolio_key in snapshot:
                                 metrics_payload[portfolio_key] = snapshot[
@@ -2470,7 +2477,7 @@ class BacktestEngine:
             jackpot_value = f"[bold yellow]{jackpot_coverage}[/]"
         else:
             jackpot_value = "[bold yellow]0[/]"
-        summary.add_row("Jackpots en Universo", jackpot_value)
+        summary.add_row("6/6 en universo (preselector)", jackpot_value)
         self.console.print(summary)
         if isinstance(fast_mode_summary, dict):
             omitted = fast_mode_summary.get("omitted_modules", [])

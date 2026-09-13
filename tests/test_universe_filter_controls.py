@@ -4,6 +4,7 @@ import numpy as np
 
 from src.data_access.config import BEST_SETTINGS
 from src.strategies.universe.filters import VectorizedFilters
+from src.strategies.universe_reduction import UniverseReductionStrategy
 
 
 def test_max_delta_is_a_real_adjacent_gap_limit():
@@ -115,9 +116,14 @@ def test_production_disables_unvalidated_hard_geo_filters():
     assert BEST_SETTINGS["resonance_blend_mode"] == "fixed"
     assert BEST_SETTINGS["hybrid_alpha"] == 1.0
     assert BEST_SETTINGS["hybrid_beta"] == 0.0
-    assert BEST_SETTINGS["fitness_selector_mode"] == "core_plus_deep"
-    assert BEST_SETTINGS["deep_dispersion_core_tickets"] == 16
-    assert BEST_SETTINGS["deep_dispersion_tickets"] == 8
+    assert BEST_SETTINGS["universe_strategy_mode"] == "hybrid_soft_topology"
+    assert BEST_SETTINGS["hybrid_primary_selection_mode"] == "nested_balanced"
+    assert BEST_SETTINGS["hybrid_primary_universe_limit"] == 30000
+    assert BEST_SETTINGS["hybrid_topology_universe_limit"] == 45000
+    assert BEST_SETTINGS["fitness_selector_mode"] == "hybrid_dual_lane"
+    assert BEST_SETTINGS["hybrid_primary_tickets"] == 12
+    assert BEST_SETTINGS["hybrid_topology_tickets"] == 12
+    assert BEST_SETTINGS["hybrid_topology_min_rank"] == 501
     assert BEST_SETTINGS["sniper_soft_reserve_fraction"] == 0.0
 
     hard_flags = (
@@ -162,3 +168,38 @@ def test_disabled_geo_filters_preserve_candidates_that_violate_legacy_limits():
         == candidates.tolist()
     )
     assert filters.apply_ac_complexity(candidates, cfg).tolist() == candidates.tolist()
+
+
+def test_nested_balanced_selection_builds_reproducible_subset_prefixes():
+    strategy = UniverseReductionStrategy()
+    candidates = np.asarray(
+        list(itertools.combinations(range(1, 14), 6)), dtype=np.uint8
+    )
+    cfg = {
+        **BEST_SETTINGS,
+        "candidate_selection_mode": "nested_balanced",
+        "universe_exploration_fraction": 0.50,
+    }
+
+    selected_20, details_20 = strategy._nested_balanced_selection(
+        candidates, cfg, 20, 12345
+    )
+    selected_40, details_40 = strategy._nested_balanced_selection(
+        candidates, cfg, 40, 12345
+    )
+    selected_80, details_80 = strategy._nested_balanced_selection(
+        candidates, cfg, 80, 12345
+    )
+    repeated_40, _ = strategy._nested_balanced_selection(
+        candidates, cfg, 40, 12345
+    )
+
+    keys_20 = {tuple(row) for row in selected_20.tolist()}
+    keys_40 = {tuple(row) for row in selected_40.tolist()}
+    keys_80 = {tuple(row) for row in selected_80.tolist()}
+    assert keys_20 < keys_40 < keys_80
+    assert repeated_40.tolist() == selected_40.tolist()
+    assert details_20["mode"] == "nested_balanced"
+    assert details_20["core_count"] + details_20["exploration_count"] == 20
+    assert details_40["core_count"] + details_40["exploration_count"] == 40
+    assert details_80["core_count"] + details_80["exploration_count"] == 80

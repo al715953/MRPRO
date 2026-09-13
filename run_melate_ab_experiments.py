@@ -25,7 +25,11 @@ from src.data_access.config import (
 from src.data_access.loader import LotteryLoader
 from src.domain.dtos import DrawHistoryDTO, PredictionConfigDTO, sort_history_chronologically
 from src.strategies.genetic_selector import GeneticSelectorStrategy
-from src.strategies.universe.shadow import LEGACY_HARD_FILTER_OVERRIDES
+from src.strategies.universe.hybrid import HybridUniverseReductionStrategy
+from src.strategies.universe.shadow import (
+    LEGACY_HARD_FILTER_OVERRIDES,
+    PROFILE_OOS_SET,
+)
 from src.strategies.universe_reduction import UniverseReductionStrategy
 
 
@@ -603,6 +607,249 @@ UNIVERSE_V17_VARIANTS = (
     },
 )
 
+UNIVERSE_V17_2_BASE_OVERRIDES = {
+    "sniper_mode": "soft",
+    "sniper_soft_reserve_fraction": 0.0,
+    "sum_filter_enabled": False,
+    "structure_filter_enabled": False,
+    "parity_filter_enabled": False,
+    "prime_filter_enabled": False,
+    "consecutive_filter_enabled": False,
+    "max_delta_filter_enabled": False,
+    "terminal_filter_enabled": False,
+    "decade_profile_filter_enabled": False,
+    "entropy_filter_enabled": False,
+    "digital_root_filter_enabled": False,
+    "ac_filter_enabled": False,
+    "positional_filter_enabled": False,
+    "spatial_filter_enabled": False,
+    "std_filter_enabled": False,
+    "candidate_selection_mode": "balanced_mixed",
+    "universe_exploration_fraction": 0.50,
+    "universe_ticket_limit": 45000,
+    "radar_percentile": 0.0,
+    "resonance_blend_mode": "fixed",
+    "hybrid_alpha": 1.0,
+    "hybrid_beta": 0.0,
+    "ai_context_weight": 1.0,
+    "ai_number_weight": 0.0,
+    "fitness_selector_mode": "core_plus_deep",
+    "deep_dispersion_core_tickets": 16,
+    "deep_dispersion_tickets": 8,
+    "deep_dispersion_min_rank": 501,
+}
+
+
+UNIVERSE_DYNAMIC_VARIANTS = (
+    {
+        "name": "UA_v17_2_balanced45_reference",
+        "description": "V17.2: 45k, núcleo 50% y exploración 50%",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_ticket_limit": 45000,
+            "candidate_selection_mode": "balanced_mixed",
+            "universe_exploration_fraction": 0.50,
+        },
+    },
+    {
+        "name": "UB_balanced30",
+        "description": "V17.2 balanceado con universo de 30k",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_ticket_limit": 30000,
+        },
+    },
+    {
+        "name": "UC_balanced60",
+        "description": "V17.2 balanceado con universo de 60k",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_ticket_limit": 60000,
+        },
+    },
+    {
+        "name": "UD_balanced90",
+        "description": "V17.2 balanceado con universo de 90k",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_ticket_limit": 90000,
+        },
+    },
+    {
+        "name": "UE_core100_45",
+        "description": "45k sólo núcleo de score suave, sin exploración",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_exploration_fraction": 0.0,
+        },
+    },
+    {
+        "name": "UF_core75_explore25_45",
+        "description": "45k con núcleo 75% y exploración 25%",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_exploration_fraction": 0.25,
+        },
+    },
+    {
+        "name": "UG_core25_explore75_45",
+        "description": "45k con núcleo 25% y exploración 75%",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_exploration_fraction": 0.75,
+        },
+    },
+    {
+        "name": "UH_random100_45",
+        "description": "45k de exploración uniforme, sin núcleo suave",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_exploration_fraction": 1.0,
+        },
+    },
+    {
+        "name": "UI_legacy_hard_complete",
+        "description": "Pipeline V16 completo: hard filters, Sniper hard y radar 50",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            **LEGACY_HARD_FILTER_OVERRIDES,
+        },
+    },
+    {
+        "name": "UJ_topology_hard_current_scorer",
+        "description": "Todos los filtros topológicos duros con scorer V17.2",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            **{
+                key: value
+                for key, value in LEGACY_HARD_FILTER_OVERRIDES.items()
+                if key.endswith("_filter_enabled")
+            },
+        },
+    },
+    {
+        "name": "UK_sum_hard_only",
+        "description": "Sólo suma 95-115 como filtro duro",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "sum_filter_enabled": True,
+        },
+    },
+    {
+        "name": "UL_structure_hard_only",
+        "description": "Paridad, primos, consecutivos y delta como filtro duro",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "structure_filter_enabled": True,
+            "parity_filter_enabled": True,
+            "prime_filter_enabled": True,
+            "consecutive_filter_enabled": True,
+            "max_delta_filter_enabled": True,
+        },
+    },
+    {
+        "name": "UM_entropy_hard_only",
+        "description": "Sólo entropía como filtro duro",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "entropy_filter_enabled": True,
+        },
+    },
+    {
+        "name": "UN_decade_oos_hard",
+        "description": "Perfiles de décadas OOS como único filtro duro",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "decade_profile_filter_enabled": True,
+            "valid_decade_profiles": list(PROFILE_OOS_SET),
+        },
+    },
+    {
+        "name": "UO_topology_hard_radar50",
+        "description": "Filtros topológicos duros con scorer V17.2 y radar 50",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            **{
+                key: value
+                for key, value in LEGACY_HARD_FILTER_OVERRIDES.items()
+                if key.endswith("_filter_enabled")
+            },
+            "radar_percentile": 50.0,
+        },
+    },
+    {
+        "name": "UP_balanced45_radar50",
+        "description": "Universo V17.2 de 45k sin filtros duros y radar 50",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "radar_percentile": 50.0,
+        },
+    },
+)
+
+UNIVERSE_HYBRID_VARIANTS = (
+    UNIVERSE_DYNAMIC_VARIANTS[0],
+    UNIVERSE_DYNAMIC_VARIANTS[8],
+    UNIVERSE_DYNAMIC_VARIANTS[9],
+    {
+        "name": "HQ_v17_2_18_topology_6",
+        "description": "18 tickets V17.2 + 6 profundos del carril topológico",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_strategy_mode": "hybrid_soft_topology",
+            "fitness_selector_mode": "hybrid_dual_lane",
+            "hybrid_primary_tickets": 18,
+            "hybrid_topology_tickets": 6,
+            "hybrid_topology_min_rank": 501,
+        },
+    },
+    {
+        "name": "HR_v17_2_16_topology_8",
+        "description": "16 tickets V17.2 + 8 profundos del carril topológico",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_strategy_mode": "hybrid_soft_topology",
+            "fitness_selector_mode": "hybrid_dual_lane",
+            "hybrid_primary_tickets": 16,
+            "hybrid_topology_tickets": 8,
+            "hybrid_topology_min_rank": 501,
+        },
+    },
+    {
+        "name": "HS_v17_2_12_topology_12",
+        "description": "12 tickets V17.2 + 12 profundos del carril topológico",
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_strategy_mode": "hybrid_soft_topology",
+            "fitness_selector_mode": "hybrid_dual_lane",
+            "hybrid_primary_tickets": 12,
+            "hybrid_topology_tickets": 12,
+            "hybrid_topology_min_rank": 501,
+        },
+    },
+)
+
+UNIVERSE_NESTED_CAP_VARIANTS = tuple(
+    {
+        "name": f"HN_nested_primary_{limit // 1000}k",
+        "description": (
+            "Carril suave anidado determinista con límite " f"{limit:,}"
+        ),
+        "overrides": {
+            **UNIVERSE_V17_2_BASE_OVERRIDES,
+            "universe_strategy_mode": "hybrid_soft_topology",
+            "hybrid_primary_selection_mode": "nested_balanced",
+            "hybrid_primary_universe_limit": limit,
+            "hybrid_topology_universe_limit": 45000,
+            "fitness_selector_mode": "hybrid_dual_lane",
+            "hybrid_primary_tickets": 12,
+            "hybrid_topology_tickets": 12,
+            "hybrid_topology_min_rank": 501,
+        },
+    }
+    for limit in (20000, 25000, 30000, 35000, 40000, 45000)
+)
+
 VARIANT_SUITES = {
     "core": CORE_VARIANTS,
     "blend-sweep": BLEND_SWEEP_VARIANTS,
@@ -617,6 +864,9 @@ VARIANT_SUITES = {
     "five-hit-interaction": FIVE_HIT_INTERACTION_VARIANTS,
     "five-hit-holdout": FIVE_HIT_HOLDOUT_VARIANTS,
     "universe-v17": UNIVERSE_V17_VARIANTS,
+    "universe-dynamic": UNIVERSE_DYNAMIC_VARIANTS,
+    "universe-hybrid": UNIVERSE_HYBRID_VARIANTS,
+    "universe-nested-cap": UNIVERSE_NESTED_CAP_VARIANTS,
 }
 
 
@@ -662,6 +912,11 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
     selected_radius_one_coverage = []
     selected_radius_one_max = []
     winner_selected_max_overlap = []
+    universe_sizes = []
+    winner_exact_in_universe = []
+    hybrid_primary_counts = []
+    hybrid_topology_counts = []
+    hybrid_topology_lane_ranks = []
     radar_jackpot_diagnostics = []
     for row in forensic_rows:
         metrics = row.get("metrics_json", {})
@@ -718,6 +973,17 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             winner_selected_max_overlap.append(
                 int(metrics["winner_selected_max_overlap"])
             )
+        if row.get("univ_size") is not None:
+            universe_sizes.append(int(row["univ_size"]))
+        if metrics.get("winner_in_universe") is not None:
+            winner_exact_in_universe.append(int(metrics["winner_in_universe"]))
+        if metrics.get("hybrid_primary_selected") is not None:
+            hybrid_primary_counts.append(int(metrics["hybrid_primary_selected"]))
+        if metrics.get("hybrid_topology_selected") is not None:
+            hybrid_topology_counts.append(int(metrics["hybrid_topology_selected"]))
+        hybrid_topology_lane_ranks.extend(
+            int(rank) for rank in metrics.get("hybrid_topology_lane_ranks", [])
+        )
         if int(metrics.get("winner_in_universe", 0)) == 1:
             radar_jackpot_diagnostics.append(
                 {
@@ -773,6 +1039,7 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
         portfolio_deep_ranks_by_draw, dtype=float
     )
     winner_overlap_array = np.asarray(winner_selected_max_overlap, dtype=int)
+    universe_size_array = np.asarray(universe_sizes, dtype=int)
     prefix_20_array = np.asarray(prefix_20_max_hits, dtype=int)
     prefix_20_earnings_array = np.asarray(prefix_20_earnings, dtype=float)
     inferred_ticket_cost = (
@@ -936,6 +1203,44 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "winner_selected_max_overlap_distribution": {
             str(hit): int(np.sum(winner_overlap_array == hit)) for hit in range(7)
         },
+        "universe_size_min": (
+            int(np.min(universe_size_array)) if universe_size_array.size else None
+        ),
+        "universe_size_mean": (
+            float(np.mean(universe_size_array)) if universe_size_array.size else None
+        ),
+        "universe_size_max": (
+            int(np.max(universe_size_array)) if universe_size_array.size else None
+        ),
+        "winner_exact_in_universe": int(sum(winner_exact_in_universe)),
+        "winner_exact_in_universe_rate": (
+            float(np.mean(winner_exact_in_universe))
+            if winner_exact_in_universe
+            else None
+        ),
+        "hybrid_primary_selected_mean": (
+            float(np.mean(hybrid_primary_counts)) if hybrid_primary_counts else None
+        ),
+        "hybrid_topology_selected_mean": (
+            float(np.mean(hybrid_topology_counts))
+            if hybrid_topology_counts
+            else None
+        ),
+        "hybrid_topology_lane_rank_min": (
+            int(np.min(hybrid_topology_lane_ranks))
+            if hybrid_topology_lane_ranks
+            else None
+        ),
+        "hybrid_topology_lane_rank_median": (
+            float(np.median(hybrid_topology_lane_ranks))
+            if hybrid_topology_lane_ranks
+            else None
+        ),
+        "hybrid_topology_lane_rank_max": (
+            int(np.max(hybrid_topology_lane_ranks))
+            if hybrid_topology_lane_ranks
+            else None
+        ),
         "radar_jackpot_diagnostics": radar_jackpot_diagnostics,
         "jackpots_in_selector_radar": int(
             sum(
@@ -1156,7 +1461,12 @@ def run_experiments(
                 history,
                 config,
                 verbose=False,
-                pre_process_strategy=UniverseReductionStrategy(),
+                pre_process_strategy=(
+                    HybridUniverseReductionStrategy()
+                    if overrides.get("universe_strategy_mode")
+                    == "hybrid_soft_topology"
+                    else UniverseReductionStrategy()
+                ),
             )
             summary = _summarize(result, engine.forensic_data)
             summary["name"] = variant["name"]
@@ -1225,6 +1535,9 @@ def main() -> None:
         "five-hit-interaction": "melate_five_hit_interaction.json",
         "five-hit-holdout": "melate_five_hit_holdout.json",
         "universe-v17": "melate_universe_v17.json",
+        "universe-dynamic": "melate_universe_dynamic.json",
+        "universe-hybrid": "melate_universe_hybrid.json",
+        "universe-nested-cap": "melate_universe_nested_cap.json",
     }
     output = args.output or Path(DATA_FOLDER_PATH / default_names[args.suite])
     selected_variants = VARIANT_SUITES[args.suite]
