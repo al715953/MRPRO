@@ -247,6 +247,155 @@ def test_universe_nested_cap_suite_uses_ordered_deterministic_limits():
     )
 
 
+def test_selector_hybrid_bc_suite_isolates_primary_and_topology_front_doors():
+    variants = experiment.HYBRID_SELECTOR_BC_VARIANTS
+    by_name = {variant["name"]: variant["overrides"] for variant in variants}
+
+    assert experiment.VARIANT_SUITES["selector-hybrid-bc"] is variants
+    assert list(by_name) == [
+        "HA_current_legacy_primary8_topology12deep",
+        "HB_stable_primary5_frontier3_deep4",
+        "HC_stable_primary_and_topology_frontier",
+    ]
+    assert all(
+        overrides["hybrid_primary_universe_limit"] == 30000
+        and overrides["hybrid_topology_universe_limit"] == 45000
+        and overrides["hybrid_primary_tickets"] == 12
+        and overrides["hybrid_topology_tickets"] == 12
+        for overrides in by_name.values()
+    )
+
+    control = by_name["HA_current_legacy_primary8_topology12deep"]
+    selector_b = by_name["HB_stable_primary5_frontier3_deep4"]
+    selector_c = by_name["HC_stable_primary_and_topology_frontier"]
+    assert control["hybrid_primary_selector_mode"] == "legacy_core_deep"
+    assert control["hybrid_topology_selector_mode"] == "deep_dispersion"
+    assert (
+        selector_b["hybrid_primary_elite_tickets"],
+        selector_b["hybrid_primary_frontier_tickets"],
+        selector_b["hybrid_primary_deep_tickets"],
+    ) == (5, 3, 4)
+    assert selector_b["hybrid_topology_selector_mode"] == "deep_dispersion"
+    assert (
+        selector_c["hybrid_topology_elite_tickets"],
+        selector_c["hybrid_topology_frontier_tickets"],
+        selector_c["hybrid_topology_deep_tickets"],
+    ) == (1, 3, 8)
+
+
+def test_selector_hybrid_followup_suite_isolates_conservative_allocations():
+    variants = experiment.HYBRID_SELECTOR_FOLLOWUP_VARIANTS
+    by_name = {variant["name"]: variant["overrides"] for variant in variants}
+
+    assert experiment.VARIANT_SUITES["selector-hybrid-followup"] is variants
+    assert list(by_name) == [
+        "HA_current_legacy_primary8_topology12deep",
+        "HD_legacy_primary_topology1_frontier3_deep8",
+        "HE_stable_primary7_frontier1_deep4",
+        "HF_stable_primary5_frontier3_rank40_deep4",
+        "HG_legacy_primary_topology1_frontier1_deep10",
+        "HH_legacy_primary_topology12deep_highorder",
+        "HI_legacy_primary_topology1_frontier1_deep10_legacyweights",
+        "HJ_legacy_primary_topology1_frontier1_deep10_quintetmass",
+    ]
+    assert by_name["HD_legacy_primary_topology1_frontier3_deep8"][
+        "hybrid_primary_selector_mode"
+    ] == "legacy_core_deep"
+    assert by_name["HE_stable_primary7_frontier1_deep4"][
+        "hybrid_primary_frontier_tickets"
+    ] == 1
+    assert by_name["HF_stable_primary5_frontier3_rank40_deep4"][
+        "hybrid_primary_frontier_max_rank"
+    ] == 40
+    topology_conservative = by_name[
+        "HG_legacy_primary_topology1_frontier1_deep10"
+    ]
+    assert (
+        topology_conservative["hybrid_topology_elite_tickets"],
+        topology_conservative["hybrid_topology_frontier_tickets"],
+        topology_conservative["hybrid_topology_deep_tickets"],
+    ) == (1, 1, 10)
+    high_order = by_name["HH_legacy_primary_topology12deep_highorder"]
+    assert (
+        high_order["hybrid_topology_elite_tickets"],
+        high_order["hybrid_topology_frontier_tickets"],
+        high_order["hybrid_topology_deep_tickets"],
+    ) == (0, 0, 12)
+    legacy_weights = by_name[
+        "HI_legacy_primary_topology1_frontier1_deep10_legacyweights"
+    ]
+    assert legacy_weights["hybrid_topology_pair_novelty_weight"] == 0.40
+    assert legacy_weights["hybrid_topology_triple_novelty_weight"] == 0.0
+    assert legacy_weights["hybrid_topology_quad_novelty_weight"] == 0.0
+    quintet_mass = by_name[
+        "HJ_legacy_primary_topology1_frontier1_deep10_quintetmass"
+    ]
+    assert quintet_mass["hybrid_topology_quintet_mass_weight"] == 0.50
+    assert quintet_mass["hybrid_topology_quintet_rank_scale"] == 5000.0
+
+
+def test_deep_scorer_suite_changes_only_topology_local_quality_signal():
+    variants = experiment.DEEP_SCORER_VARIANTS
+
+    assert experiment.VARIANT_SUITES["deep-scorer"] is variants
+    assert [variant["name"] for variant in variants] == [
+        "SA_hi_rank_quality_control",
+        "SB_hi_geo_quality15",
+        "SC_hi_geo_quality50",
+        "SD_hi_rank_tiebreak_geo",
+        "SE_hi_rank_tiebreak_number",
+        "SF_hi_rank_window25_geo",
+        "SG_hi_rank_window100_geo",
+        "SH_hi_rank_window500_geo",
+        "SI_hi_marginal5_uniform15",
+        "SJ_hi_marginal5_uniform30",
+        "SK_hi_marginal5_rankweighted15",
+        "SL_hi_marginal5_uniform_tiebreak",
+        "SM_hi_marginal5_rankweighted05",
+    ]
+    assert variants[0]["overrides"] == {}
+    assert variants[1]["overrides"] == {
+        "hybrid_topology_deep_quality_mode": "geo"
+    }
+    assert variants[2]["overrides"]["hybrid_topology_deep_quality_mode"] == "geo"
+    assert variants[2]["overrides"]["hybrid_topology_local_quality_weight"] == 0.50
+    assert variants[3]["overrides"] == {
+        "hybrid_topology_deep_quality_mode": "rank_tiebreak_geo"
+    }
+    assert variants[4]["overrides"] == {
+        "hybrid_topology_deep_quality_mode": "rank_tiebreak_number"
+    }
+    assert variants[5]["overrides"] == {
+        "hybrid_topology_deep_quality_mode": "rank_window_geo",
+        "hybrid_topology_deep_quality_rank_window": 25,
+    }
+    assert variants[6]["overrides"][
+        "hybrid_topology_deep_quality_rank_window"
+    ] == 100
+    assert variants[7]["overrides"][
+        "hybrid_topology_deep_quality_rank_window"
+    ] == 500
+    assert variants[8]["overrides"] == {
+        "hybrid_topology_local_quality_weight": 0.0,
+        "hybrid_topology_quintet_marginal_coverage_weight": 0.15,
+        "hybrid_topology_quintet_coverage_rank_scale": 0.0,
+    }
+    assert variants[9]["overrides"][
+        "hybrid_topology_quintet_marginal_coverage_weight"
+    ] == 0.30
+    assert variants[10]["overrides"][
+        "hybrid_topology_quintet_coverage_rank_scale"
+    ] == 5000.0
+    assert variants[11]["overrides"][
+        "hybrid_topology_quintet_marginal_coverage_weight"
+    ] == 0.000001
+    assert variants[12]["overrides"] == {
+        "hybrid_topology_local_quality_weight": 0.10,
+        "hybrid_topology_quintet_marginal_coverage_weight": 0.05,
+        "hybrid_topology_quintet_coverage_rank_scale": 5000.0,
+    }
+
+
 def test_summary_records_dynamic_universe_size_and_exact_winner_coverage():
     result = SimpleNamespace(
         total_draws_tested=2,
@@ -265,6 +414,10 @@ def test_summary_records_dynamic_universe_size_and_exact_winner_coverage():
             "metrics_json": {
                 "selected_max_hits": 3,
                 "winner_in_universe": 1,
+                "hybrid_primary_lane_ranks": [1, 20],
+                "hybrid_topology_lane_ranks": [2, 600],
+                "hybrid_primary_lane_phases": ["elite", "coverage"],
+                "hybrid_topology_lane_phases": ["elite", "deep"],
             },
         },
         {
@@ -276,6 +429,10 @@ def test_summary_records_dynamic_universe_size_and_exact_winner_coverage():
             "metrics_json": {
                 "selected_max_hits": 4,
                 "winner_in_universe": 0,
+                "hybrid_primary_lane_ranks": [2, 700],
+                "hybrid_topology_lane_ranks": [3, 900],
+                "hybrid_primary_lane_phases": ["elite", "deep"],
+                "hybrid_topology_lane_phases": ["coverage", "deep"],
             },
         },
     ]
@@ -287,6 +444,18 @@ def test_summary_records_dynamic_universe_size_and_exact_winner_coverage():
     assert summary["universe_size_max"] == 45000
     assert summary["winner_exact_in_universe"] == 1
     assert summary["winner_exact_in_universe_rate"] == 0.5
+    assert summary["hybrid_primary_lane_rank_median"] == 11.0
+    assert summary["hybrid_topology_lane_rank_median"] == 301.5
+    assert summary["hybrid_primary_phase_counts"] == {
+        "elite": 2,
+        "coverage": 1,
+        "deep": 1,
+    }
+    assert summary["hybrid_topology_phase_counts"] == {
+        "elite": 1,
+        "deep": 2,
+        "coverage": 1,
+    }
 
 
 def test_paired_comparison_reports_mcnemar_and_reproducible_permutation():
@@ -315,3 +484,68 @@ def test_paired_comparison_reports_mcnemar_and_reproducible_permutation():
     assert first[0]["paired_earnings"]["wins"] == 2
     assert first[0]["paired_earnings"]["losses"] == 1
     assert first[0]["paired_earnings"]["total_delta"] == 150.0
+
+
+def test_summary_aggregates_conditional_deep_band_signal_quality():
+    result = SimpleNamespace(
+        total_draws_tested=1,
+        investment=240.0,
+        earnings=0.0,
+        net_balance=-240.0,
+        hit_distribution={},
+    )
+    metrics = {
+        "selected_max_hits": 3,
+        "selected_ticket_hits": [3],
+        "selected_ticket_prizes": [0.0],
+        "winner_topology_deep_oracle_max_overlap": 5,
+        "winner_topology_deep_oracle_overlap_sum": 40,
+        "winner_topology_deep_oracle_count_ge_4": 8,
+        "winner_topology_deep_oracle_count_ge_5": 1,
+        "winner_topology_deep_selected_max_overlap": 4,
+        "winner_topology_deep_selected_overlap_sum": 12,
+        "winner_topology_deep_selected_count_ge_4": 1,
+        "winner_topology_deep_selected_count_ge_5": 0,
+        "winner_topology_deep_selected_count": 10,
+    }
+    for name, maximum, total in (
+        ("hybrid", 2, 9),
+        ("ai", 2, 9),
+        ("number", 1, 8),
+        ("geo", 4, 11),
+    ):
+        metrics.update(
+            {
+                f"winner_topology_deep_{name}_top1_max_overlap": maximum,
+                f"winner_topology_deep_{name}_top1_overlap_sum": total,
+                f"winner_topology_deep_{name}_top1_count_ge_4": int(
+                    maximum >= 4
+                ),
+                f"winner_topology_deep_{name}_top1_count_ge_5": 0,
+                f"winner_topology_deep_{name}_top10_max_overlap": maximum + 1,
+                f"winner_topology_deep_{name}_top_tie_mean": 1.0,
+            }
+        )
+
+    summary = experiment._summarize(
+        result,
+        [
+            {
+                "draw_id": 1,
+                "rank": 1,
+                "proximity": 0,
+                "hits": 3,
+                "univ_size": 45000,
+                "metrics_json": metrics,
+            }
+        ],
+    )
+
+    assert summary["deep_band_signal_summary"]["oracle"]["draws_ge_5"] == 1
+    assert summary["deep_band_signal_summary"]["hybrid"][
+        "mean_top1_overlap_sum"
+    ] == 9.0
+    assert summary["deep_band_signal_summary"]["selected"][
+        "mean_overlap_sum"
+    ] == 12.0
+    assert summary["deep_band_signal_summary"]["geo"]["draws_top1_ge_4"] == 1

@@ -850,6 +850,319 @@ UNIVERSE_NESTED_CAP_VARIANTS = tuple(
     for limit in (20000, 25000, 30000, 35000, 40000, 45000)
 )
 
+HYBRID_SELECTOR_BC_BASE_OVERRIDES = {
+    **UNIVERSE_V17_2_BASE_OVERRIDES,
+    "universe_strategy_mode": "hybrid_soft_topology",
+    "hybrid_primary_selection_mode": "nested_balanced",
+    "hybrid_primary_universe_limit": 30000,
+    "hybrid_topology_universe_limit": 45000,
+    "fitness_selector_mode": "hybrid_dual_lane",
+    "hybrid_primary_tickets": 12,
+    "hybrid_topology_tickets": 12,
+    "hybrid_topology_min_rank": 501,
+}
+
+HYBRID_SELECTOR_BC_VARIANTS = (
+    {
+        "name": "HA_current_legacy_primary8_topology12deep",
+        "description": "Control V17.3 anterior: primario legacy 8+4 y topología 0+12",
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "deep_dispersion",
+        },
+    },
+    {
+        "name": "HB_stable_primary5_frontier3_deep4",
+        "description": (
+            "B: primario estable con 5 élites, 3 de frontera 6-500 y 4 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 5,
+            "hybrid_primary_frontier_tickets": 3,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 500,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "deep_dispersion",
+        },
+    },
+    {
+        "name": "HC_stable_primary_and_topology_frontier",
+        "description": (
+            "C: B + topología estable con 1 élite, 3 de frontera y 8 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 5,
+            "hybrid_primary_frontier_tickets": 3,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 500,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 3,
+            "hybrid_topology_deep_tickets": 8,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+        },
+    },
+)
+
+HYBRID_SELECTOR_FOLLOWUP_VARIANTS = (
+    HYBRID_SELECTOR_BC_VARIANTS[0],
+    {
+        "name": "HD_legacy_primary_topology1_frontier3_deep8",
+        "description": (
+            "Aísla C: primario legacy y topología con 1 élite, 3 frontera, 8 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 3,
+            "hybrid_topology_deep_tickets": 8,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+        },
+    },
+    {
+        "name": "HE_stable_primary7_frontier1_deep4",
+        "description": (
+            "B conservador: primario 7 élites, 1 frontera 8-500 y 4 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 7,
+            "hybrid_primary_frontier_tickets": 1,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 500,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "deep_dispersion",
+        },
+    },
+    {
+        "name": "HF_stable_primary5_frontier3_rank40_deep4",
+        "description": (
+            "Reparación local: primario estable 5 élites, 3 frontera 6-40 y 4 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 5,
+            "hybrid_primary_frontier_tickets": 3,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 40,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "deep_dispersion",
+        },
+    },
+    {
+        "name": "HG_legacy_primary_topology1_frontier1_deep10",
+        "description": (
+            "C conservador: primario legacy y topología 1 élite, 1 frontera, 10 profundos"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 1,
+            "hybrid_topology_deep_tickets": 10,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+        },
+    },
+    {
+        "name": "HH_legacy_primary_topology12deep_highorder",
+        "description": (
+            "Aísla objetivo: 12 topológicos profundos con novedad triple/cuádruple"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 0,
+            "hybrid_topology_frontier_tickets": 0,
+            "hybrid_topology_deep_tickets": 12,
+            "hybrid_topology_min_deep_rank": 501,
+        },
+    },
+    {
+        "name": "HI_legacy_primary_topology1_frontier1_deep10_legacyweights",
+        "description": (
+            "Aísla puertas: topología 1+1+10 con el objetivo profundo legacy"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 1,
+            "hybrid_topology_deep_tickets": 10,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+            "hybrid_topology_pair_novelty_weight": 0.40,
+            "hybrid_topology_triple_novelty_weight": 0.0,
+            "hybrid_topology_quad_novelty_weight": 0.0,
+            "hybrid_topology_number_rarity_weight": 0.25,
+            "hybrid_topology_dissimilarity_weight": 0.20,
+            "hybrid_topology_local_quality_weight": 0.15,
+        },
+    },
+    {
+        "name": "HJ_legacy_primary_topology1_frontier1_deep10_quintetmass",
+        "description": (
+            "HI + masa local de quintetos ponderada por rank en profundidad"
+        ),
+        "overrides": {
+            **HYBRID_SELECTOR_BC_BASE_OVERRIDES,
+            "hybrid_primary_selector_mode": "legacy_core_deep",
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 1,
+            "hybrid_topology_deep_tickets": 10,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+            "hybrid_topology_pair_novelty_weight": 0.10,
+            "hybrid_topology_triple_novelty_weight": 0.10,
+            "hybrid_topology_quad_novelty_weight": 0.10,
+            "hybrid_topology_number_rarity_weight": 0.05,
+            "hybrid_topology_dissimilarity_weight": 0.05,
+            "hybrid_topology_local_quality_weight": 0.10,
+            "hybrid_topology_quintet_mass_weight": 0.50,
+            "hybrid_topology_quintet_rank_scale": 5000.0,
+        },
+    },
+)
+
+DEEP_SCORER_VARIANTS = (
+    {
+        "name": "SA_hi_rank_quality_control",
+        "description": "Control productivo V17.4 HI con calidad por rank contextual",
+        "overrides": {},
+    },
+    {
+        "name": "SB_hi_geo_quality15",
+        "description": "HI con Geo como calidad local conservadora al 15%",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "geo",
+        },
+    },
+    {
+        "name": "SC_hi_geo_quality50",
+        "description": "HI con Geo como señal local dominante al 50%",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "geo",
+            "hybrid_topology_pair_novelty_weight": 0.25,
+            "hybrid_topology_number_rarity_weight": 0.15,
+            "hybrid_topology_dissimilarity_weight": 0.10,
+            "hybrid_topology_local_quality_weight": 0.50,
+        },
+    },
+    {
+        "name": "SD_hi_rank_tiebreak_geo",
+        "description": "HI con Geo sólo como desempate exacto del rank profundo",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "rank_tiebreak_geo",
+        },
+    },
+    {
+        "name": "SE_hi_rank_tiebreak_number",
+        "description": (
+            "HI con modelo por número sólo como desempate exacto del rank profundo"
+        ),
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "rank_tiebreak_number",
+        },
+    },
+    {
+        "name": "SF_hi_rank_window25_geo",
+        "description": "HI con Geo reordenando ventanas contextuales de 25 ranks",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "rank_window_geo",
+            "hybrid_topology_deep_quality_rank_window": 25,
+        },
+    },
+    {
+        "name": "SG_hi_rank_window100_geo",
+        "description": "HI con Geo reordenando ventanas contextuales de 100 ranks",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "rank_window_geo",
+            "hybrid_topology_deep_quality_rank_window": 100,
+        },
+    },
+    {
+        "name": "SH_hi_rank_window500_geo",
+        "description": "HI con Geo reordenando ventanas contextuales de 500 ranks",
+        "overrides": {
+            "hybrid_topology_deep_quality_mode": "rank_window_geo",
+            "hybrid_topology_deep_quality_rank_window": 500,
+        },
+    },
+    {
+        "name": "SI_hi_marginal5_uniform15",
+        "description": (
+            "HI reemplazando calidad local por cobertura marginal 5/6 uniforme"
+        ),
+        "overrides": {
+            "hybrid_topology_local_quality_weight": 0.0,
+            "hybrid_topology_quintet_marginal_coverage_weight": 0.15,
+            "hybrid_topology_quintet_coverage_rank_scale": 0.0,
+        },
+    },
+    {
+        "name": "SJ_hi_marginal5_uniform30",
+        "description": (
+            "HI con cobertura marginal 5/6 uniforme al 30% y dispersión reducida"
+        ),
+        "overrides": {
+            "hybrid_topology_pair_novelty_weight": 0.30,
+            "hybrid_topology_number_rarity_weight": 0.20,
+            "hybrid_topology_dissimilarity_weight": 0.15,
+            "hybrid_topology_local_quality_weight": 0.05,
+            "hybrid_topology_quintet_marginal_coverage_weight": 0.30,
+            "hybrid_topology_quintet_coverage_rank_scale": 0.0,
+        },
+    },
+    {
+        "name": "SK_hi_marginal5_rankweighted15",
+        "description": (
+            "HI con cobertura marginal 5/6 ponderada por rank al 15%"
+        ),
+        "overrides": {
+            "hybrid_topology_local_quality_weight": 0.0,
+            "hybrid_topology_quintet_marginal_coverage_weight": 0.15,
+            "hybrid_topology_quintet_coverage_rank_scale": 5000.0,
+        },
+    },
+    {
+        "name": "SL_hi_marginal5_uniform_tiebreak",
+        "description": (
+            "HI con cobertura marginal 5/6 uniforme sólo como desempate"
+        ),
+        "overrides": {
+            "hybrid_topology_quintet_marginal_coverage_weight": 0.000001,
+            "hybrid_topology_quintet_coverage_rank_scale": 0.0,
+        },
+    },
+    {
+        "name": "SM_hi_marginal5_rankweighted05",
+        "description": (
+            "HI reemplazando 5% de calidad local por cobertura 5/6 ponderada"
+        ),
+        "overrides": {
+            "hybrid_topology_local_quality_weight": 0.10,
+            "hybrid_topology_quintet_marginal_coverage_weight": 0.05,
+            "hybrid_topology_quintet_coverage_rank_scale": 5000.0,
+        },
+    },
+)
+
 VARIANT_SUITES = {
     "core": CORE_VARIANTS,
     "blend-sweep": BLEND_SWEEP_VARIANTS,
@@ -867,6 +1180,9 @@ VARIANT_SUITES = {
     "universe-dynamic": UNIVERSE_DYNAMIC_VARIANTS,
     "universe-hybrid": UNIVERSE_HYBRID_VARIANTS,
     "universe-nested-cap": UNIVERSE_NESTED_CAP_VARIANTS,
+    "selector-hybrid-bc": HYBRID_SELECTOR_BC_VARIANTS,
+    "selector-hybrid-followup": HYBRID_SELECTOR_FOLLOWUP_VARIANTS,
+    "deep-scorer": DEEP_SCORER_VARIANTS,
 }
 
 
@@ -916,8 +1232,14 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
     winner_exact_in_universe = []
     hybrid_primary_counts = []
     hybrid_topology_counts = []
+    hybrid_topology_radius_one_targets = []
+    hybrid_primary_lane_ranks = []
     hybrid_topology_lane_ranks = []
+    hybrid_primary_phase_counts: dict[str, int] = {}
+    hybrid_topology_phase_counts: dict[str, int] = {}
     radar_jackpot_diagnostics = []
+    deep_neighbor_signal_diagnostics = []
+    deep_band_signal_diagnostics = []
     for row in forensic_rows:
         metrics = row.get("metrics_json", {})
         if not isinstance(metrics, dict) or "selected_max_hits" not in metrics:
@@ -981,9 +1303,132 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             hybrid_primary_counts.append(int(metrics["hybrid_primary_selected"]))
         if metrics.get("hybrid_topology_selected") is not None:
             hybrid_topology_counts.append(int(metrics["hybrid_topology_selected"]))
+        if metrics.get("hybrid_topology_radius_one_targets") is not None:
+            hybrid_topology_radius_one_targets.append(
+                int(metrics["hybrid_topology_radius_one_targets"])
+            )
+        hybrid_primary_lane_ranks.extend(
+            int(rank) for rank in metrics.get("hybrid_primary_lane_ranks", [])
+        )
         hybrid_topology_lane_ranks.extend(
             int(rank) for rank in metrics.get("hybrid_topology_lane_ranks", [])
         )
+        for phase in metrics.get("hybrid_primary_lane_phases", []):
+            key = str(phase)
+            hybrid_primary_phase_counts[key] = (
+                hybrid_primary_phase_counts.get(key, 0) + 1
+            )
+        for phase in metrics.get("hybrid_topology_lane_phases", []):
+            key = str(phase)
+            hybrid_topology_phase_counts[key] = (
+                hybrid_topology_phase_counts.get(key, 0) + 1
+            )
+        if metrics.get("winner_topology_deep_oracle_max_overlap") is not None:
+            deep_band_signal_diagnostics.append(
+                {
+                    "draw_id": int(row["draw_id"]),
+                    "oracle": {
+                        "max_overlap": int(
+                            metrics["winner_topology_deep_oracle_max_overlap"]
+                        ),
+                        "overlap_sum": int(
+                            metrics["winner_topology_deep_oracle_overlap_sum"]
+                        ),
+                        "count_ge_4": int(
+                            metrics["winner_topology_deep_oracle_count_ge_4"]
+                        ),
+                        "count_ge_5": int(
+                            metrics["winner_topology_deep_oracle_count_ge_5"]
+                        ),
+                    },
+                    "selected": (
+                        {
+                            "max_overlap": int(
+                                metrics[
+                                    "winner_topology_deep_selected_max_overlap"
+                                ]
+                            ),
+                            "overlap_sum": int(
+                                metrics[
+                                    "winner_topology_deep_selected_overlap_sum"
+                                ]
+                            ),
+                            "count_ge_4": int(
+                                metrics[
+                                    "winner_topology_deep_selected_count_ge_4"
+                                ]
+                            ),
+                            "count_ge_5": int(
+                                metrics[
+                                    "winner_topology_deep_selected_count_ge_5"
+                                ]
+                            ),
+                            "count": int(
+                                metrics["winner_topology_deep_selected_count"]
+                            ),
+                        }
+                        if metrics.get(
+                            "winner_topology_deep_selected_max_overlap"
+                        )
+                        is not None
+                        else None
+                    ),
+                    "signals": {
+                        name: {
+                            "top1_max_overlap": metrics.get(
+                                f"winner_topology_deep_{name}_top1_max_overlap"
+                            ),
+                            "top1_overlap_sum": metrics.get(
+                                f"winner_topology_deep_{name}_top1_overlap_sum"
+                            ),
+                            "top1_count_ge_4": metrics.get(
+                                f"winner_topology_deep_{name}_top1_count_ge_4"
+                            ),
+                            "top1_count_ge_5": metrics.get(
+                                f"winner_topology_deep_{name}_top1_count_ge_5"
+                            ),
+                            "top10_max_overlap": metrics.get(
+                                f"winner_topology_deep_{name}_top10_max_overlap"
+                            ),
+                            "top_tie_mean": metrics.get(
+                                f"winner_topology_deep_{name}_top_tie_mean"
+                            ),
+                        }
+                        for name in ("hybrid", "ai", "number", "geo")
+                        if metrics.get(
+                            f"winner_topology_deep_{name}_top1_max_overlap"
+                        )
+                        is not None
+                    },
+                }
+            )
+        if int(metrics.get("winner_topology_neighbor_band_count", 0)) > 0:
+            deep_neighbor_signal_diagnostics.append(
+                {
+                    "draw_id": int(row["draw_id"]),
+                    "band_count": int(
+                        metrics["winner_topology_neighbor_band_count"]
+                    ),
+                    "best_ranks": {
+                        name: metrics.get(
+                            f"winner_topology_neighbor_{name}_best_rank"
+                        )
+                        for name in ("hybrid", "ai", "number", "geo")
+                    },
+                    "best_tie_sizes": {
+                        name: metrics.get(
+                            f"winner_topology_neighbor_{name}_best_tie_size"
+                        )
+                        for name in ("hybrid", "ai", "number", "geo")
+                    },
+                    "best_overlaps": {
+                        name: metrics.get(
+                            f"winner_topology_neighbor_{name}_best_overlap"
+                        )
+                        for name in ("hybrid", "ai", "number", "geo")
+                    },
+                }
+            )
         if int(metrics.get("winner_in_universe", 0)) == 1:
             radar_jackpot_diagnostics.append(
                 {
@@ -1022,6 +1467,38 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
                             "winner_selected_best_stable_ranks", []
                         )
                     ],
+                    "topology_deep_signal_ranks": {
+                        name: (
+                            int(metrics[f"winner_topology_deep_{name}_rank"])
+                            if metrics.get(
+                                f"winner_topology_deep_{name}_rank"
+                            )
+                            is not None
+                            else None
+                        )
+                        for name in ("hybrid", "ai", "number", "geo")
+                    },
+                    "topology_deep_signal_tie_sizes": {
+                        name: (
+                            int(
+                                metrics[
+                                    f"winner_topology_deep_{name}_tie_size"
+                                ]
+                            )
+                            if metrics.get(
+                                f"winner_topology_deep_{name}_tie_size"
+                            )
+                            is not None
+                            else None
+                        )
+                        for name in ("hybrid", "ai", "number", "geo")
+                    },
+                    "topology_deep_band_rank": metrics.get(
+                        "winner_topology_deep_band_rank"
+                    ),
+                    "topology_deep_band_size": metrics.get(
+                        "winner_topology_deep_band_size"
+                    ),
                 }
             )
     selected_ranks_array = np.asarray(selected_ranks_by_draw, dtype=float)
@@ -1050,6 +1527,92 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
     prefix_20_investment = float(
         len(prefix_20_max_hits) * 20 * inferred_ticket_cost
     )
+    deep_band_signal_summary = {}
+    if deep_band_signal_diagnostics:
+        oracle_rows = [row["oracle"] for row in deep_band_signal_diagnostics]
+        deep_band_signal_summary["oracle"] = {
+            "draws": len(oracle_rows),
+            "mean_max_overlap": float(
+                np.mean([row["max_overlap"] for row in oracle_rows])
+            ),
+            "draws_ge_4": int(
+                sum(row["max_overlap"] >= 4 for row in oracle_rows)
+            ),
+            "draws_ge_5": int(
+                sum(row["max_overlap"] >= 5 for row in oracle_rows)
+            ),
+            "mean_overlap_sum": float(
+                np.mean([row["overlap_sum"] for row in oracle_rows])
+            ),
+        }
+        selected_rows = [
+            row["selected"]
+            for row in deep_band_signal_diagnostics
+            if row.get("selected") is not None
+        ]
+        if selected_rows:
+            deep_band_signal_summary["selected"] = {
+                "draws": len(selected_rows),
+                "mean_max_overlap": float(
+                    np.mean([row["max_overlap"] for row in selected_rows])
+                ),
+                "draws_ge_4": int(
+                    sum(row["max_overlap"] >= 4 for row in selected_rows)
+                ),
+                "draws_ge_5": int(
+                    sum(row["max_overlap"] >= 5 for row in selected_rows)
+                ),
+                "total_count_ge_4": int(
+                    sum(row["count_ge_4"] for row in selected_rows)
+                ),
+                "total_count_ge_5": int(
+                    sum(row["count_ge_5"] for row in selected_rows)
+                ),
+                "mean_overlap_sum": float(
+                    np.mean([row["overlap_sum"] for row in selected_rows])
+                ),
+                "mean_ticket_count": float(
+                    np.mean([row["count"] for row in selected_rows])
+                ),
+            }
+        for signal_name in ("hybrid", "ai", "number", "geo"):
+            signal_rows = [
+                row["signals"][signal_name]
+                for row in deep_band_signal_diagnostics
+                if signal_name in row["signals"]
+            ]
+            if not signal_rows:
+                continue
+            deep_band_signal_summary[signal_name] = {
+                "draws": len(signal_rows),
+                "mean_top1_max_overlap": float(
+                    np.mean([row["top1_max_overlap"] for row in signal_rows])
+                ),
+                "draws_top1_ge_4": int(
+                    sum(row["top1_max_overlap"] >= 4 for row in signal_rows)
+                ),
+                "draws_top1_ge_5": int(
+                    sum(row["top1_max_overlap"] >= 5 for row in signal_rows)
+                ),
+                "total_top1_count_ge_4": int(
+                    sum(row["top1_count_ge_4"] for row in signal_rows)
+                ),
+                "total_top1_count_ge_5": int(
+                    sum(row["top1_count_ge_5"] for row in signal_rows)
+                ),
+                "mean_top1_overlap_sum": float(
+                    np.mean([row["top1_overlap_sum"] for row in signal_rows])
+                ),
+                "mean_top10_max_overlap": float(
+                    np.mean([row["top10_max_overlap"] for row in signal_rows])
+                ),
+                "draws_top10_ge_5": int(
+                    sum(row["top10_max_overlap"] >= 5 for row in signal_rows)
+                ),
+                "mean_top_tie_size": float(
+                    np.mean([row["top_tie_mean"] for row in signal_rows])
+                ),
+            }
     return {
         "draws": int(result.total_draws_tested),
         "draw_ids": [int(row["draw_id"]) for row in forensic_rows],
@@ -1226,6 +1789,26 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             if hybrid_topology_counts
             else None
         ),
+        "hybrid_topology_radius_one_targets_mean": (
+            float(np.mean(hybrid_topology_radius_one_targets))
+            if hybrid_topology_radius_one_targets
+            else None
+        ),
+        "hybrid_primary_lane_rank_min": (
+            int(np.min(hybrid_primary_lane_ranks))
+            if hybrid_primary_lane_ranks
+            else None
+        ),
+        "hybrid_primary_lane_rank_median": (
+            float(np.median(hybrid_primary_lane_ranks))
+            if hybrid_primary_lane_ranks
+            else None
+        ),
+        "hybrid_primary_lane_rank_max": (
+            int(np.max(hybrid_primary_lane_ranks))
+            if hybrid_primary_lane_ranks
+            else None
+        ),
         "hybrid_topology_lane_rank_min": (
             int(np.min(hybrid_topology_lane_ranks))
             if hybrid_topology_lane_ranks
@@ -1241,7 +1824,12 @@ def _summarize(result, forensic_rows: list[dict[str, Any]]) -> dict[str, Any]:
             if hybrid_topology_lane_ranks
             else None
         ),
+        "hybrid_primary_phase_counts": hybrid_primary_phase_counts,
+        "hybrid_topology_phase_counts": hybrid_topology_phase_counts,
         "radar_jackpot_diagnostics": radar_jackpot_diagnostics,
+        "deep_neighbor_signal_diagnostics": deep_neighbor_signal_diagnostics,
+        "deep_band_signal_diagnostics": deep_band_signal_diagnostics,
+        "deep_band_signal_summary": deep_band_signal_summary,
         "jackpots_in_selector_radar": int(
             sum(
                 row.get("winner_stable_rank") is not None
@@ -1538,6 +2126,9 @@ def main() -> None:
         "universe-dynamic": "melate_universe_dynamic.json",
         "universe-hybrid": "melate_universe_hybrid.json",
         "universe-nested-cap": "melate_universe_nested_cap.json",
+        "selector-hybrid-bc": "melate_selector_hybrid_bc.json",
+        "selector-hybrid-followup": "melate_selector_hybrid_followup.json",
+        "deep-scorer": "melate_deep_scorer.json",
     }
     output = args.output or Path(DATA_FOLDER_PATH / default_names[args.suite])
     selected_variants = VARIANT_SUITES[args.suite]

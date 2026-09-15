@@ -112,7 +112,7 @@ def build_universe_shadow_variant(
     effective_settings = dict(BEST_SETTINGS)
     # Universe shadows remain comparable to the historical V17.2 selector.
     # They build one universe each and therefore must not inherit the official
-    # V17.3 dual-lane selector, which requires two lane pointers.
+    # V17.4 dual-lane selector, which requires two lane pointers.
     effective_settings.update(
         {
             "universe_strategy_mode": "balanced_v17_2",

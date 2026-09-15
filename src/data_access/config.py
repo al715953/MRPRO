@@ -116,7 +116,7 @@ BACKTEST_MODEL_CACHE_PATH = DATA_FOLDER_PATH / "backtest_models"
 # --- IDENTIFICACIÓN DE MISIÓN ---
 # Etiqueta para la bitácora de experimentos
 VERSION_TAG = (
-    "V17.3_NESTED30_TOPOLOGY12_5HIT_20260913"
+    "V17.4_HI_TOPOLOGY1_1_10_20260914"
 )
 
 # --- CONSTANTES DE MELATE RETRO ---
@@ -170,7 +170,7 @@ GPU_ENABLED = False
 NUM_SIMULACIONES = 250000
 
 
-# --- CONFIGURACIÓN DE PRODUCCIÓN V17.2 ---
+# --- CONFIGURACIÓN DE PRODUCCIÓN V17.4 ---
 # Estos valores alimentan al Scorer, Selector y Backtester
 BEST_SETTINGS = {
     "dynamic_exclude_count": 1,  # Números a eliminar por inercia térmica
@@ -253,9 +253,9 @@ BEST_SETTINGS = {
         [161, 200, 3],
         [201, 500, 1],
     ],
-    # V17.3: 12 tickets del carril suave anidado + 12 estratos profundos del
-    # núcleo topológico. El techo primario de 30k conserva la cobertura 6/6
-    # observada; el carril topológico mantiene su techo independiente de 45k.
+    # V17.4 conserva el universo V17.3: 30k primarios + hasta 45k topológicos.
+    # HI mantiene el selector primario legacy y reparte topología en 1 ticket
+    # élite, 1 de frontera y 10 estratos profundos con el objetivo legacy.
     "universe_strategy_mode": "hybrid_soft_topology",
     "hybrid_primary_selection_mode": "nested_balanced",
     "hybrid_primary_universe_limit": 30000,
@@ -264,7 +264,25 @@ BEST_SETTINGS = {
     "fitness_selector_mode": "hybrid_dual_lane",
     "hybrid_primary_tickets": 12,
     "hybrid_topology_tickets": 12,
+    "hybrid_primary_selector_mode": "legacy_core_deep",
+    "hybrid_topology_selector_mode": "stable_frontier_deep",
+    "hybrid_topology_deep_quality_mode": "rank",
+    "hybrid_topology_elite_tickets": 1,
+    "hybrid_topology_frontier_tickets": 1,
+    "hybrid_topology_deep_tickets": 10,
+    "hybrid_topology_frontier_max_rank": 500,
     "hybrid_topology_min_rank": 501,
+    "hybrid_topology_min_deep_rank": 501,
+    "hybrid_topology_max_overlap": 3,
+    "hybrid_topology_pair_novelty_weight": 0.40,
+    "hybrid_topology_triple_novelty_weight": 0.0,
+    "hybrid_topology_quad_novelty_weight": 0.0,
+    "hybrid_topology_number_rarity_weight": 0.25,
+    "hybrid_topology_dissimilarity_weight": 0.20,
+    "hybrid_topology_local_quality_weight": 0.15,
+    "hybrid_topology_quintet_mass_weight": 0.0,
+    "hybrid_topology_quintet_marginal_coverage_weight": 0.0,
+    "hybrid_topology_quintet_coverage_rank_scale": 0.0,
     # Defaults conservados para controles y sombras V17.2.
     "deep_dispersion_core_tickets": 16,
     "deep_dispersion_tickets": 8,

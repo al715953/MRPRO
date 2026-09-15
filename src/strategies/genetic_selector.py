@@ -374,6 +374,123 @@ class GeneticSelectorStrategy:
         )
 
     @staticmethod
+    def _hybrid_lane_frontier_config(
+        overrides,
+        *,
+        lane: str,
+        target: int,
+        defaults: tuple[int, int, int],
+    ) -> EliteCoverageDeepConfig:
+        """Build an exact-size stable elite/frontier/deep lane allocation."""
+
+        source = overrides if isinstance(overrides, dict) else {}
+        default_cfg = EliteCoverageDeepConfig()
+        target = max(0, int(target))
+
+        def _integer(suffix, default, minimum=0, maximum=None):
+            key = f"hybrid_{lane}_{suffix}"
+            try:
+                value = max(minimum, int(source.get(key, default)))
+            except (TypeError, ValueError):
+                value = int(default)
+            return min(value, maximum) if maximum is not None else value
+
+        def _weight(suffix, global_key, default):
+            try:
+                return max(
+                    0.0,
+                    float(
+                        source.get(
+                            f"hybrid_{lane}_{suffix}",
+                            source.get(global_key, default),
+                        )
+                    ),
+                )
+            except (TypeError, ValueError):
+                return float(default)
+
+        elite = min(target, _integer("elite_tickets", defaults[0]))
+        coverage = min(
+            target - elite,
+            _integer("frontier_tickets", defaults[1]),
+        )
+        requested_deep = _integer("deep_tickets", defaults[2])
+        deep = min(target - elite - coverage, requested_deep)
+        # A custom ticket budget must still produce the requested lane size.
+        deep += target - elite - coverage - deep
+
+        return EliteCoverageDeepConfig(
+            elite_tickets=int(elite),
+            coverage_tickets=int(coverage),
+            deep_tickets=int(deep),
+            coverage_max_rank=_integer(
+                "frontier_max_rank",
+                500,
+                minimum=max(1, elite + 1),
+            ),
+            min_deep_rank=_integer(
+                "min_deep_rank",
+                501,
+                minimum=1,
+            ),
+            max_overlap_preferred=_integer(
+                "max_overlap",
+                default_cfg.max_overlap_preferred,
+                maximum=6,
+            ),
+            w_pair_novelty=_weight(
+                "pair_novelty_weight",
+                "portfolio_pair_novelty_weight",
+                default_cfg.w_pair_novelty,
+            ),
+            w_triple_novelty=_weight(
+                "triple_novelty_weight",
+                "portfolio_triple_novelty_weight",
+                default_cfg.w_triple_novelty,
+            ),
+            w_quad_novelty=_weight(
+                "quad_novelty_weight",
+                "portfolio_quad_novelty_weight",
+                default_cfg.w_quad_novelty,
+            ),
+            w_number_rarity=_weight(
+                "number_rarity_weight",
+                "portfolio_number_rarity_weight",
+                default_cfg.w_number_rarity,
+            ),
+            w_dissimilarity=_weight(
+                "dissimilarity_weight",
+                "portfolio_dissimilarity_weight",
+                default_cfg.w_dissimilarity,
+            ),
+            w_local_quality=_weight(
+                "local_quality_weight",
+                "portfolio_local_quality_weight",
+                default_cfg.w_local_quality,
+            ),
+            w_quintet_mass=_weight(
+                "quintet_mass_weight",
+                "portfolio_quintet_mass_weight",
+                default_cfg.w_quintet_mass,
+            ),
+            quintet_rank_scale=_weight(
+                "quintet_rank_scale",
+                "portfolio_quintet_rank_scale",
+                default_cfg.quintet_rank_scale,
+            ),
+            w_quintet_marginal_coverage=_weight(
+                "quintet_marginal_coverage_weight",
+                "portfolio_quintet_marginal_coverage_weight",
+                default_cfg.w_quintet_marginal_coverage,
+            ),
+            quintet_coverage_rank_scale=_weight(
+                "quintet_coverage_rank_scale",
+                "portfolio_quintet_coverage_rank_scale",
+                default_cfg.quintet_coverage_rank_scale,
+            ),
+        )
+
+    @staticmethod
     def _five_hit_coverage_config(overrides):
         source = overrides if isinstance(overrides, dict) else {}
         defaults = FiveHitCoverageConfig()
@@ -458,56 +575,192 @@ class GeneticSelectorStrategy:
         topology_mask = np.isin(all_codes, topology_codes, assume_unique=False)
         primary_idx = np.flatnonzero(primary_mask)
 
+        def _aligned_signal(name: str):
+            raw = res.get(name)
+            if raw is None:
+                return None
+            values = raw.get() if hasattr(raw, "get") else np.asarray(raw)
+            values = np.asarray(values, dtype=np.float64)
+            if values.shape == scores_cpu.shape:
+                return values
+            radar = res.get("radar_indices")
+            radar = radar.get() if hasattr(radar, "get") else radar
+            radar = np.asarray(radar, dtype=np.int64)
+            if radar.size == len(scores_cpu) and values.size > int(radar.max()):
+                return values[radar]
+            return None
+
         base_deep = self._deep_dispersion_config(overrides)
-        primary_deep_count = min(
-            primary_target, int(round(primary_target / 3.0))
-        )
-        primary_cfg = DeepDispersionConfig(
-            core_tickets=primary_target - primary_deep_count,
-            deep_tickets=primary_deep_count,
-            min_deep_rank=base_deep.min_deep_rank,
-            max_overlap_preferred=base_deep.max_overlap_preferred,
-            w_pair_novelty=base_deep.w_pair_novelty,
-            w_number_rarity=base_deep.w_number_rarity,
-            w_dissimilarity=base_deep.w_dissimilarity,
-            w_local_quality=base_deep.w_local_quality,
-        )
-        primary_tickets, primary_debug = select_core_plus_deep_tickets(
-            tickets_cpu[primary_idx],
-            scores_cpu[primary_idx],
-            n_tickets=primary_target,
-            xp=np,
-            cfg=fitness_config,
-            strata=strata_config,
-            deep_cfg=primary_cfg,
-        )
+        primary_selector_mode = str(
+            overrides.get("hybrid_primary_selector_mode", "legacy_core_deep")
+        ).strip().lower()
+        if primary_selector_mode == "stable_frontier_deep":
+            primary_cfg = self._hybrid_lane_frontier_config(
+                overrides,
+                lane="primary",
+                target=primary_target,
+                defaults=(5, 3, 4),
+            )
+            primary_tickets, primary_debug = select_elite_coverage_deep_tickets(
+                tickets_cpu[primary_idx],
+                scores_cpu[primary_idx],
+                n_tickets=primary_target,
+                xp=np,
+                cfg=fitness_config,
+                strata=strata_config,
+                portfolio_cfg=primary_cfg,
+            )
+        else:
+            primary_selector_mode = "legacy_core_deep"
+            primary_deep_count = min(
+                primary_target, int(round(primary_target / 3.0))
+            )
+            primary_cfg = DeepDispersionConfig(
+                core_tickets=primary_target - primary_deep_count,
+                deep_tickets=primary_deep_count,
+                min_deep_rank=base_deep.min_deep_rank,
+                max_overlap_preferred=base_deep.max_overlap_preferred,
+                w_pair_novelty=base_deep.w_pair_novelty,
+                w_number_rarity=base_deep.w_number_rarity,
+                w_dissimilarity=base_deep.w_dissimilarity,
+                w_local_quality=base_deep.w_local_quality,
+            )
+            primary_tickets, primary_debug = select_core_plus_deep_tickets(
+                tickets_cpu[primary_idx],
+                scores_cpu[primary_idx],
+                n_tickets=primary_target,
+                xp=np,
+                cfg=fitness_config,
+                strata=strata_config,
+                deep_cfg=primary_cfg,
+            )
         selected_codes = set(int(value) for value in self._ticket_codes(primary_tickets))
 
         topology_idx = np.flatnonzero(
             topology_mask
             & ~np.isin(all_codes, np.fromiter(selected_codes, dtype=np.uint64))
         )
-        topology_cfg = DeepDispersionConfig(
-            core_tickets=0,
-            deep_tickets=topology_target,
-            min_deep_rank=max(
-                1, int(overrides.get("hybrid_topology_min_rank", 501))
-            ),
-            max_overlap_preferred=base_deep.max_overlap_preferred,
-            w_pair_novelty=base_deep.w_pair_novelty,
-            w_number_rarity=base_deep.w_number_rarity,
-            w_dissimilarity=base_deep.w_dissimilarity,
-            w_local_quality=base_deep.w_local_quality,
-        )
-        topology_tickets, topology_debug = select_core_plus_deep_tickets(
-            tickets_cpu[topology_idx],
-            scores_cpu[topology_idx],
-            n_tickets=topology_target,
-            xp=np,
-            cfg=fitness_config,
-            strata=strata_config,
-            deep_cfg=topology_cfg,
-        )
+        topology_selector_mode = str(
+            overrides.get("hybrid_topology_selector_mode", "deep_dispersion")
+        ).strip().lower()
+        topology_quality_mode = str(
+            overrides.get("hybrid_topology_deep_quality_mode", "rank")
+        ).strip().lower()
+        topology_quality = None
+        quality_signal_keys = {
+            "ai": "ai_norm",
+            "number": "number_ai_scores",
+            "geo": "geo_scores",
+        }
+        if topology_quality_mode.startswith("rank_window_"):
+            secondary_name = topology_quality_mode.removeprefix("rank_window_")
+            secondary_key = quality_signal_keys.get(secondary_name)
+            secondary = _aligned_signal(secondary_key) if secondary_key else None
+            if secondary is not None:
+                window = max(
+                    1,
+                    int(
+                        overrides.get(
+                            "hybrid_topology_deep_quality_rank_window", 25
+                        )
+                    ),
+                )
+                primary_values = scores_cpu[topology_idx]
+                stable_index = np.arange(len(topology_idx), dtype=np.int64)
+                base_order = np.lexsort((stable_index, -primary_values))
+                base_ranks = np.empty(len(topology_idx), dtype=np.int32)
+                base_ranks[base_order] = np.arange(
+                    1, len(topology_idx) + 1, dtype=np.int32
+                )
+                rank_windows = (base_ranks - 1) // window
+                secondary_values = secondary[topology_idx]
+                window_order = np.lexsort(
+                    (stable_index, base_ranks, -secondary_values, rank_windows)
+                )
+                window_ranks = np.empty(len(topology_idx), dtype=np.int32)
+                window_ranks[window_order] = np.arange(
+                    1,
+                    len(topology_idx) + 1,
+                    dtype=np.int32,
+                )
+                topology_quality = (
+                    len(topology_idx) - window_ranks
+                ).astype(np.float64)
+            else:
+                topology_quality_mode = "rank"
+        elif topology_quality_mode.startswith("rank_tiebreak_"):
+            secondary_name = topology_quality_mode.removeprefix(
+                "rank_tiebreak_"
+            )
+            secondary_key = quality_signal_keys.get(secondary_name)
+            secondary = _aligned_signal(secondary_key) if secondary_key else None
+            if secondary is not None:
+                primary_values = scores_cpu[topology_idx]
+                secondary_values = secondary[topology_idx]
+                stable_index = np.arange(len(topology_idx), dtype=np.int64)
+                tie_order = np.lexsort(
+                    (stable_index, -secondary_values, -primary_values)
+                )
+                tie_ranks = np.empty(len(topology_idx), dtype=np.int32)
+                tie_ranks[tie_order] = np.arange(
+                    1,
+                    len(topology_idx) + 1,
+                    dtype=np.int32,
+                )
+                topology_quality = (
+                    len(topology_idx) - tie_ranks
+                ).astype(np.float64)
+            else:
+                topology_quality_mode = "rank"
+        elif topology_quality_mode in quality_signal_keys:
+            aligned = _aligned_signal(quality_signal_keys[topology_quality_mode])
+            if aligned is not None:
+                topology_quality = aligned[topology_idx]
+            else:
+                topology_quality_mode = "rank"
+        else:
+            topology_quality_mode = "rank"
+        if topology_selector_mode == "stable_frontier_deep":
+            topology_cfg = self._hybrid_lane_frontier_config(
+                overrides,
+                lane="topology",
+                target=topology_target,
+                defaults=(1, 3, 8),
+            )
+            topology_tickets, topology_debug = select_elite_coverage_deep_tickets(
+                tickets_cpu[topology_idx],
+                scores_cpu[topology_idx],
+                n_tickets=topology_target,
+                xp=np,
+                cfg=fitness_config,
+                strata=strata_config,
+                portfolio_cfg=topology_cfg,
+                deep_quality_scores=topology_quality,
+                preselected_coverage_tickets=primary_tickets,
+            )
+        else:
+            topology_selector_mode = "deep_dispersion"
+            topology_cfg = DeepDispersionConfig(
+                core_tickets=0,
+                deep_tickets=topology_target,
+                min_deep_rank=max(
+                    1, int(overrides.get("hybrid_topology_min_rank", 501))
+                ),
+                max_overlap_preferred=base_deep.max_overlap_preferred,
+                w_pair_novelty=base_deep.w_pair_novelty,
+                w_number_rarity=base_deep.w_number_rarity,
+                w_dissimilarity=base_deep.w_dissimilarity,
+                w_local_quality=base_deep.w_local_quality,
+            )
+            topology_tickets, topology_debug = select_core_plus_deep_tickets(
+                tickets_cpu[topology_idx],
+                scores_cpu[topology_idx],
+                n_tickets=topology_target,
+                xp=np,
+                cfg=fitness_config,
+                strata=strata_config,
+                deep_cfg=topology_cfg,
+            )
 
         final_tickets = [
             [int(number) for number in ticket]
@@ -536,12 +789,45 @@ class GeneticSelectorStrategy:
             "hybrid_topology_requested": int(topology_target),
             "hybrid_primary_selected": int(len(primary_tickets)),
             "hybrid_topology_selected": int(len(topology_tickets)),
+            "hybrid_primary_selector_mode": primary_selector_mode,
+            "hybrid_topology_selector_mode": topology_selector_mode,
+            "hybrid_topology_deep_quality_mode": topology_quality_mode,
+            "hybrid_topology_radius_one_targets": int(
+                topology_debug.get("coverage_radius_one_targets", 0)
+            ),
             "hybrid_primary_lane_ranks": [
                 int(rank) for rank in primary_debug.get("selected_ranks", [])
             ],
             "hybrid_topology_lane_ranks": [
                 int(rank) for rank in topology_debug.get("selected_ranks", [])
             ],
+            "hybrid_primary_lane_phases": list(
+                primary_debug.get("phase_by_ticket", [])
+            ),
+            "hybrid_topology_lane_phases": list(
+                topology_debug.get("phase_by_ticket", [])
+            ),
+            "hybrid_primary_elite_ranks": list(
+                primary_debug.get("elite_selected_ranks", [])
+            ),
+            "hybrid_primary_frontier_ranks": list(
+                primary_debug.get("coverage_selected_ranks", [])
+            ),
+            "hybrid_primary_deep_ranks": list(
+                primary_debug.get("deep_selected_ranks", [])
+            ),
+            "hybrid_topology_elite_ranks": list(
+                topology_debug.get("elite_selected_ranks", [])
+            ),
+            "hybrid_topology_frontier_ranks": list(
+                topology_debug.get("coverage_selected_ranks", [])
+            ),
+            "hybrid_topology_deep_ranks": list(
+                topology_debug.get("deep_selected_ranks", [])
+            ),
+            "hybrid_primary_deep_bands": primary_debug.get(
+                "deep_rank_bands", []
+            ),
             "hybrid_topology_deep_bands": topology_debug.get(
                 "deep_rank_bands", []
             ),
@@ -688,12 +974,13 @@ class GeneticSelectorStrategy:
             )
 
         ai_raw = res.get("ai_norm")
+        number_ai_raw = res.get("number_ai_scores")
         geo_raw = res.get("geo_scores")
         subset_coverage = self._ticket_subset_coverage(final_tickets)
 
         return PredictionResultDTO(
             strategy_name=(
-                "MRPRO V17.3 Hybrid Soft + Topology"
+                "MRPRO V17.4 HI Hybrid Soft + Topology"
                 if selector_mode == "hybrid_dual_lane"
                 else "MRPRO V17.2 (AI Core16 + Deep8)"
             ),
@@ -704,6 +991,11 @@ class GeneticSelectorStrategy:
                 "selected_stable_ranks": selected_stable_ranks,
                 "radar_indices": idx_cpu,
                 "ai_scores": ai_raw.get() if hasattr(ai_raw, "get") else ai_raw,
+                "number_ai_scores": (
+                    number_ai_raw.get()
+                    if hasattr(number_ai_raw, "get")
+                    else number_ai_raw
+                ),
                 "geo_scores": geo_raw.get() if hasattr(geo_raw, "get") else geo_raw,
                 "hybrid_scores": full_hybrid_map,
                 "tickets": final_tickets,
@@ -712,7 +1004,6 @@ class GeneticSelectorStrategy:
                 "ai_validation_scope": res.get("ai_validation_scope", "model"),
                 "temporal_holdout_auc": res.get("temporal_holdout_auc"),
                 "feature_schema": res.get("feature_schema"),
-                "number_ai_scores": res.get("number_ai_scores"),
                 "number_model_enabled": res.get("number_model_enabled", False),
                 "number_model_applied": res.get("number_model_applied", False),
                 "number_temporal_holdout_auc": res.get(
@@ -746,11 +1037,50 @@ class GeneticSelectorStrategy:
                 "hybrid_topology_selected": int(
                     dbg.get("hybrid_topology_selected", 0)
                 ),
+                "hybrid_primary_selector_mode": str(
+                    dbg.get("hybrid_primary_selector_mode", "")
+                ),
+                "hybrid_topology_selector_mode": str(
+                    dbg.get("hybrid_topology_selector_mode", "")
+                ),
+                "hybrid_topology_deep_quality_mode": str(
+                    dbg.get("hybrid_topology_deep_quality_mode", "")
+                ),
+                "hybrid_topology_radius_one_targets": int(
+                    dbg.get("hybrid_topology_radius_one_targets", 0)
+                ),
                 "hybrid_primary_lane_ranks": list(
                     dbg.get("hybrid_primary_lane_ranks", [])
                 ),
                 "hybrid_topology_lane_ranks": list(
                     dbg.get("hybrid_topology_lane_ranks", [])
+                ),
+                "hybrid_primary_lane_phases": list(
+                    dbg.get("hybrid_primary_lane_phases", [])
+                ),
+                "hybrid_topology_lane_phases": list(
+                    dbg.get("hybrid_topology_lane_phases", [])
+                ),
+                "hybrid_primary_elite_ranks": list(
+                    dbg.get("hybrid_primary_elite_ranks", [])
+                ),
+                "hybrid_primary_frontier_ranks": list(
+                    dbg.get("hybrid_primary_frontier_ranks", [])
+                ),
+                "hybrid_primary_deep_ranks": list(
+                    dbg.get("hybrid_primary_deep_ranks", [])
+                ),
+                "hybrid_topology_elite_ranks": list(
+                    dbg.get("hybrid_topology_elite_ranks", [])
+                ),
+                "hybrid_topology_frontier_ranks": list(
+                    dbg.get("hybrid_topology_frontier_ranks", [])
+                ),
+                "hybrid_topology_deep_ranks": list(
+                    dbg.get("hybrid_topology_deep_ranks", [])
+                ),
+                "hybrid_primary_deep_bands": list(
+                    dbg.get("hybrid_primary_deep_bands", [])
                 ),
                 "hybrid_topology_deep_bands": list(
                     dbg.get("hybrid_topology_deep_bands", [])

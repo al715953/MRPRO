@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from src.data_access.config import BEST_SETTINGS
 from src.domain.dtos import PredictionResultDTO
 from src.strategies.genetic_selector import GeneticSelectorStrategy
 from src.strategies.universe.hybrid import HybridUniverseReductionStrategy
@@ -100,3 +101,129 @@ def test_hybrid_selector_honors_18_plus_6_as_24_unique_tickets():
     assert result.metadata["hybrid_primary_selected"] == 18
     assert result.metadata["hybrid_topology_selected"] == 6
     assert len(result.metadata["hybrid_topology_lane_ranks"]) == 6
+
+
+def _hybrid_selector_config(union, primary, topology, overrides):
+    return SimpleNamespace(
+        raw_universe_ptr=union,
+        hybrid_primary_universe_ptr=primary,
+        hybrid_topology_universe_ptr=topology,
+        num_tickets=24,
+        total_balls=39,
+        filter_overrides={
+            "fitness_selector_mode": "hybrid_dual_lane",
+            "hybrid_primary_tickets": 12,
+            "hybrid_topology_tickets": 12,
+            "sniper_soft_reserve_fraction": 0.0,
+            **overrides,
+        },
+    )
+
+
+def test_hybrid_selector_b_adds_stable_primary_frontier_without_changing_topology():
+    union = np.asarray(
+        list(islice(combinations(range(1, 40), 6), 1600)), dtype=np.uint8
+    )
+    primary = union[:1000]
+    topology = union[400:]
+    strategy = GeneticSelectorStrategy.__new__(GeneticSelectorStrategy)
+    strategy.resonance_engine = _ResonanceStub()
+    config = _hybrid_selector_config(
+        union,
+        primary,
+        topology,
+        {
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 5,
+            "hybrid_primary_frontier_tickets": 3,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 500,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "deep_dispersion",
+            "hybrid_topology_min_rank": 501,
+        },
+    )
+
+    result = strategy.predict(SimpleNamespace(), config)
+    metadata = result.metadata
+
+    assert len(result.tickets) == len({tuple(ticket) for ticket in result.tickets}) == 24
+    assert metadata["hybrid_primary_selector_mode"] == "stable_frontier_deep"
+    assert metadata["hybrid_topology_selector_mode"] == "deep_dispersion"
+    assert metadata["hybrid_primary_lane_phases"] == (
+        ["elite"] * 5 + ["coverage"] * 3 + ["deep"] * 4
+    )
+    assert metadata["hybrid_primary_elite_ranks"] == [1, 2, 3, 4, 5]
+    assert all(6 <= rank <= 500 for rank in metadata["hybrid_primary_frontier_ranks"])
+    assert all(rank >= 501 for rank in metadata["hybrid_primary_deep_ranks"])
+    assert metadata["hybrid_topology_lane_phases"] == []
+
+
+def test_hybrid_selector_c_opens_stable_frontier_in_both_lanes():
+    union = np.asarray(
+        list(islice(combinations(range(1, 40), 6), 1600)), dtype=np.uint8
+    )
+    primary = union[:1000]
+    topology = union[400:]
+    strategy = GeneticSelectorStrategy.__new__(GeneticSelectorStrategy)
+    strategy.resonance_engine = _ResonanceStub()
+    config = _hybrid_selector_config(
+        union,
+        primary,
+        topology,
+        {
+            "hybrid_primary_selector_mode": "stable_frontier_deep",
+            "hybrid_primary_elite_tickets": 5,
+            "hybrid_primary_frontier_tickets": 3,
+            "hybrid_primary_deep_tickets": 4,
+            "hybrid_primary_frontier_max_rank": 500,
+            "hybrid_primary_min_deep_rank": 501,
+            "hybrid_topology_selector_mode": "stable_frontier_deep",
+            "hybrid_topology_elite_tickets": 1,
+            "hybrid_topology_frontier_tickets": 3,
+            "hybrid_topology_deep_tickets": 8,
+            "hybrid_topology_frontier_max_rank": 500,
+            "hybrid_topology_min_deep_rank": 501,
+        },
+    )
+
+    result = strategy.predict(SimpleNamespace(), config)
+    metadata = result.metadata
+
+    assert len(result.tickets) == len({tuple(ticket) for ticket in result.tickets}) == 24
+    assert metadata["hybrid_primary_lane_phases"] == (
+        ["elite"] * 5 + ["coverage"] * 3 + ["deep"] * 4
+    )
+    assert metadata["hybrid_topology_lane_phases"] == (
+        ["elite"] + ["coverage"] * 3 + ["deep"] * 8
+    )
+    assert metadata["hybrid_topology_elite_ranks"] == [1]
+    assert all(2 <= rank <= 500 for rank in metadata["hybrid_topology_frontier_ranks"])
+    assert all(rank >= 501 for rank in metadata["hybrid_topology_deep_ranks"])
+
+
+def test_production_hybrid_selector_uses_hi_topology_allocation():
+    union = np.asarray(
+        list(islice(combinations(range(1, 40), 6), 1600)), dtype=np.uint8
+    )
+    primary = union[:1000]
+    topology = union[400:]
+    strategy = GeneticSelectorStrategy.__new__(GeneticSelectorStrategy)
+    strategy.resonance_engine = _ResonanceStub()
+    config = _hybrid_selector_config(union, primary, topology, BEST_SETTINGS)
+
+    result = strategy.predict(SimpleNamespace(), config)
+    metadata = result.metadata
+
+    assert len(result.tickets) == len({tuple(ticket) for ticket in result.tickets}) == 24
+    assert metadata["hybrid_primary_selector_mode"] == "legacy_core_deep"
+    assert metadata["hybrid_topology_selector_mode"] == "stable_frontier_deep"
+    assert metadata["hybrid_topology_deep_quality_mode"] == "rank"
+    assert metadata["hybrid_topology_lane_phases"] == (
+        ["elite", "coverage"] + ["deep"] * 10
+    )
+    assert metadata["hybrid_topology_elite_ranks"] == [1]
+    assert len(metadata["hybrid_topology_frontier_ranks"]) == 1
+    assert 2 <= metadata["hybrid_topology_frontier_ranks"][0] <= 500
+    assert len(metadata["hybrid_topology_deep_ranks"]) == 10
+    assert all(rank >= 501 for rank in metadata["hybrid_topology_deep_ranks"])

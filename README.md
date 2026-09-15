@@ -119,8 +119,8 @@ número de boletos que la cartera principal:
 Desde V17, el reductor suave no elimina combinaciones mediante los antiguos
 filtros Geo. Los controles V17.2 mantienen 45,000 candidatos con 50% de núcleo
 puntuado suavemente y 50% de exploración uniforme reproducible por concurso.
-La cartera productiva V17.3 usa un prefijo anidado de 30,000 en ese carril y
-conserva el carril topológico independiente en 45,000. Sniper usa veto suave y
+La cartera productiva V17.4 conserva el prefijo anidado de 30,000 de V17.3 y
+el carril topológico independiente en 45,000. Sniper usa veto suave y
 el radar no aplica un corte previo por mediana. Las variantes se guardan
 solamente en `data/Carteras_Sombra.json`; la opción 8 las liquida y compara
 contra `principal_ai_adaptive`. Ninguna sombra modifica automáticamente
@@ -145,21 +145,23 @@ python3 run_melate_ab_experiments.py \
   --suite universe-v17 --draws 216 --tickets 24
 ```
 
-Para iniciar una cartera oficial V17.3 desde el menú, el orden operativo es:
+Para iniciar una cartera oficial V17.4 desde el menú, el orden operativo es:
 
 1. Opción 5: sincronizar el histórico oficial.
 2. Opción 4: reentrenar los modelos hasta el último concurso disponible.
 3. Opción 7: generar la cartera del concurso siguiente.
 
 La opción 7 usa directamente `BEST_SETTINGS`, registra `VERSION_TAG` en el
-ledger y bloquea una segunda cartera oficial para el mismo concurso. V17.3 une
+ledger y bloquea una segunda cartera oficial para el mismo concurso. V17.4 une
 sin duplicados el universo suave anidado de 30,000 candidatos con los
 supervivientes del núcleo topológico antiguo, cuyo techo sigue en 45,000. El
 scorer productivo evalúa la unión con IA contextual pura y el selector reparte
-los 24 tickets en 12 del carril suave y 12 estratos profundos del carril
-topológico. La penalización Sniper sigue siendo suave y no reemplaza tickets
-después de construir la cartera. Las sombras históricas continúan sobre el
-universo V17.2 de 45k para mantener comparabilidad.
+los 24 tickets en 12 del carril suave y 12 del carril topológico. El primario
+conserva el selector legacy; topología usa HI: 1 élite, 1 boleto de frontera
+(ranks 2–500) y 10 estratos profundos desde rank 501, con los pesos de
+dispersión legacy. La penalización Sniper sigue siendo suave y no reemplaza
+tickets después de construir la cartera. Las sombras históricas continúan
+sobre el universo V17.2 de 45k para mantener comparabilidad.
 
 La evaluación híbrida se reproduce con:
 
@@ -180,6 +182,21 @@ python3 run_melate_ab_experiments.py \
 
 El selector registra además quintetos únicos y la cobertura exacta de todos los
 resultados a distancia de un número (`selected_radius_one_coverage`).
+
+La señal local de los diez estratos topológicos se audita y experimenta sin
+alterar V17.4 con:
+
+```bash
+python3 run_melate_ab_experiments.py \
+  --suite deep-scorer --draws 108 --tickets 24 --seed 20260816
+```
+
+El reporte separa el mejor candidato disponible por banda (`oracle`), los diez
+boletos profundos elegidos realmente (`selected`) y los top-1/top-10 de las
+señales Contextual, por número y Geo. `oracle` es exclusivamente diagnóstico:
+usa el resultado posterior y nunca participa en la selección. La misma suite
+incluye sombras de cobertura marginal 5/6 uniforme y ponderada por rank; su
+peso productivo permanece explícitamente en cero.
 
 La calibración de la opción 3 usa orden cronológico y separa la ventana pedida
 en validación (70%) y test reservado (30%). Los parámetros se eligen únicamente

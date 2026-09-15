@@ -221,7 +221,7 @@ class MissionController:
         input(f"\n{Fore.YELLOW}>> Presiona ENTER...{Style.RESET_ALL}")
 
     def _run_production(self):
-        """Producción V17.3 híbrida con inputs funcionales y Ledger Lock."""
+        """Producción V17.4 HI con inputs funcionales y Ledger Lock."""
         ultimo_id = max(self.history.concursos)
         proximo_id = ultimo_id + 1
 
@@ -263,7 +263,10 @@ class MissionController:
         )
         config.raw_universe_ptr = univ_res.metadata.get("raw_ndarray")
 
-        print(f"   {Fore.CYAN}🧬 Paso 2: Construyendo cartera V17.3 12+12...{Style.RESET_ALL}")
+        print(
+            f"   {Fore.CYAN}🧬 Paso 2: Construyendo cartera V17.4 HI 12+12..."
+            f"{Style.RESET_ALL}"
+        )
         selector = GeneticSelectorStrategy()
         pred = selector.predict(production_history, config)
         reduction_stats = dict(
@@ -325,7 +328,7 @@ class MissionController:
                 {
                     "key": "principal_ai_adaptive",
                     # Clave estable por compatibilidad con el ledger histórico.
-                    "label": "Principal V17.3 IA pura / suave12 + topología12",
+                    "label": "Principal V17.4 HI / suave12 + topología 1+1+10",
                     "official": True,
                     "settings": {
                         "resonance_blend_mode": "fixed",
@@ -337,7 +340,25 @@ class MissionController:
                         "fitness_selector_mode": "hybrid_dual_lane",
                         "hybrid_primary_tickets": 12,
                         "hybrid_topology_tickets": 12,
+                        "hybrid_primary_selector_mode": "legacy_core_deep",
+                        "hybrid_topology_selector_mode": "stable_frontier_deep",
+                        "hybrid_topology_deep_quality_mode": "rank",
+                        "hybrid_topology_elite_tickets": 1,
+                        "hybrid_topology_frontier_tickets": 1,
+                        "hybrid_topology_deep_tickets": 10,
+                        "hybrid_topology_frontier_max_rank": 500,
                         "hybrid_topology_min_rank": 501,
+                        "hybrid_topology_min_deep_rank": 501,
+                        "hybrid_topology_max_overlap": 3,
+                        "hybrid_topology_pair_novelty_weight": 0.40,
+                        "hybrid_topology_triple_novelty_weight": 0.0,
+                        "hybrid_topology_quad_novelty_weight": 0.0,
+                        "hybrid_topology_number_rarity_weight": 0.25,
+                        "hybrid_topology_dissimilarity_weight": 0.20,
+                        "hybrid_topology_local_quality_weight": 0.15,
+                        "hybrid_topology_quintet_mass_weight": 0.0,
+                        "hybrid_topology_quintet_marginal_coverage_weight": 0.0,
+                        "hybrid_topology_quintet_coverage_rank_scale": 0.0,
                         "sniper_soft_reserve_fraction": 0.0,
                     },
                     "prediction": pred,

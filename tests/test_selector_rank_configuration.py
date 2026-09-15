@@ -269,3 +269,141 @@ def test_elite_coverage_deep_overrides_are_validated():
     assert config.deep_tickets == 5
     assert config.max_overlap_preferred == 6
     assert config.w_quad_novelty == 0.0
+
+
+def test_elite_coverage_deep_can_select_a_high_quintet_mass_center():
+    center = [1, 2, 3, 4, 5, 6]
+    neighbors = []
+    for omitted in range(6):
+        quintet = [number for index, number in enumerate(center) if index != omitted]
+        neighbors.append(sorted(quintet + [7 + omitted]))
+    candidates = np.asarray(neighbors + [center, [20, 21, 22, 23, 24, 25]])
+    scores = np.linspace(1.0, 0.1, len(candidates), dtype=np.float64)
+    config = EliteCoverageDeepConfig(
+        elite_tickets=0,
+        coverage_tickets=0,
+        deep_tickets=1,
+        min_deep_rank=1,
+        w_pair_novelty=0.0,
+        w_triple_novelty=0.0,
+        w_quad_novelty=0.0,
+        w_number_rarity=0.0,
+        w_dissimilarity=0.0,
+        w_local_quality=0.0,
+        w_quintet_mass=1.0,
+        quintet_rank_scale=5000.0,
+    )
+
+    selected, debug = select_elite_coverage_deep_tickets(
+        candidates,
+        scores,
+        n_tickets=1,
+        xp=np,
+        portfolio_cfg=config,
+    )
+
+    assert selected == [center]
+    assert debug["coverage_weights"]["quintet_mass"] == 1.0
+    assert debug["coverage_weights"]["quintet_rank_scale"] == 5000.0
+
+
+def test_elite_coverage_deep_can_use_an_alternate_signal_only_in_deep_phase():
+    candidates = np.asarray(
+        list(itertools.islice(itertools.combinations(range(1, 40), 6), 600)),
+        dtype=np.uint8,
+    )
+    scores = np.linspace(1.0, 0.0, len(candidates), endpoint=False)
+    alternate = np.linspace(0.0, 1.0, len(candidates), endpoint=False)
+    config = EliteCoverageDeepConfig(
+        elite_tickets=0,
+        coverage_tickets=0,
+        deep_tickets=1,
+        min_deep_rank=1,
+        w_pair_novelty=0.0,
+        w_triple_novelty=0.0,
+        w_quad_novelty=0.0,
+        w_number_rarity=0.0,
+        w_dissimilarity=0.0,
+        w_local_quality=1.0,
+    )
+
+    selected, debug = select_elite_coverage_deep_tickets(
+        candidates,
+        scores,
+        n_tickets=1,
+        xp=np,
+        portfolio_cfg=config,
+        deep_quality_scores=alternate,
+    )
+
+    assert selected == [candidates[-1].tolist()]
+    assert debug["deep_selected_ranks"] == [len(candidates)]
+
+
+def test_deep_marginal_five_hit_coverage_avoids_an_already_covered_neighbor():
+    center = [1, 2, 3, 4, 5, 6]
+    unrelated_first_band = [20, 21, 22, 23, 24, 25]
+    redundant = [1, 2, 3, 4, 5, 7]
+    uncovered = [10, 11, 12, 13, 14, 15]
+    candidates = np.asarray(
+        [center, unrelated_first_band, redundant, uncovered], dtype=np.uint8
+    )
+    scores = np.asarray([4.0, 3.0, 2.0, 1.0])
+    marginal = EliteCoverageDeepConfig(
+        elite_tickets=0,
+        coverage_tickets=0,
+        deep_tickets=2,
+        min_deep_rank=1,
+        max_overlap_preferred=6,
+        w_pair_novelty=0.0,
+        w_triple_novelty=0.0,
+        w_quad_novelty=0.0,
+        w_number_rarity=0.0,
+        w_dissimilarity=0.0,
+        w_local_quality=0.0,
+        w_quintet_marginal_coverage=1.0,
+    )
+
+    selected, debug = select_elite_coverage_deep_tickets(
+        candidates,
+        scores,
+        n_tickets=2,
+        xp=np,
+        portfolio_cfg=marginal,
+    )
+
+    assert selected == [center, uncovered]
+    assert debug["coverage_radius_one_targets"] == 3
+    assert debug["coverage_weights"]["quintet_marginal_coverage"] == 1.0
+
+
+def test_deep_marginal_coverage_discounts_primary_lane_radius_one_targets():
+    redundant = [1, 2, 3, 4, 5, 7]
+    uncovered = [10, 11, 12, 13, 14, 15]
+    candidates = np.asarray([redundant, uncovered], dtype=np.uint8)
+    config = EliteCoverageDeepConfig(
+        elite_tickets=0,
+        coverage_tickets=0,
+        deep_tickets=1,
+        min_deep_rank=1,
+        max_overlap_preferred=6,
+        w_pair_novelty=0.0,
+        w_triple_novelty=0.0,
+        w_quad_novelty=0.0,
+        w_number_rarity=0.0,
+        w_dissimilarity=0.0,
+        w_local_quality=0.0,
+        w_quintet_marginal_coverage=1.0,
+    )
+
+    selected, debug = select_elite_coverage_deep_tickets(
+        candidates,
+        np.asarray([2.0, 1.0]),
+        n_tickets=1,
+        xp=np,
+        portfolio_cfg=config,
+        preselected_coverage_tickets=[[1, 2, 3, 4, 5, 6]],
+    )
+
+    assert selected == [uncovered]
+    assert debug["coverage_radius_one_targets"] == 2

@@ -37,10 +37,17 @@ class LotteryForensics:
                 "winner_selected_best_stable_ranks": [],
             }
         maximum = int(max(overlaps))
+        primary_count = max(0, int(snapshot.get("hybrid_primary_selected", 0)))
+        topology_phases = snapshot.get("hybrid_topology_lane_phases", [])
+        topology_deep_overlaps = [
+            int(overlaps[primary_count + offset])
+            for offset, phase in enumerate(topology_phases)
+            if str(phase) == "deep" and primary_count + offset < len(overlaps)
+        ]
         best_positions = [
             index for index, overlap in enumerate(overlaps) if overlap == maximum
         ]
-        return {
+        result = {
             "winner_selected_max_overlap": maximum,
             "winner_selected_min_missing": int(6 - maximum),
             "winner_selected_count_ge_4": int(sum(hit >= 4 for hit in overlaps)),
@@ -62,6 +69,238 @@ class LotteryForensics:
             ],
             "winner_selected_best_ticket": tickets[best_positions[0]],
         }
+        if topology_deep_overlaps:
+            result.update(
+                {
+                    "winner_topology_deep_selected_max_overlap": int(
+                        max(topology_deep_overlaps)
+                    ),
+                    "winner_topology_deep_selected_overlap_sum": int(
+                        sum(topology_deep_overlaps)
+                    ),
+                    "winner_topology_deep_selected_count_ge_4": int(
+                        sum(value >= 4 for value in topology_deep_overlaps)
+                    ),
+                    "winner_topology_deep_selected_count_ge_5": int(
+                        sum(value >= 5 for value in topology_deep_overlaps)
+                    ),
+                    "winner_topology_deep_selected_count": int(
+                        len(topology_deep_overlaps)
+                    ),
+                }
+            )
+        return result
+
+    @staticmethod
+    def _ticket_codes(rows: np.ndarray, base: int) -> np.ndarray:
+        rows = np.asarray(rows, dtype=np.uint64)
+        if rows.ndim != 2 or rows.shape[1] < 6:
+            return np.empty(0, dtype=np.uint64)
+        codes = np.zeros(len(rows), dtype=np.uint64)
+        for position in range(6):
+            codes = codes * np.uint64(base) + rows[:, position]
+        return codes
+
+    @staticmethod
+    def _topology_deep_signal_metrics(
+        snapshot: Dict[str, Any],
+        winner_idx: int,
+        hits_vec,
+        *,
+        winner_is_exact: bool,
+    ) -> Dict[str, Any]:
+        """Rank the exact winner and 5/6 neighbors inside topology bands."""
+        topology = snapshot.get("_hybrid_topology_universe")
+        bands = snapshot.get("hybrid_topology_deep_bands")
+        universe = snapshot.get("universe")
+        if topology is None or universe is None or not isinstance(bands, list):
+            return {}
+
+        universe = universe.get() if hasattr(universe, "get") else universe
+        topology = topology.get() if hasattr(topology, "get") else topology
+        universe = np.asarray(universe, dtype=np.uint8)
+        topology = np.asarray(topology, dtype=np.uint8)
+        if universe.ndim != 2 or topology.ndim != 2 or not len(topology):
+            return {}
+
+        base = max(2, int(universe.max()) + 1)
+        universe_codes = LotteryForensics._ticket_codes(universe, base)
+        topology_codes = LotteryForensics._ticket_codes(topology, base)
+        topology_mask = np.isin(universe_codes, topology_codes)
+
+        primary_count = int(snapshot.get("hybrid_primary_selected", 0))
+        selected = snapshot.get("_pred_tickets") or []
+        if primary_count > 0 and selected:
+            primary_codes = LotteryForensics._ticket_codes(
+                np.asarray(selected[:primary_count], dtype=np.uint8),
+                base,
+            )
+            topology_mask &= ~np.isin(universe_codes, primary_codes)
+
+        topology_idx = np.flatnonzero(topology_mask)
+        if not topology_idx.size:
+            return {}
+
+        hybrid = np.asarray(snapshot.get("hybrid_scores"), dtype=np.float64)
+        if hybrid.size != len(universe):
+            return {}
+        order = topology_idx[np.argsort(-hybrid[topology_idx], kind="stable")]
+        ranks = np.empty(len(universe), dtype=np.int32)
+        ranks.fill(-1)
+        ranks[order] = np.arange(1, len(order) + 1, dtype=np.int32)
+        raw_signals = {
+            "hybrid": hybrid,
+            "ai": snapshot.get("ai_scores"),
+            "number": snapshot.get("number_ai_scores"),
+            "geo": snapshot.get("geo_scores"),
+        }
+        signals = {}
+        for name, raw_values in raw_signals.items():
+            if raw_values is None:
+                continue
+            values = raw_values.get() if hasattr(raw_values, "get") else raw_values
+            values = np.asarray(values, dtype=np.float64)
+            if values.size != len(universe):
+                continue
+            signals[name] = values
+
+        band_indices = []
+        for item in bands:
+            rank_min = int(item.get("rank_min", 0))
+            rank_max = int(item.get("rank_max", -1))
+            band_idx = order[
+                (ranks[order] >= rank_min) & (ranks[order] <= rank_max)
+            ]
+            if band_idx.size:
+                band_indices.append((item, band_idx))
+
+        result = {}
+        if winner_is_exact and topology_mask[int(winner_idx)]:
+            winner_lane_rank = int(ranks[int(winner_idx)])
+            winner_band = next(
+                (
+                    band_idx
+                    for item, band_idx in band_indices
+                    if int(item.get("rank_min", 0))
+                    <= winner_lane_rank
+                    <= int(item.get("rank_max", -1))
+                ),
+                None,
+            )
+            if winner_band is not None:
+                result["winner_topology_deep_band_rank"] = winner_lane_rank
+                result["winner_topology_deep_band_size"] = int(winner_band.size)
+                for name, values in signals.items():
+                    winner_value = float(values[int(winner_idx)])
+                    band_values = values[winner_band]
+                    result[f"winner_topology_deep_{name}_rank"] = int(
+                        np.sum(band_values > winner_value) + 1
+                    )
+                    result[f"winner_topology_deep_{name}_tie_size"] = int(
+                        np.sum(band_values == winner_value)
+                    )
+
+        hits_cpu = hits_vec.get() if hasattr(hits_vec, "get") else hits_vec
+        hits_cpu = np.asarray(hits_cpu, dtype=np.int8)
+        if hits_cpu.size != len(universe):
+            return result
+
+        # The useful scorer question is conditional: once a ticket already
+        # belongs to one of the deep bands, can the signal choose a better
+        # candidate than its band peers?  Global AUC does not answer that.
+        # Record one stable top pick and a small top-10 shortlist per band, as
+        # well as the target-informed oracle ceiling (diagnostic only).
+        oracle_band_overlaps = []
+        signal_band_picks: dict[str, list[int]] = {
+            name: [] for name in signals
+        }
+        signal_band_top10: dict[str, list[int]] = {
+            name: [] for name in signals
+        }
+        signal_band_top_ties: dict[str, list[int]] = {
+            name: [] for name in signals
+        }
+        for _item, band_idx in band_indices:
+            band_hits = hits_cpu[band_idx]
+            oracle_band_overlaps.append(int(np.max(band_hits)))
+            natural = np.arange(band_idx.size, dtype=np.int64)
+            for name, values in signals.items():
+                band_values = values[band_idx]
+                signal_order = np.lexsort((natural, -band_values))
+                best_local = int(signal_order[0])
+                signal_band_picks[name].append(int(band_hits[best_local]))
+                top10_local = signal_order[: min(10, signal_order.size)]
+                signal_band_top10[name].append(
+                    int(np.max(band_hits[top10_local]))
+                )
+                signal_band_top_ties[name].append(
+                    int(np.sum(band_values == band_values[best_local]))
+                )
+
+        if oracle_band_overlaps:
+            result["winner_topology_deep_oracle_max_overlap"] = int(
+                max(oracle_band_overlaps)
+            )
+            result["winner_topology_deep_oracle_overlap_sum"] = int(
+                sum(oracle_band_overlaps)
+            )
+            result["winner_topology_deep_oracle_count_ge_4"] = int(
+                sum(value >= 4 for value in oracle_band_overlaps)
+            )
+            result["winner_topology_deep_oracle_count_ge_5"] = int(
+                sum(value >= 5 for value in oracle_band_overlaps)
+            )
+        for name, picked_overlaps in signal_band_picks.items():
+            if not picked_overlaps:
+                continue
+            result[f"winner_topology_deep_{name}_top1_max_overlap"] = int(
+                max(picked_overlaps)
+            )
+            result[f"winner_topology_deep_{name}_top1_overlap_sum"] = int(
+                sum(picked_overlaps)
+            )
+            result[f"winner_topology_deep_{name}_top1_count_ge_4"] = int(
+                sum(value >= 4 for value in picked_overlaps)
+            )
+            result[f"winner_topology_deep_{name}_top1_count_ge_5"] = int(
+                sum(value >= 5 for value in picked_overlaps)
+            )
+            result[f"winner_topology_deep_{name}_top10_max_overlap"] = int(
+                max(signal_band_top10[name])
+            )
+            result[f"winner_topology_deep_{name}_top_tie_mean"] = float(
+                np.mean(signal_band_top_ties[name])
+            )
+
+        best_by_signal: dict[str, tuple[int, int, int]] = {}
+        neighbor_band_count = 0
+        for _item, band_idx in band_indices:
+            neighbor_idx = band_idx[hits_cpu[band_idx] >= 5]
+            if not neighbor_idx.size:
+                continue
+            neighbor_band_count += 1
+            for name, values in signals.items():
+                neighbor_values = values[neighbor_idx]
+                best_value = float(np.max(neighbor_values))
+                best_candidates = neighbor_idx[neighbor_values == best_value]
+                best_idx = int(best_candidates[0])
+                band_values = values[band_idx]
+                candidate = (
+                    int(np.sum(band_values > best_value) + 1),
+                    int(np.sum(band_values == best_value)),
+                    int(hits_cpu[best_idx]),
+                )
+                previous = best_by_signal.get(name)
+                if previous is None or candidate[:2] < previous[:2]:
+                    best_by_signal[name] = candidate
+
+        if neighbor_band_count:
+            result["winner_topology_neighbor_band_count"] = neighbor_band_count
+        for name, (rank, tie_size, overlap) in best_by_signal.items():
+            result[f"winner_topology_neighbor_{name}_best_rank"] = rank
+            result[f"winner_topology_neighbor_{name}_best_tie_size"] = tie_size
+            result[f"winner_topology_neighbor_{name}_best_overlap"] = overlap
+        return result
 
     @staticmethod
     def audit_winner(
@@ -222,6 +461,13 @@ class LotteryForensics:
             else 999
         )
 
+        topology_deep_metrics = LotteryForensics._topology_deep_signal_metrics(
+            snapshot,
+            idx_best,
+            hits_vec,
+            winner_is_exact=max_h == 6,
+        )
+
         return {
             "hits": max_h,
             "winner_in_universe": int(max_h == 6),
@@ -248,4 +494,5 @@ class LotteryForensics:
             "resonance_blend_mode": blend_mode,
             "sniper_log": snapshot.get("sniper_msg", "N/A"),
             **selected_overlap,
+            **topology_deep_metrics,
         }

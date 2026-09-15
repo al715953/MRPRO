@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 
-from src.data_access.config import BEST_SETTINGS
+from src.data_access.config import BEST_SETTINGS, VERSION_TAG
 from src.strategies.universe.filters import VectorizedFilters
 from src.strategies.universe_reduction import UniverseReductionStrategy
 
@@ -110,6 +110,7 @@ def test_entropy_upper_bound_is_clamped_to_theoretical_maximum():
 
 
 def test_production_disables_unvalidated_hard_geo_filters():
+    assert VERSION_TAG == "V17.4_HI_TOPOLOGY1_1_10_20260914"
     assert BEST_SETTINGS["sniper_mode"] == "soft"
     assert BEST_SETTINGS["candidate_selection_mode"] == "balanced_mixed"
     assert BEST_SETTINGS["radar_percentile"] == 0.0
@@ -123,7 +124,29 @@ def test_production_disables_unvalidated_hard_geo_filters():
     assert BEST_SETTINGS["fitness_selector_mode"] == "hybrid_dual_lane"
     assert BEST_SETTINGS["hybrid_primary_tickets"] == 12
     assert BEST_SETTINGS["hybrid_topology_tickets"] == 12
+    assert BEST_SETTINGS["hybrid_primary_selector_mode"] == "legacy_core_deep"
+    assert BEST_SETTINGS["hybrid_topology_selector_mode"] == (
+        "stable_frontier_deep"
+    )
+    assert BEST_SETTINGS["hybrid_topology_deep_quality_mode"] == "rank"
+    assert BEST_SETTINGS["hybrid_topology_elite_tickets"] == 1
+    assert BEST_SETTINGS["hybrid_topology_frontier_tickets"] == 1
+    assert BEST_SETTINGS["hybrid_topology_deep_tickets"] == 10
+    assert BEST_SETTINGS["hybrid_topology_frontier_max_rank"] == 500
     assert BEST_SETTINGS["hybrid_topology_min_rank"] == 501
+    assert BEST_SETTINGS["hybrid_topology_min_deep_rank"] == 501
+    assert BEST_SETTINGS["hybrid_topology_pair_novelty_weight"] == 0.40
+    assert BEST_SETTINGS["hybrid_topology_triple_novelty_weight"] == 0.0
+    assert BEST_SETTINGS["hybrid_topology_quad_novelty_weight"] == 0.0
+    assert BEST_SETTINGS["hybrid_topology_number_rarity_weight"] == 0.25
+    assert BEST_SETTINGS["hybrid_topology_dissimilarity_weight"] == 0.20
+    assert BEST_SETTINGS["hybrid_topology_local_quality_weight"] == 0.15
+    assert BEST_SETTINGS["hybrid_topology_quintet_mass_weight"] == 0.0
+    assert (
+        BEST_SETTINGS["hybrid_topology_quintet_marginal_coverage_weight"]
+        == 0.0
+    )
+    assert BEST_SETTINGS["hybrid_topology_quintet_coverage_rank_scale"] == 0.0
     assert BEST_SETTINGS["sniper_soft_reserve_fraction"] == 0.0
 
     hard_flags = (

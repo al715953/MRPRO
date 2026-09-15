@@ -150,6 +150,16 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert selector_settings[0]["fitness_selector_mode"] == "hybrid_dual_lane"
     assert selector_settings[0]["hybrid_primary_tickets"] == 12
     assert selector_settings[0]["hybrid_topology_tickets"] == 12
+    assert selector_settings[0]["hybrid_primary_selector_mode"] == (
+        "legacy_core_deep"
+    )
+    assert selector_settings[0]["hybrid_topology_selector_mode"] == (
+        "stable_frontier_deep"
+    )
+    assert selector_settings[0]["hybrid_topology_deep_quality_mode"] == "rank"
+    assert selector_settings[0]["hybrid_topology_elite_tickets"] == 1
+    assert selector_settings[0]["hybrid_topology_frontier_tickets"] == 1
+    assert selector_settings[0]["hybrid_topology_deep_tickets"] == 10
     variants = saved_shadow[0]["variants"]
     assert [variant["key"] for variant in variants] == [
         "principal_ai_adaptive",
@@ -189,6 +199,16 @@ def test_melate_production_passes_chronological_history_to_both_stages(monkeypat
     assert variants[0]["settings"]["fitness_selector_mode"] == "hybrid_dual_lane"
     assert variants[0]["settings"]["hybrid_primary_tickets"] == 12
     assert variants[0]["settings"]["hybrid_topology_tickets"] == 12
+    assert variants[0]["settings"]["hybrid_primary_selector_mode"] == (
+        "legacy_core_deep"
+    )
+    assert variants[0]["settings"]["hybrid_topology_selector_mode"] == (
+        "stable_frontier_deep"
+    )
+    assert variants[0]["settings"]["hybrid_topology_deep_quality_mode"] == "rank"
+    assert variants[0]["settings"]["hybrid_topology_elite_tickets"] == 1
+    assert variants[0]["settings"]["hybrid_topology_frontier_tickets"] == 1
+    assert variants[0]["settings"]["hybrid_topology_deep_tickets"] == 10
     assert variants[1]["settings"]["fitness_selector_mode"] == "native"
     assert variants[4]["settings"]["fitness_selector_mode"] == "native"
     assert variants[2]["settings"]["fitness_selector_mode"] == "core_plus_deep"

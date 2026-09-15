@@ -1436,6 +1436,11 @@ class BacktestEngine:
                             [int(x) for x in t]
                             for t in prediction.tickets
                         ]
+                        audit_snapshot["_hybrid_topology_universe"] = getattr(
+                            config,
+                            "hybrid_topology_universe_ptr",
+                            None,
+                        )
                         xp_audit = (
                             cp
                             if (HAS_CUPY and hasattr(config.raw_universe_ptr, "get"))
@@ -1515,9 +1520,56 @@ class BacktestEngine:
                         "winner_selected_best_ranks",
                         "winner_selected_best_stable_ranks",
                         "winner_selected_best_ticket",
+                        "winner_topology_deep_band_rank",
+                        "winner_topology_deep_band_size",
+                        "winner_topology_deep_hybrid_rank",
+                        "winner_topology_deep_hybrid_tie_size",
+                        "winner_topology_deep_ai_rank",
+                        "winner_topology_deep_ai_tie_size",
+                        "winner_topology_deep_number_rank",
+                        "winner_topology_deep_number_tie_size",
+                        "winner_topology_deep_geo_rank",
+                        "winner_topology_deep_geo_tie_size",
+                        "winner_topology_neighbor_band_count",
+                        "winner_topology_neighbor_hybrid_best_rank",
+                        "winner_topology_neighbor_hybrid_best_tie_size",
+                        "winner_topology_neighbor_hybrid_best_overlap",
+                        "winner_topology_neighbor_ai_best_rank",
+                        "winner_topology_neighbor_ai_best_tie_size",
+                        "winner_topology_neighbor_ai_best_overlap",
+                        "winner_topology_neighbor_number_best_rank",
+                        "winner_topology_neighbor_number_best_tie_size",
+                        "winner_topology_neighbor_number_best_overlap",
+                        "winner_topology_neighbor_geo_best_rank",
+                        "winner_topology_neighbor_geo_best_tie_size",
+                        "winner_topology_neighbor_geo_best_overlap",
+                        "winner_topology_deep_oracle_max_overlap",
+                        "winner_topology_deep_oracle_overlap_sum",
+                        "winner_topology_deep_oracle_count_ge_4",
+                        "winner_topology_deep_oracle_count_ge_5",
+                        "winner_topology_deep_selected_max_overlap",
+                        "winner_topology_deep_selected_overlap_sum",
+                        "winner_topology_deep_selected_count_ge_4",
+                        "winner_topology_deep_selected_count_ge_5",
+                        "winner_topology_deep_selected_count",
                     ):
                         if overlap_key in audit:
                             metrics_payload[overlap_key] = audit[overlap_key]
+                    for signal_name in ("hybrid", "ai", "number", "geo"):
+                        for metric_suffix in (
+                            "top1_max_overlap",
+                            "top1_overlap_sum",
+                            "top1_count_ge_4",
+                            "top1_count_ge_5",
+                            "top10_max_overlap",
+                            "top_tie_mean",
+                        ):
+                            metric_key = (
+                                f"winner_topology_deep_{signal_name}_"
+                                f"{metric_suffix}"
+                            )
+                            if metric_key in audit:
+                                metrics_payload[metric_key] = audit[metric_key]
                     if isinstance(snapshot, dict):
                         selected_ranks_payload = snapshot.get("selected_ranks")
                         if isinstance(selected_ranks_payload, (list, tuple)):
@@ -1580,8 +1632,21 @@ class BacktestEngine:
                             "hybrid_topology_requested",
                             "hybrid_primary_selected",
                             "hybrid_topology_selected",
+                            "hybrid_primary_selector_mode",
+                            "hybrid_topology_selector_mode",
+                            "hybrid_topology_deep_quality_mode",
+                            "hybrid_topology_radius_one_targets",
                             "hybrid_primary_lane_ranks",
                             "hybrid_topology_lane_ranks",
+                            "hybrid_primary_lane_phases",
+                            "hybrid_topology_lane_phases",
+                            "hybrid_primary_elite_ranks",
+                            "hybrid_primary_frontier_ranks",
+                            "hybrid_primary_deep_ranks",
+                            "hybrid_topology_elite_ranks",
+                            "hybrid_topology_frontier_ranks",
+                            "hybrid_topology_deep_ranks",
+                            "hybrid_primary_deep_bands",
                             "hybrid_topology_deep_bands",
                         ):
                             if portfolio_key in snapshot:

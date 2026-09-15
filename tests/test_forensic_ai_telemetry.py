@@ -70,6 +70,61 @@ def test_forensics_separates_score_ties_from_stable_selector_rank():
     assert audit["winner_stable_rank_proximity"] == 0
 
 
+def test_forensics_ranks_exact_winner_signals_inside_topology_deep_band():
+    universe = np.asarray(
+        [
+            [1, 2, 3, 4, 5, 6],
+            [1, 2, 3, 7, 8, 9],
+            [10, 11, 12, 13, 14, 15],
+            [16, 17, 18, 19, 20, 21],
+            [22, 23, 24, 25, 26, 27],
+        ],
+        dtype=np.uint8,
+    )
+    snapshot = {
+        **_snapshot(),
+        "universe": universe,
+        "_hybrid_topology_universe": universe,
+        "_pred_tickets": [],
+        "hybrid_primary_selected": 0,
+        "hybrid_topology_lane_phases": ["deep"],
+        "hybrid_topology_deep_bands": [{"rank_min": 1, "rank_max": 5}],
+        "hybrid_scores": np.asarray([0.6, 0.9, 0.8, 0.7, 0.5]),
+        "ai_scores": np.asarray([0.9, 0.1, 0.2, 0.3, 0.4]),
+        "number_ai_scores": np.asarray([0.1, 0.9, 0.8, 0.7, 0.6]),
+        "geo_scores": np.asarray([0.5, 0.5, 0.4, 0.3, 0.2]),
+        "tickets": [[1, 2, 3, 7, 8, 9]],
+    }
+
+    audit = LotteryForensics.audit_winner(
+        snapshot, [1, 2, 3, 4, 5, 6, 7], np
+    )
+
+    assert audit["winner_topology_deep_band_rank"] == 4
+    assert audit["winner_topology_deep_band_size"] == 5
+    assert audit["winner_topology_deep_hybrid_rank"] == 4
+    assert audit["winner_topology_deep_ai_rank"] == 1
+    assert audit["winner_topology_deep_number_rank"] == 5
+    assert audit["winner_topology_deep_geo_rank"] == 1
+    assert audit["winner_topology_deep_geo_tie_size"] == 2
+    assert audit["winner_topology_neighbor_band_count"] == 1
+    assert audit["winner_topology_neighbor_ai_best_rank"] == 1
+    assert audit["winner_topology_neighbor_number_best_rank"] == 5
+    assert audit["winner_topology_neighbor_geo_best_rank"] == 1
+    assert audit["winner_topology_neighbor_hybrid_best_overlap"] == 6
+    assert audit["winner_topology_deep_oracle_max_overlap"] == 6
+    assert audit["winner_topology_deep_oracle_overlap_sum"] == 6
+    assert audit["winner_topology_deep_hybrid_top1_max_overlap"] == 3
+    assert audit["winner_topology_deep_hybrid_top10_max_overlap"] == 6
+    assert audit["winner_topology_deep_ai_top1_max_overlap"] == 6
+    assert audit["winner_topology_deep_number_top1_max_overlap"] == 3
+    assert audit["winner_topology_deep_geo_top1_max_overlap"] == 3
+    assert audit["winner_topology_deep_geo_top_tie_mean"] == 2.0
+    assert audit["winner_topology_deep_selected_max_overlap"] == 3
+    assert audit["winner_topology_deep_selected_overlap_sum"] == 3
+    assert audit["winner_topology_deep_selected_count"] == 1
+
+
 def test_console_does_not_repeat_model_validation_on_every_draw():
     audit = LotteryForensics.audit_winner(
         _snapshot(), [1, 2, 3, 4, 5, 6, 7], np

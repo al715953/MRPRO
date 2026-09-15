@@ -112,6 +112,10 @@ class EliteCoverageDeepConfig:
     w_number_rarity: float = 0.05
     w_dissimilarity: float = 0.05
     w_local_quality: float = 0.15
+    w_quintet_mass: float = 0.0
+    quintet_rank_scale: float = 5000.0
+    w_quintet_marginal_coverage: float = 0.0
+    quintet_coverage_rank_scale: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -814,6 +818,8 @@ def select_elite_coverage_deep_tickets(
     cfg: Optional[FitnessConfig] = None,
     strata: Optional[StrataConfig] = None,
     portfolio_cfg: Optional[EliteCoverageDeepConfig] = None,
+    deep_quality_scores=None,
+    preselected_coverage_tickets=None,
 ):
     """Build a deterministic elite + coverage + depth portfolio.
 
@@ -835,6 +841,17 @@ def select_elite_coverage_deep_tickets(
     scores_cpu = scores.get() if hasattr(scores, "get") else np.asarray(scores)
     tickets_cpu = np.asarray(tickets_cpu, dtype=np.uint8)
     scores_cpu = np.asarray(scores_cpu, dtype=np.float64)
+    if deep_quality_scores is not None:
+        quality_cpu = (
+            deep_quality_scores.get()
+            if hasattr(deep_quality_scores, "get")
+            else np.asarray(deep_quality_scores)
+        )
+        quality_cpu = np.asarray(quality_cpu, dtype=np.float64)
+        if quality_cpu.shape != scores_cpu.shape:
+            raise ValueError("deep_quality_scores must align with scores")
+    else:
+        quality_cpu = None
     candidate_count = int(tickets_cpu.shape[0])
     target = min(max(0, int(n_tickets)), candidate_count)
     if target <= 0:
@@ -870,7 +887,7 @@ def select_elite_coverage_deep_tickets(
         position_sets = tuple(itertools.combinations(range(6), subset_size))
         encoded = []
         for positions in position_sets:
-            code = np.zeros(candidate_count, dtype=np.int32)
+            code = np.zeros(candidate_count, dtype=np.int64)
             for position in positions:
                 code = code * code_base + tickets_cpu[:, position].astype(np.int32)
             encoded.append(code)
@@ -879,6 +896,59 @@ def select_elite_coverage_deep_tickets(
     pair_codes = _subset_codes(2)
     triple_codes = _subset_codes(3)
     quad_codes = _subset_codes(4)
+    quintet_density = np.zeros(candidate_count, dtype=np.float64)
+    quintet_coverage_enabled = (
+        float(portfolio_cfg.w_quintet_marginal_coverage) > 0.0
+    )
+    quint_codes = None
+    quint_inverse = None
+    uncovered_targets = None
+    remaining_quintet_mass = None
+    target_mass = None
+    sorted_rows_by_quintet = None
+    quintet_boundaries = None
+    unique_quint_codes = None
+    if float(portfolio_cfg.w_quintet_mass) > 0.0 or quintet_coverage_enabled:
+        quint_codes = _subset_codes(5).astype(np.int64, copy=False)
+        flat_codes = quint_codes.reshape(-1)
+        unique_quint_codes, quint_inverse_flat = np.unique(
+            flat_codes, return_inverse=True
+        )
+        quint_inverse = quint_inverse_flat.reshape(quint_codes.shape)
+    if float(portfolio_cfg.w_quintet_mass) > 0.0:
+        rank_scale = max(1.0, float(portfolio_cfg.quintet_rank_scale))
+        candidate_mass = np.exp(
+            -(ranks.astype(np.float64) - 1.0) / rank_scale
+        )
+        mass_by_quintet = np.bincount(
+            quint_inverse.reshape(-1),
+            weights=np.repeat(candidate_mass, quint_codes.shape[1]),
+        )
+        quintet_density = mass_by_quintet[quint_inverse].sum(axis=1)
+    if quintet_coverage_enabled:
+        coverage_rank_scale = float(portfolio_cfg.quintet_coverage_rank_scale)
+        target_mass = (
+            np.exp(-(ranks.astype(np.float64) - 1.0) / coverage_rank_scale)
+            if coverage_rank_scale > 0.0
+            else np.ones(candidate_count, dtype=np.float64)
+        )
+        remaining_quintet_mass = np.bincount(
+            quint_inverse.reshape(-1),
+            weights=np.repeat(target_mass, quint_inverse.shape[1]),
+            minlength=len(unique_quint_codes),
+        ).astype(np.float64, copy=False)
+        uncovered_targets = np.ones(candidate_count, dtype=bool)
+        flat_groups = quint_inverse.reshape(-1)
+        flat_rows = np.repeat(
+            np.arange(candidate_count, dtype=np.int32), quint_inverse.shape[1]
+        )
+        group_order = np.argsort(flat_groups, kind="stable")
+        sorted_groups = flat_groups[group_order]
+        sorted_rows_by_quintet = flat_rows[group_order]
+        quintet_boundaries = np.searchsorted(
+            sorted_groups,
+            np.arange(len(unique_quint_codes) + 1),
+        )
     covered_pairs = np.zeros(code_base**2, dtype=bool)
     covered_triples = np.zeros(code_base**3, dtype=bool)
     covered_quads = np.zeros(code_base**4, dtype=bool)
@@ -886,6 +956,50 @@ def select_elite_coverage_deep_tickets(
     selected: list[int] = []
     selected_set: set[int] = set()
     phase_by_ticket: list[str] = []
+
+    def _mark_radius_one_covered(group_ids: np.ndarray) -> None:
+        if not quintet_coverage_enabled:
+            return
+        covered_rows = np.unique(
+            np.concatenate(
+                [
+                    sorted_rows_by_quintet[
+                        quintet_boundaries[int(group)]
+                        : quintet_boundaries[int(group) + 1]
+                    ]
+                    for group in np.unique(group_ids)
+                ]
+            )
+        )
+        newly_covered = covered_rows[uncovered_targets[covered_rows]]
+        if not newly_covered.size:
+            return
+        uncovered_targets[newly_covered] = False
+        affected_groups = quint_inverse[newly_covered].reshape(-1)
+        affected_mass = np.repeat(
+            target_mass[newly_covered], quint_inverse.shape[1]
+        )
+        np.add.at(remaining_quintet_mass, affected_groups, -affected_mass)
+        np.maximum(remaining_quintet_mass, 0.0, out=remaining_quintet_mass)
+
+    if quintet_coverage_enabled and preselected_coverage_tickets is not None:
+        external = np.asarray(preselected_coverage_tickets, dtype=np.uint8)
+        if external.ndim == 2 and external.shape[1] == 6 and external.size:
+            external = np.sort(external, axis=1)
+            for external_ticket in external:
+                external_codes = []
+                for positions in itertools.combinations(range(6), 5):
+                    code = 0
+                    for position in positions:
+                        code = code * code_base + int(external_ticket[position])
+                    external_codes.append(code)
+                positions = np.searchsorted(unique_quint_codes, external_codes)
+                valid = positions < len(unique_quint_codes)
+                positions = positions[valid]
+                expected = np.asarray(external_codes, dtype=np.int64)[valid]
+                matching = positions[unique_quint_codes[positions] == expected]
+                if matching.size:
+                    _mark_radius_one_covered(matching)
 
     def _register(idx: int, phase: str) -> None:
         idx = int(idx)
@@ -896,6 +1010,8 @@ def select_elite_coverage_deep_tickets(
         covered_triples[triple_codes[idx]] = True
         covered_quads[quad_codes[idx]] = True
         number_counts[tickets_cpu[idx]] += 1
+        if quintet_coverage_enabled:
+            _mark_radius_one_covered(quint_inverse[idx])
 
     for idx in order[:requested_elite]:
         _register(int(idx), "elite")
@@ -910,7 +1026,11 @@ def select_elite_coverage_deep_tickets(
             return np.ones(values.shape, dtype=np.float64)
         return (values - low) / (high - low)
 
-    def _pick(candidates: np.ndarray) -> int | None:
+    def _pick(
+        candidates: np.ndarray,
+        *,
+        use_deep_quality: bool = False,
+    ) -> int | None:
         candidates = np.asarray(
             [int(idx) for idx in candidates if int(idx) not in selected_set],
             dtype=np.int32,
@@ -938,7 +1058,26 @@ def select_elite_coverage_deep_tickets(
             1.0 / (1.0 + number_counts[tickets_cpu[candidates]]), axis=1
         )
         dissimilarity = 1.0 - max_overlap.astype(np.float64) / 6.0
-        local_quality = 1.0 - _minmax(ranks[candidates].astype(np.float64))
+        local_quality = (
+            _minmax(quality_cpu[candidates])
+            if use_deep_quality and quality_cpu is not None
+            else 1.0 - _minmax(ranks[candidates].astype(np.float64))
+        )
+        local_quintet_mass = _minmax(quintet_density[candidates])
+        if use_deep_quality and quintet_coverage_enabled:
+            marginal_quintet_coverage = np.sum(
+                remaining_quintet_mass[quint_inverse[candidates]], axis=1
+            )
+            # The candidate itself contributes through all six quintets but is
+            # one target, not six. Other distinct tickets can share at most one
+            # five-number subset with it.
+            marginal_quintet_coverage -= 5.0 * np.where(
+                uncovered_targets[candidates], target_mass[candidates], 0.0
+            )
+        else:
+            marginal_quintet_coverage = np.zeros(
+                candidates.size, dtype=np.float64
+            )
         objective = (
             float(portfolio_cfg.w_pair_novelty) * _minmax(pair_novelty)
             + float(portfolio_cfg.w_triple_novelty) * _minmax(triple_novelty)
@@ -946,6 +1085,9 @@ def select_elite_coverage_deep_tickets(
             + float(portfolio_cfg.w_number_rarity) * _minmax(rarity)
             + float(portfolio_cfg.w_dissimilarity) * dissimilarity
             + float(portfolio_cfg.w_local_quality) * local_quality
+            + float(portfolio_cfg.w_quintet_mass) * local_quintet_mass
+            + float(portfolio_cfg.w_quintet_marginal_coverage)
+            * _minmax(marginal_quintet_coverage)
         )
         objective = np.where(preferred, objective, -np.inf)
         return int(candidates[int(np.argmax(objective))])
@@ -973,7 +1115,7 @@ def select_elite_coverage_deep_tickets(
         for band in np.array_split(deep_eligible, band_count):
             if band.size == 0:
                 continue
-            chosen = _pick(band)
+            chosen = _pick(band, use_deep_quality=True)
             if chosen is None:
                 continue
             _register(chosen, "deep")
@@ -1007,6 +1149,11 @@ def select_elite_coverage_deep_tickets(
         "coverage_unique_pairs": int(covered_pairs.sum()),
         "coverage_unique_triples": int(covered_triples.sum()),
         "coverage_unique_quads": int(covered_quads.sum()),
+        "coverage_radius_one_targets": (
+            int(np.sum(~uncovered_targets))
+            if quintet_coverage_enabled
+            else 0
+        ),
         "coverage_weights": {
             "pair_novelty": float(portfolio_cfg.w_pair_novelty),
             "triple_novelty": float(portfolio_cfg.w_triple_novelty),
@@ -1014,5 +1161,13 @@ def select_elite_coverage_deep_tickets(
             "number_rarity": float(portfolio_cfg.w_number_rarity),
             "dissimilarity": float(portfolio_cfg.w_dissimilarity),
             "local_quality": float(portfolio_cfg.w_local_quality),
+            "quintet_mass": float(portfolio_cfg.w_quintet_mass),
+            "quintet_rank_scale": float(portfolio_cfg.quintet_rank_scale),
+            "quintet_marginal_coverage": float(
+                portfolio_cfg.w_quintet_marginal_coverage
+            ),
+            "quintet_coverage_rank_scale": float(
+                portfolio_cfg.quintet_coverage_rank_scale
+            ),
         },
     }
